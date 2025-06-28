@@ -1,0 +1,131 @@
+module Simulate
+
+using ProgressMeter
+using ..Backends: AbstractBackend, CPUBackend, GPUBackend
+using ..Utils
+using ..SimulateCPU
+
+export simulate_ensemble_bulk
+
+# ────────────────────────────────────────────────
+# Simulation Interface (Backend-dependent dispatch)
+#
+# This module provides an entry point `simulate_ensemble_bulk` that delegates
+# to the appropriate backend (CPU or GPU) based on the type of the first argument.
+# GPU support is optional and loaded via Requires.jl only if CUDA is available.
+
+# ────────────────────────────────────────────────
+# CPU Backend — always available
+"""
+    simulate_ensemble_bulk(::CPUBackend, ...)
+
+Run a bulk particle ensemble simulation using the CPU backend.
+
+# Arguments
+- `backend::CPUBackend`: A CPU backend instance.
+- `T_profile_MIS`, `ur_profile_MIS`, `mu_profile_MIS`: Hydrodynamic profile data for initialization.
+- `TemperatureEvolutionn`: Time-evolving temperature field.
+- `VelocityEvolutionn`: Time-evolving velocity field.
+- `SpaceTimeGrid`: Grid defining spatial and temporal structure of the simulation.
+
+# Keyword Arguments
+- `N_particles`: Number of particles to simulate (default: 10,000).
+- `Δt`: Time step size.
+- `initial_time`: Start time of the simulation.
+- `final_time`: End time of the simulation.
+- `save_interval`: Interval at which to store snapshots.
+- `m`: Mass of each particle.
+- `dimensions`: Number of spatial dimensions (1, 2, or 3).
+
+# Returns
+Output from the `simulate_ensemble_bulk_cpu` routine containing full trajectory and observable data.
+"""
+function simulate_ensemble_bulk(
+    backend::CPUBackend,
+    T_profile_MIS,
+    ur_profile_MIS,
+    mu_profile_MIS,
+    TemperatureEvolutionn,
+    VelocityEvolutionn,
+    SpaceTimeGrid;
+    N_particles::Int = 10_000,
+    Δt::Float64 = 0.001,
+    initial_time::Float64 = 0.0,
+    final_time::Float64 = 1.0,
+    save_interval::Float64 = 0.1,
+    m::Float64 = 1.0,
+    dimensions::Int = 3,
+)
+    return simulate_ensemble_bulk_cpu(
+        T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
+        TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
+        N_particles = N_particles, Δt = Δt,
+        initial_time = initial_time, final_time = final_time,
+        save_interval = save_interval, m = m, dimensions = dimensions
+    )
+end
+
+# ────────────────────────────────────────────────
+# GPU Backend fallback — displays error if GPU not supported
+"""
+    simulate_ensemble_bulk(::GPUBackend, ...)
+
+Error handler for GPU simulation when GPU support is not available.
+
+To use the GPU backend, ensure:
+- `CUDA.jl` is installed (`pkg> add CUDA`)
+- `CUDA.functional()` returns `true`
+
+This fallback prevents runtime errors when a GPU backend is selected but CUDA is not configured.
+"""
+function simulate_ensemble_bulk(
+    backend::GPUBackend,
+    T_profile_MIS,
+    ur_profile_MIS,
+    mu_profile_MIS,
+    TemperatureEvolutionn,
+    VelocityEvolutionn,
+    SpaceTimeGrid;
+    N_particles::Int = 10_000,
+    Δt::Float64 = 0.001,
+    initial_time::Float64 = 0.0,
+    final_time::Float64 = 1.0,
+    save_interval::Float64 = 0.1,
+    m::Float64 = 1.0,
+    dimensions::Int = 3,
+)
+    error("""
+    simulate_ensemble_bulk(::GPUBackend, ...) was called,
+    but GPU support is not available.
+
+    To enable GPU functionality:
+    - Install CUDA.jl: `pkg> add CUDA`
+    - Ensure CUDA.functional() returns true on your system
+    """)
+end
+
+# ────────────────────────────────────────────────
+# GPU Backend (Optional) — loaded only if CUDA.jl is available
+
+using Requires
+
+"""
+    __init__()
+
+Initialization hook that conditionally loads the GPU simulation backend
+if CUDA.jl is available and CUDA.functional() is true.
+
+This allows seamless CPU/GPU flexibility while keeping dependencies optional.
+"""
+function __init__()
+    @require CUDA="052768ef-5323-5732-b1bb-66c8b64840ba" begin
+        if CUDA.functional()
+            include("simulate_gpu_wrapper.jl")  # Loads simulate_ensemble_bulk(::GPUBackend, ...) overload
+            @info "SimulateGPU backend loaded."
+        else
+            @warn "CUDA.jl is installed, but CUDA.functional() is false. GPU backend will not be available."
+        end
+    end
+end
+
+end # module Simulate

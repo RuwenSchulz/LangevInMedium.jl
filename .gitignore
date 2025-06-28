@@ -1,0 +1,13 @@
+# Julia
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+*.jl.*.mem
+*.jl.prof
+*.jl.*.prof
+*.jl.*.gcov
+*.jl.gcov
+*.ji
+.julia/
+deps/
