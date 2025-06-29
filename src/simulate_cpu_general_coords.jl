@@ -36,9 +36,11 @@ function simulate_ensemble_bulk_general_coords_cpu(
 
     # === Initialize Particles ===
     position, moment = sample_initial_particles_milne!(
-        m, dimensions, N_particles,
-        initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-        (0.0, 20.0), 200)
+        m, dimensions, N_particles,initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,xgrid)
+
+
+
+
 
     positions = copy(position)
     momenta = copy(moment)

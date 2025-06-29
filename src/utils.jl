@@ -83,7 +83,7 @@ end
 
 
 """
-    sample_initial_particles_milne!(m, dim, N_particles, τ, T_profile, ur_profile, mu_profile, x_range, nbins)
+    sample_initial_particles_milne!(m, dim, N_particles, τ, T_profile, ur_profile, mu_profile, x_range)
 
 Sample initial particle positions and momenta in Milne coordinates (τ, r) from a Boltzmann distribution.
 
@@ -101,51 +101,55 @@ Sample initial particle positions and momenta in Milne coordinates (τ, r) from 
 """
 function sample_initial_particles_milne!(
     m, dim::Int, N_particles::Int,
-    τ::Float64, T_profile, ur_profile, mu_profile,
-    x_range::Tuple{Float64, Float64}, nbins::Int
-)
+    τ::Float64, T_profile, ur_profile, mu_profile, r_grid::Vector{Float64}
+    )
+    r_grid = r_grid[1:end].+1e-10
     @assert dim == 2 "Milne sampling requires dim = 2 (τ, r)"
+    dr = r_grid[2] - r_grid[1]  # uniform spacing assumed
 
-    positions = zeros(dim, N_particles)  # (τ, r)
-    momenta   = zeros(dim, N_particles)  # (p^τ, p^r)
+    positions = zeros(dim, N_particles)
+    momenta   = zeros(dim, N_particles)
 
-    # Discretize r-domain
-    r_edges = range(x_range[1], x_range[2], length=nbins + 1)
-    dr = step(r_edges)
-    r_centers = (r_edges[1:end-1] .+ r_edges[2:end]) ./ 2
+    # Evaluate hydro profiles at bin centers
+    T_vals  = T_profile.(r_grid, τ)
+    ur_vals = ur_profile.(r_grid, τ)
+    mu_vals = mu_profile.(r_grid, τ)
 
-    # Evaluate background profiles at bin centers
-    T_vals  = T_profile.(r_centers, τ)
-    ur_vals = ur_profile.(r_centers, τ)
-    mu_vals = mu_profile.(r_centers, τ)
+    γ_vals = sqrt.(1 .+ ur_vals .^ 2)
 
-    γ_vals = sqrt.(1 .+ ur_vals .^ 2)  # Lorentz gamma from fluid flow
-
-    # Local particle densities (up to normalization)
+    # Compute PDF ∝ local equilibrium density
     n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
     pdf_vals = n_boltz ./ sum(n_boltz) ./ dr  # Normalize
 
-    # Inverse CDF for r sampling
+    # Build CDF
     cdf_vals = cumsum(pdf_vals) .* dr
-    cdf_vals[end] = 1.0  # ensure last value is exactly 1
-    inv_cdf = LinearInterpolation(cdf_vals, r_centers, extrapolation_bc=Flat())
+    cdf_vals ./= cdf_vals[end]  # enforce final CDF = 1.0
 
-    # Sample positions and momenta
+    # Ensure CDF is strictly increasing for interpolation
+    Δcdf = diff(cdf_vals)
+    valid = findall(Δcdf .> 0.0)
+    valid = [valid; lastindex(cdf_vals)]  # include last point
+
+    cdf_clean = cdf_vals[valid]
+    r_clean = r_grid[valid]
+
+    inv_cdf = LinearInterpolation(cdf_clean, r_clean, extrapolation_bc=Flat())
+
+    # Sampling loop
     for i in 1:N_particles
         r = inv_cdf(rand())
+        #println(r)
         T = T_profile(r, τ)
 
-        # Sample p^r from 1D thermal distribution
         pr = sqrt(m * T) * randn()
         pτ = sqrt(m^2 + pr^2)
 
-        # Set position and momenta in Milne coordinates
-        positions[:, i] .= [τ, r]
-        momenta[:, i]   .= [pτ, pr]
+        positions[:, i] .= (τ, r)
+        momenta[:, i]   .= (pτ, pr)
     end
 
     return positions, momenta
-end
+end 
 
 
 """
@@ -253,18 +257,19 @@ function plot_n_rt_comparison_hydro_langevin(
     pos_hist = [abs.(x) for x in pos_hist]
 
     # Determine plotting range
-    xmin = minimum([minimum(x[1, :]) for x in pos_hist])
-    xmax = maximum([maximum(x[1, :]) for x in pos_hist])
+    xmin = minimum([minimum(x[2, :]) for x in pos_hist])
+    xmax = maximum([maximum(x[2, :]) for x in pos_hist])
     x_range = x_range === nothing ? (xmin, xmax) : x_range
 
-    edges = range(x_range[1], x_range[2], length=nbins_x + 1)
+    edges = range(x_range[1], x_range[2], length=nbins_x + 1).+ 1e-3
     centers = (edges[1:end-1] .+ edges[2:end]) ./ 2
     dx = step(edges)
+
     dr = r_vals[2] - r_vals[1]
 
     # Create animation
     anim = @animate for (x, t) in zip(pos_hist, times)
-        h = fit(Histogram, x[1, :], edges)
+        h = fit(Histogram, x[2, :], edges)
         fx = h.weights ./ sum(h.weights) ./ dx  # Normalize
 
         plot(centers, fx, lw=3, label=L"\mathrm{n_{Langevin}(r,t)}",
@@ -276,6 +281,7 @@ function plot_n_rt_comparison_hydro_langevin(
         # Add hydrodynamic profiles
         for (j, n_rt) in enumerate(n_rts)
             n = n_rt[:, findfirst(==(t), times)]
+
             n_norm = n ./ (sum(n) * dr)
             plot!(r_vals, n_norm, lw=3, color=colors[j], label=var_names[j])
         end
