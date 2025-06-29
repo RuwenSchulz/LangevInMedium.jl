@@ -1,7 +1,7 @@
 module Backends
 
 # === Exported Symbols ===
-export GPUBackend, CPUBackend
+export GPUBackend, CPUBackend,CPU_GCBackend
 
 # === Backend Type Hierarchy ===
 
@@ -26,5 +26,13 @@ struct CPUBackend <: AbstractBackend end
 Represents execution on a GPU. Pass this to simulation dispatch functions to use CUDA kernels.
 """
 struct GPUBackend <: AbstractBackend end
+
+"""
+    CPU_GCBackend <: AbstractBackend
+
+Represents execution on a CPU using general coordinates (e.g., Milne coordinates).
+Pass this to simulation dispatch functions to use general-coordinate CPU kernels.
+"""
+struct CPU_GCBackend <: AbstractBackend end
 
 end # module Backends

@@ -25,6 +25,7 @@ include("backends.jl")          # CPU/GPU backend markers
 include("utils.jl")             # Utilities: plotting, interpolation, etc.
 include("kernels_cpu.jl")       # CPU-side numerical integration kernels
 include("simulate_cpu.jl")      # High-level CPU simulation loop
+include("simulate_cpu_general_coords.jl")      # High-level CPU simulation loop
 include("simulate.jl")          # Unified frontend with conditional GPU logic
 
 # Load submodules
@@ -37,6 +38,6 @@ using .Simulate
 export simulate_ensemble_bulk          # Main simulation function
 export n_rt                            # Observable extraction (density vs r, t)
 export plot_n_rt_comparison_hydro_langevin  # Plotting helper
-export CPUBackend, GPUBackend          # Backend selectors
+export CPUBackend, GPUBackend, CPU_GCBackend          # Backend selectors
 
 end # module LangevInMedium

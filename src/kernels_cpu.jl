@@ -8,7 +8,11 @@ export kernel_boost_to_rest_frame_cpu!,
        kernel_update_positions_cpu!,
        kernel_save_snapshot_cpu!,
        kernel_save_positions_cpu!,
-       interpolate_2d_cpu
+       interpolate_2d_cpu,
+       kernel_compute_all_forces_general_coords_cpu!,
+       kernel_update_positions_general_coords_cpu!,
+       kernel_boost_to_lab_frame_general_coords_cpu!,
+       kernel_boost_to_rest_frame_general_coords_cpu!
 
 using LinearAlgebra
 
@@ -90,7 +94,7 @@ function kernel_boost_to_lab_frame_cpu!(
         v = zeros(2)
         v[1] = sign(positions[1, i]) * interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), step * Δt + t0)
         E = sqrt(sum(momenta[:, i] .^ 2) + m^2)
-        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
+        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-5)
 
         for j in 1:size(momenta, 1)
             βj = v[j]
@@ -99,14 +103,60 @@ function kernel_boost_to_lab_frame_cpu!(
     end
 end
 
+
+function kernel_boost_to_rest_frame_general_coords_cpu!(
+    momenta, positions, xgrid, tgrid, VelocityEvolution,
+    m, N, step, Δt, t0
+    )
+    for i in 1:N
+        τ = positions[1, i]
+        r = abs(positions[2, i])
+
+        # Local fluid velocity in r-direction
+        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
+        γ = 1.0 / sqrt(1 - v^2 + 1e-5)
+
+        pτ = momenta[1, i]
+        pr = momenta[2, i]
+
+        # Lorentz boost into LRF
+        momenta[1, i] = γ * (pτ - v * pr)  # p^τ in LRF
+        momenta[2, i] = γ * (pr - v * pτ)  # p^r in LRF
+    end
+end
+
+function kernel_boost_to_lab_frame_general_coords_cpu!(
+    momenta, positions, xgrid, tgrid, VelocityEvolution,
+    m, N, step, Δt, t0
+)
+    for i in 1:N
+        τ = positions[1, i]
+        r = abs(positions[2, i])
+
+        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
+        γ = 1.0 / sqrt(1 - v^2 + 1e-5)
+
+        pτ = momenta[1, i]
+        pr = momenta[2, i]
+
+        # Inverse Lorentz boost back to lab frame
+        momenta[1, i] = γ * (pτ + v * pr)
+        momenta[2, i] = γ * (pr + v * pτ)
+    end
+end
+
+
 # ============================================================================
-# Langevin Force Calculation
+# Langevin Force Calculation — Without Christoffel Symbols (Flat Cartesian)
 # ============================================================================
 
 """
     kernel_compute_all_forces_cpu!(...)
 
-Computes deterministic (drag) and stochastic forces acting on particles in the LRF.
+Computes deterministic (drag) and stochastic forces acting on particles in the 
+local rest frame (LRF), **excluding geometric drift from non-Cartesian coordinates**.
+
+This version assumes Cartesian flat spacetime, i.e., no Christoffel symbol contributions.
 """
 function kernel_compute_all_forces_cpu!(
     Tfield, xgrid, tgrid,
@@ -117,14 +167,19 @@ function kernel_compute_all_forces_cpu!(
     dimensions, N, step, t0
 )
     for i in 1:N
+        # Compute particle momentum magnitude
         p = sqrt(sum(momenta[:, i] .^ 2))
         p_mags[i] = p
 
+        # Compute unit momentum vectors (with fallback if zero momentum)
         for d in 1:dimensions
             p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
         end
 
+        # Interpolate temperature from space-time field
         T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[1, i]), step * Δt + t0)
+
+        # Compute transport coefficients
         DsT = 0.2 * T
         M = 1.5
         ηD = T^2 / (M * DsT)
@@ -133,18 +188,111 @@ function kernel_compute_all_forces_cpu!(
 
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
 
+        # Compute force components
         for d in 1:dimensions
+            # Langevin deterministic drag term
             det_term = -ηD * momenta[d, i] * Δt
+
+            # Langevin stochastic term
             sto_term = 0.0
             for j in 1:dimensions
                 sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
                             kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
             end
+
+            # Store computed forces
             deterministic_terms[d, i] = det_term
             stochastic_terms[d, i] = sto_term
         end
     end
 end
+
+"""
+    compute_christoffel(position::Vector)
+
+Returns Christoffel symbols Γᵘ_{νρ} at a given position `position = [τ, r]`
+in flat Milne coordinates (1+1D). All symbols are zero.
+
+Returns a 2×2×2 zero array.
+"""
+function compute_christoffel(position::AbstractVector)
+    Γ = zeros(2, 2, 2)  # Γ^μ_{νρ} in (τ, r)
+    return Γ
+end
+
+
+# ============================================================================
+# Langevin Force Calculation — With Christoffel Symbols (e.g., Milne Coordinates)
+# ============================================================================
+
+"""
+    kernel_compute_all_forces_general_coords_cpu!(...)
+
+Computes deterministic and stochastic Langevin forces in the LRF, **including geometric 
+drift contributions** from Christoffel symbols due to flat but non-Cartesian coordinates 
+(e.g., Milne coordinates).
+
+This version is suitable for simulating Langevin dynamics in flat curved coordinates.
+"""
+function kernel_compute_all_forces_general_coords_cpu!(
+    Tfield, xgrid, tgrid,
+    momenta, positions, p_mags, p_units,
+    ηD_vals, kL_vals, kT_vals,
+    ξ, deterministic_terms, stochastic_terms,
+    Δt, m, random_directions,
+    dimensions, N, step, t0
+)
+    for i in 1:N
+        # Compute particle momentum magnitude
+        p = sqrt(sum(momenta[:, i] .^ 2))
+        p_mags[i] = p
+
+        # Compute unit momentum vectors (with fallback if zero momentum)
+        for d in 1:dimensions
+            p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
+        end
+
+        # Interpolate temperature from space-time field
+        T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[1, i]), step * Δt + t0)
+
+        # Compute transport coefficients
+        DsT = 0.2 * T
+        M = 1.5
+        ηD = T^2 / (M * DsT)
+        κ = 2 * T^3 / DsT
+        kL, kT = sqrt(κ), sqrt(κ)
+
+        ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
+
+        # Compute forces
+        for d in 1:dimensions
+            # Christoffel geometric drift term
+            Γ = compute_christoffel(positions[:, i])  # Returns Γ^μ_{νρ}
+            p0 = sqrt(m^2 + sum(momenta[:, i] .^ 2))  # p^τ ≈ relativistic energy in LRF
+
+            geo_term = 0.0
+            for ν in 1:dimensions, ρ in 1:dimensions
+                geo_term += -Γ[d, ν, ρ] * momenta[ν, i] * momenta[ρ, i] / p0
+            end
+            geo_term *= Δt
+
+            # Langevin deterministic + geometric terms
+            det_term = -ηD * momenta[d, i] * Δt + geo_term
+
+            # Langevin stochastic term
+            sto_term = 0.0
+            for j in 1:dimensions
+                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
+                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+            end
+
+            # Store computed forces
+            deterministic_terms[d, i] = det_term
+            stochastic_terms[d, i] = sto_term
+        end
+    end
+end
+
 
 # ============================================================================
 # Momentum and Position Updates
@@ -174,6 +322,27 @@ Update positions from momenta assuming free motion.
 function kernel_update_positions_cpu!(positions, momenta, m, Δt, N)
     for i in 1:N
         positions[1, i] += Δt * momenta[1, i] / m
+    end
+end
+
+"""
+    kernel_update_positions_general_coords_cpu!(positions, momenta, m, Δt, N)
+
+Update particle positions using momenta in **flat but non-Cartesian coordinates**.
+
+Assumes positions are in coordinate basis and momenta are contravariant.
+Uses first-order integration of:
+
+    dx^μ/dτ = p^μ / p^0
+"""
+function kernel_update_positions_general_coords_cpu!(positions, momenta, m, Δt, N)
+    for i in 1:N
+        # Relativistic energy in flat spacetime
+        p0 = sqrt(m^2 + sum(momenta[:, i] .^ 2))
+
+        for μ in 1:size(positions, 1)
+            positions[μ, i] += Δt * momenta[μ, i] / p0
+        end
     end
 end
 

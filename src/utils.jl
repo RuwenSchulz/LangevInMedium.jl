@@ -18,6 +18,7 @@ using ..Constants
 
 # === Exports ===
 export sample_initial_particles_from_pdf!
+export sample_initial_particles_milne!
 export sample_initial_particles_at_origin!
 export n_rt
 export plot_n_rt_comparison_hydro_langevin
@@ -79,6 +80,73 @@ function sample_initial_particles_from_pdf!(
 
     return positions, momenta
 end
+
+
+"""
+    sample_initial_particles_milne!(m, dim, N_particles, τ, T_profile, ur_profile, mu_profile, x_range, nbins)
+
+Sample initial particle positions and momenta in Milne coordinates (τ, r) from a Boltzmann distribution.
+
+# Arguments
+- `m`: Particle mass in GeV.
+- `dim`: Number of spatial dimensions (should be 2: τ, r).
+- `N_particles`: Number of particles to sample.
+- `τ`: Proper time (Milne time) of initialization.
+- `T_profile`, `ur_profile`, `mu_profile`: Functions of (r, τ).
+- `x_range`: Tuple (min_r, max_r).
+- `nbins`: Number of bins for inverse-CDF sampling.
+
+# Returns
+- `(positions, momenta)`: Arrays of shape `(2, N_particles)` for positions (τ, r) and momenta (p^τ, p^r).
+"""
+function sample_initial_particles_milne!(
+    m, dim::Int, N_particles::Int,
+    τ::Float64, T_profile, ur_profile, mu_profile,
+    x_range::Tuple{Float64, Float64}, nbins::Int
+)
+    @assert dim == 2 "Milne sampling requires dim = 2 (τ, r)"
+
+    positions = zeros(dim, N_particles)  # (τ, r)
+    momenta   = zeros(dim, N_particles)  # (p^τ, p^r)
+
+    # Discretize r-domain
+    r_edges = range(x_range[1], x_range[2], length=nbins + 1)
+    dr = step(r_edges)
+    r_centers = (r_edges[1:end-1] .+ r_edges[2:end]) ./ 2
+
+    # Evaluate background profiles at bin centers
+    T_vals  = T_profile.(r_centers, τ)
+    ur_vals = ur_profile.(r_centers, τ)
+    mu_vals = mu_profile.(r_centers, τ)
+
+    γ_vals = sqrt.(1 .+ ur_vals .^ 2)  # Lorentz gamma from fluid flow
+
+    # Local particle densities (up to normalization)
+    n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
+    pdf_vals = n_boltz ./ sum(n_boltz) ./ dr  # Normalize
+
+    # Inverse CDF for r sampling
+    cdf_vals = cumsum(pdf_vals) .* dr
+    cdf_vals[end] = 1.0  # ensure last value is exactly 1
+    inv_cdf = LinearInterpolation(cdf_vals, r_centers, extrapolation_bc=Flat())
+
+    # Sample positions and momenta
+    for i in 1:N_particles
+        r = inv_cdf(rand())
+        T = T_profile(r, τ)
+
+        # Sample p^r from 1D thermal distribution
+        pr = sqrt(m * T) * randn()
+        pτ = sqrt(m^2 + pr^2)
+
+        # Set position and momenta in Milne coordinates
+        positions[:, i] .= [τ, r]
+        momenta[:, i]   .= [pτ, pr]
+    end
+
+    return positions, momenta
+end
+
 
 """
     sample_initial_particles_at_origin!(...)

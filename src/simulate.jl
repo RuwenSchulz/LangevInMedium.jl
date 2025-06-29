@@ -1,9 +1,10 @@
 module Simulate
 
 using ProgressMeter
-using ..Backends: AbstractBackend, CPUBackend, GPUBackend
+using ..Backends: AbstractBackend, CPUBackend, GPUBackend, CPU_GCBackend
 using ..Utils
 using ..SimulateCPU
+using ..SimulateCPUGeneralCoords
 
 export simulate_ensemble_bulk
 
@@ -64,6 +65,38 @@ function simulate_ensemble_bulk(
         save_interval = save_interval, m = m, dimensions = dimensions
     )
 end
+
+"""
+    simulate_ensemble_bulk(::CPU_GCBackend, ...)
+
+Run a bulk Langevin simulation using the CPU backend in general coordinates (e.g., Milne).
+Dispatches to `simulate_ensemble_bulk_cpu` with general-coordinate logic.
+"""
+function simulate_ensemble_bulk(
+    backend::CPU_GCBackend,
+    T_profile_MIS,
+    ur_profile_MIS,
+    mu_profile_MIS,
+    TemperatureEvolutionn,
+    VelocityEvolutionn,
+    SpaceTimeGrid;
+    N_particles::Int = 10_000,
+    Δt::Float64 = 0.001,
+    initial_time::Float64 = 0.0,
+    final_time::Float64 = 1.0,
+    save_interval::Float64 = 0.1,
+    m::Float64 = 1.0,
+    dimensions::Int = 2,  # Milne: τ, r
+)
+    return simulate_ensemble_bulk_general_coords_cpu(
+        T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
+        TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
+        N_particles = N_particles, Δt = Δt,
+        initial_time = initial_time, final_time = final_time,
+        save_interval = save_interval, m = m, dimensions = dimensions
+    )
+end
+
 
 # ────────────────────────────────────────────────
 # GPU Backend fallback — displays error if GPU not supported
