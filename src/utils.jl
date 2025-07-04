@@ -234,6 +234,7 @@ Generate an animated comparison of particle density profiles `n(r, t)` between L
 - `colors`: List of line colors for each model.
 - `nbins_x`: Histogram bin count.
 - `x_range`: Optional range for histogram x-axis.
+- `dims`: Spatial dimension to plot (1 or 2).
 
 # Output
 - Saves an animated GIF comparing Langevin and hydro models.
@@ -244,7 +245,8 @@ function plot_n_rt_comparison_hydro_langevin(
     filename="fx_t_langevin.gif",
     title="Langevin on Hydro-Background",
     colors=["green", "black", "red"],
-    nbins_x=200, x_range=nothing
+    nbins_x=200, x_range=nothing,
+    dims = 2
 )
     var_names = [L"\mathrm{n_{Ideal}(r,t)}", L"\mathrm{n_{MIS}(r,t)}"]
     steps = max(1, length(times) ÷ frames)
@@ -257,8 +259,8 @@ function plot_n_rt_comparison_hydro_langevin(
     pos_hist = [abs.(x) for x in pos_hist]
 
     # Determine plotting range
-    xmin = minimum([minimum(x[2, :]) for x in pos_hist])
-    xmax = maximum([maximum(x[2, :]) for x in pos_hist])
+    xmin = minimum([minimum(x[dims, :]) for x in pos_hist])
+    xmax = maximum([maximum(x[dims, :]) for x in pos_hist])
     x_range = x_range === nothing ? (xmin, xmax) : x_range
 
     edges = range(x_range[1], x_range[2], length=nbins_x + 1).+ 1e-3
@@ -269,7 +271,7 @@ function plot_n_rt_comparison_hydro_langevin(
 
     # Create animation
     anim = @animate for (x, t) in zip(pos_hist, times)
-        h = fit(Histogram, x[2, :], edges)
+        h = fit(Histogram, x[dims, :], edges)
         fx = h.weights ./ sum(h.weights) ./ dx  # Normalize
 
         plot(centers, fx, lw=3, label=L"\mathrm{n_{Langevin}(r,t)}",

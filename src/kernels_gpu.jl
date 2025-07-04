@@ -100,6 +100,7 @@ Lorentz boost momenta from lab frame to local rest frame (LRF) using interpolate
             @inbounds momenta[j, i] = γ * (p_j - β_j * E)
         end
     end
+    return 
 end
 
 """
@@ -130,6 +131,7 @@ Applies inverse Lorentz boost to momenta, restoring them from LRF to lab frame.
             @inbounds momenta[d, i] = γ * (p_j - β_j * E)
         end
     end
+    return
 end
 
 """
@@ -156,7 +158,7 @@ Compute Langevin drag and stochastic forces in the local rest frame.
         p_mags[i] = p
 
         for d in 1:dimensions
-            p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
+            @inbounds p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
         end
 
         # Interpolate background temperature
@@ -170,9 +172,9 @@ Compute Langevin drag and stochastic forces in the local rest frame.
         kL = sqrt(κ)
         kT = sqrt(κ)
 
-        ηD_vals[i] = ηD
-        kL_vals[i] = kL
-        kT_vals[i] = kT
+        @inbounds ηD_vals[i] = ηD
+        @inbounds kL_vals[i] = kL
+        @inbounds kT_vals[i] = kT
 
         for d in 1:dimensions
             det_term = -ηD * momenta[d, i] * Δt
@@ -181,10 +183,11 @@ Compute Langevin drag and stochastic forces in the local rest frame.
                 sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
                             kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
             end
-            deterministic_terms[d, i] = det_term
-            stochastic_terms[d, i] = sto_term
+            @inbounds deterministic_terms[d, i] = det_term
+            @inbounds stochastic_terms[d, i] = sto_term
         end
     end
+    return
 end
 
 """
@@ -195,14 +198,15 @@ Update momenta of each particle in LRF using Langevin forces.
 @inline function kernel_update_momenta_LRF_gpu!(
     momenta, deterministic_terms, stochastic_terms,
     Δt, dimensions, N_particles
-)
+    )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
         for d in 1:dimensions
-            Δp = deterministic_terms[d, i] + sqrt(Δt) * stochastic_terms[d, i]
-            momenta[d, i] += Δp
+            Δp = @inbounds deterministic_terms[d, i] + sqrt(Δt) * stochastic_terms[d, i]
+            @inbounds momenta[d, i] += Δp
         end
     end
+    return
 end
 
 """
@@ -210,21 +214,12 @@ end
 
 Move particles forward based on momenta. Reflects at r = 0.
 """
-@inline function kernel_update_positions_gpu!(
-    positions::CuDeviceMatrix{Float64},
-    momenta::CuDeviceMatrix{Float64},
-    m::Float64, Δt::Float64, N_particles::Int
-)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        positions[1, i] += Δt * momenta[1, i] / m
-
-        # Reflect at origin
-        if positions[1, i] < 0
-            positions[1, i] = -positions[1, i]
-            momenta[1, i] = -momenta[1, i]
-        end
+@inline function kernel_update_positions_gpu!(positions::CuDeviceMatrix{Float64}, momenta::CuDeviceMatrix{Float64}, m::Float64, Δt::Float64, N_particles::Int)
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= N_particles
+        @inbounds positions[1, idx] += Δt * momenta[1, idx] / m
     end
+    return
 end
 
 """
@@ -235,8 +230,9 @@ Save 1D momenta magnitudes into a flattened buffer for snapshotting.
 @inline function kernel_save_snapshot_gpu!(history, snapshot, idx, N_particles)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
-        history[i + (idx - 1) * N_particles] = snapshot[i]
+        @inbounds history[i + (idx - 1) * N_particles] = snapshot[i]
     end
+    return
 end
 
 """
@@ -248,9 +244,10 @@ Save particle positions at current time step into history array.
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N
         for d in 1:size(current_positions, 1)
-            position_history[d, i, save_idx] = current_positions[d, i]
+            @inbounds position_history[d, i, save_idx] = current_positions[d, i]
         end
     end
+    return
 end
 
 end # module KernelsGPU

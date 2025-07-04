@@ -1,7 +1,7 @@
 # === simulate_gpu_wrapper.jl ===
 
 # Load required CUDA functionality and modules
-using CUDA
+#using CUDA
 
 # Include GPU-specific source files
 include("kernels_gpu.jl")
@@ -9,7 +9,6 @@ include("simulate_gpu.jl")
 
 # Import the GPUBackend type from the backends module
 using ..Backends: GPUBackend
-
 # Extend the Simulate namespace with a GPU-specific implementation
 """
     Simulate.simulate_ensemble_bulk(backend::GPUBackend, ...)
@@ -53,7 +52,7 @@ function Simulate.simulate_ensemble_bulk(
     m::Float64 = 1.0,
     dimensions::Int = 3,
 )
-    return simulate_ensemble_bulk_gpu(
+    return SimulateGPU.simulate_ensemble_bulk_gpu(
         T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,
@@ -61,3 +60,5 @@ function Simulate.simulate_ensemble_bulk(
         save_interval = save_interval, m = m, dimensions = dimensions
     )
 end
+
+@info "GPU support loaded. Use `simulate_ensemble_bulk(GPUBackend(), ...)` to run GPU-accelerated Langevin dynamics."

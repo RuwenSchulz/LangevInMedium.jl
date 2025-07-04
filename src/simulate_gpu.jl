@@ -19,9 +19,8 @@ function print_cuda_status()
     name = CUDA.name(dev)
     cap = CUDA.capability(dev)
     println("🟢 CUDA status:")
-    println("  Device             : $name")
+    println("  Device : $name")
     println("  Compute Capability : $cap")
-    println("  Memory Usage       :")
     CUDA.memory_status()
 end
 
