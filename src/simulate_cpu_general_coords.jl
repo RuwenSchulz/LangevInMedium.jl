@@ -97,7 +97,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
             VelocityEvolution, m, N_particles, step, Δt, initial_time)
 
         # 5. Position update in Milne coordinates
-        kernel_update_positions_general_coords_cpu!(
+        kernel_update_positions_radial_milne!(
             positions, momenta, m, Δt, N_particles)
 
         # 6. Save snapshots

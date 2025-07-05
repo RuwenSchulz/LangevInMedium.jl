@@ -11,6 +11,7 @@ export kernel_boost_to_rest_frame_cpu!,
        interpolate_2d_cpu,
        kernel_compute_all_forces_general_coords_cpu!,
        kernel_update_positions_general_coords_cpu!,
+       kernel_update_positions_radial_milne!,
        kernel_boost_to_lab_frame_general_coords_cpu!,
        kernel_boost_to_rest_frame_general_coords_cpu!
 
@@ -343,6 +344,37 @@ function kernel_update_positions_general_coords_cpu!(positions, momenta, m, Δt,
         for μ in 1:size(positions, 1)
             positions[μ, i] += Δt * momenta[μ, i] / p0
         end
+
+
+    end
+end
+
+function kernel_update_positions_radial_milne!(
+    positions::Array{Float64,2},   # [τ, r]
+    momenta::Array{Float64,2},     # [p_τ, p_r]
+    m::Float64,
+    Δt::Float64,
+    N::Int
+)
+    for i in 1:N
+        # Extract momenta
+        p_tau = momenta[1, i]
+        p_r   = momenta[2, i]
+
+        # Relativistic energy in Milne metric (flat transverse space):
+        # p^μ p_μ = -m² → p_τ² - p_r² = m²
+        # ⇒ p^τ = sqrt(m² + p_r²)
+        p0 = sqrt(m^2 + p_r^2)
+
+        # Update τ and r (in Milne, p^τ = dτ/dλ, p^r = dr/dλ)
+        positions[1, i] += Δt * p_tau / p0    # τ update
+        positions[2, i] += Δt * p_r / p0      # r update
+
+        # Reflect if r < 0
+        #if positions[2, i] < 0
+        #    positions[2, i] = -5#-positions[2, i]
+        #    momenta[2, i]   = 0#-momenta[2, i]
+        #end
     end
 end
 

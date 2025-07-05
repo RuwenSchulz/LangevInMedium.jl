@@ -85,6 +85,7 @@ function simulate_ensemble_bulk_cpu(
     norm_factors = sqrt.(sum(random_directions .^ 2, dims=1))
     random_directions ./= norm_factors
 
+
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
         ξ .= randn(dimensions, N_particles)
@@ -125,6 +126,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_save_positions_cpu!(
                 position_history, positions, save_idx, N_particles)
         end
+
     end
 
     # === Final Data Packaging ===
