@@ -20,6 +20,7 @@ using ..Constants
 export sample_initial_particles_from_pdf!
 export sample_initial_particles_milne!
 export sample_initial_particles_at_origin!
+export sample_initial_particles_at_origin_no_position!
 export n_rt
 export plot_n_rt_comparison_hydro_langevin
 
@@ -182,6 +183,54 @@ function sample_initial_particles_at_origin!(
     end
 
     return positions, momenta
+end
+
+function sample_initial_particles_at_origin_no_position!(initial_condition,
+    p0, dimensions, N_particles)
+
+
+    function sample_bimodal_p_vectors(dimensions, N_particles;
+        μ1=1.0, μ2=2.0, σ=0.2,
+        weight1=0.5, pmin=0.1, pmax=5.0)
+
+        # Bimodal magnitude distribution
+        d1 = Truncated(Normal(μ1, σ), pmin, pmax)
+        d2 = Truncated(Normal(μ2, σ), pmin, pmax)
+        mix = MixtureModel([d1, d2], [weight1, 1 - weight1])
+        p_mags = rand(mix, N_particles)
+
+        # Sample random directions
+        momenta = zeros(Float64, dimensions, N_particles)
+        for i in 1:N_particles
+        dir = randn(dimensions)
+        dir ./= norm(dir)  # normalize to unit vector
+        momenta[:, i] .= p_mags[i] * dir
+        end
+
+        return momenta
+    end
+
+
+
+    if initial_condition == "delta"
+        rand_dirs = randn(Float64, dimensions, N_particles)
+        # Normalize columns (L2 norm across each particle's vector)
+        norms = sqrt.(sum(rand_dirs .^ 2, dims=1))
+        rand_dirs ./= norms  # Broadcasted division to normalize
+        momenta = zeros(Float64, dimensions, N_particles)
+        momenta .= p0 .* rand_dirs
+    elseif initial_condition == "bimodal"
+        momenta = sample_bimodal_p_vectors(dimensions, N_particles)
+  
+    else 
+        error("Unknown initial condition: $initial_condition")
+    end
+
+
+
+
+
+    return momenta
 end
 
 """

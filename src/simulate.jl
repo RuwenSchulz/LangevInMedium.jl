@@ -66,6 +66,27 @@ function simulate_ensemble_bulk(
     )
 end
 
+function simulate_ensemble_bulk(
+    backend::CPUBackend,
+    T::Float64;
+    N_particles::Int = 10_000,
+    Δt::Float64 = 0.001,
+    initial_time::Float64 = 0.0,
+    final_time::Float64 = 1.0,
+    save_interval::Float64 = 0.1,
+    m::Float64 = 1.0,
+    p0 = 1.0,
+    initial_condition = "delta",
+    dimensions::Int = 3,
+)
+    return simulate_ensemble_bulk_cpu(
+        T;
+        N_particles = N_particles, Δt = Δt,
+        initial_time = initial_time, final_time = final_time,
+        save_interval = save_interval, m = m, dimensions = dimensions,initial_condition = initial_condition, p0 = p0
+    )
+end
+
 """
     simulate_ensemble_bulk(::CPU_GCBackend, ...)
 

@@ -136,4 +136,86 @@ function simulate_ensemble_bulk_cpu(
     return time_points, momenta_history, position_history_vec
 end
 
+function simulate_ensemble_bulk_cpu(
+    T::Float64;
+    N_particles::Int = 10_000,
+    Δt::Float64 = 0.001,
+    initial_time::Float64 = 0.0,
+    final_time::Float64 = 1.0,
+    save_interval::Float64 = 0.1,
+    m::Float64 = 1.0,
+    dimensions::Int = 3,
+    p0 = 1.0,
+    initial_condition = "delta"
+)
+
+    # === Setup and Preallocation ===
+    total_time = final_time - initial_time
+    steps = floor(Int, total_time / Δt)
+    save_every = Int(save_interval / Δt)
+    num_saves = div(steps, save_every)
+
+
+    # Initial particle positions and momenta from Boltzmann distribution
+    moment = sample_initial_particles_at_origin_no_position!(initial_condition,p0, dimensions, N_particles)
+
+    momenta = copy(moment)
+
+    # History arrays for positions and momenta
+    momenta_history = [zeros(N_particles) for _ in 1:num_saves + 1]
+
+    momenta_history[1] .= sqrt.(sum(momenta .^ 2, dims=1))[:]
+
+    # Working buffers
+    p_mags              = zeros(N_particles)
+    p_units             = zeros(dimensions, N_particles)
+    ηD_vals             = zeros(N_particles)
+    kL_vals             = zeros(N_particles)
+    kT_vals             = zeros(N_particles)
+    deterministic_terms = zeros(dimensions, N_particles)
+    stochastic_terms    = zeros(dimensions, N_particles)
+    ξ                   = randn(dimensions, N_particles)
+    random_directions   = randn(dimensions, N_particles)
+
+    # Normalize random directions
+    norm_factors = sqrt.(sum(random_directions .^ 2, dims=1))
+    random_directions ./= norm_factors
+
+
+    # === Langevin Time Evolution Loop ===
+    @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
+        ξ .= randn(dimensions, N_particles)
+
+       
+
+        # 2. Compute forces in rest frame
+        kernel_compute_all_forces_cpu!(
+            T,
+            momenta, p_mags, p_units,
+            ηD_vals, kL_vals, kT_vals,
+            ξ, deterministic_terms, stochastic_terms,
+            Δt, m, random_directions,
+            dimensions, N_particles, step, initial_time)
+
+        # 3. Update momenta
+        kernel_update_momenta_LRF_cpu!(
+            momenta, deterministic_terms, stochastic_terms,
+            Δt, dimensions, N_particles)
+
+        # 6. Save snapshots
+        if step % save_every == 0
+            save_idx = div(step, save_every) + 1
+            kernel_save_snapshot_cpu!(
+                momenta_history[save_idx],
+                sqrt.(sum(momenta .^ 2, dims=1))[:], N_particles)
+        end
+
+    end
+
+    # === Final Data Packaging ===
+    time_points = range(initial_time, final_time, length = num_saves + 1)
+
+
+    return time_points, momenta_history
+end
 end # module SimulateCPU

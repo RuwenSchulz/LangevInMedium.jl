@@ -208,6 +208,52 @@ function kernel_compute_all_forces_cpu!(
     end
 end
 
+function kernel_compute_all_forces_cpu!(
+    T,
+    momenta, p_mags, p_units,
+    ηD_vals, kL_vals, kT_vals,
+    ξ, deterministic_terms, stochastic_terms,
+    Δt, m, random_directions,
+    dimensions, N, step, t0
+)
+    for i in 1:N
+        # Compute particle momentum magnitude
+        p = sqrt(sum(momenta[:, i] .^ 2))
+        p_mags[i] = p
+
+        # Compute unit momentum vectors (with fallback if zero momentum)
+        for d in 1:dimensions
+            p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
+        end
+
+        # Interpolate temperature from space-time field
+
+        # Compute transport coefficients
+
+        κ = 2.5 * T^3
+        ηD = κ/(2 * T * m)
+        kL, kT = sqrt(κ), sqrt(κ)
+
+        ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
+
+        # Compute force components
+        for d in 1:dimensions
+            # Langevin deterministic drag term
+            det_term = -ηD * momenta[d, i] * Δt
+
+            # Langevin stochastic term
+            sto_term = 0.0
+            for j in 1:dimensions
+                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
+                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+            end
+
+            # Store computed forces
+            deterministic_terms[d, i] = det_term
+            stochastic_terms[d, i] = sto_term
+        end
+    end
+end
 """
     compute_christoffel(position::Vector)
 
@@ -294,6 +340,64 @@ function kernel_compute_all_forces_general_coords_cpu!(
     end
 end
 
+function kernel_compute_all_forces_general_coords_cpu!(
+    T::Float64,
+    momenta, positions, p_mags, p_units,
+    ηD_vals, kL_vals, kT_vals,
+    ξ, deterministic_terms, stochastic_terms,
+    Δt, m, random_directions,
+    dimensions, N, step, t0
+)
+    for i in 1:N
+        # Compute particle momentum magnitude
+        p = sqrt(sum(momenta[:, i] .^ 2))
+        p_mags[i] = p
+
+        # Compute unit momentum vectors (with fallback if zero momentum)
+        for d in 1:dimensions
+            p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
+        end
+
+        # Interpolate temperature from space-time field
+        
+
+        # Compute transport coefficients
+        DsT = 0.2 * T
+        M = 1.5
+        ηD = T^2 / (M * DsT)
+        κ = 2 * T^3 / DsT
+        kL, kT = sqrt(κ), sqrt(κ)
+
+        ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
+
+        # Compute forces
+        for d in 1:dimensions
+            # Christoffel geometric drift term
+            Γ = compute_christoffel(positions[:, i])  # Returns Γ^μ_{νρ}
+            p0 = sqrt(m^2 + sum(momenta[:, i] .^ 2))  # p^τ ≈ relativistic energy in LRF
+
+            geo_term = 0.0
+            for ν in 1:dimensions, ρ in 1:dimensions
+                geo_term += -Γ[d, ν, ρ] * momenta[ν, i] * momenta[ρ, i] / p0
+            end
+            geo_term *= Δt
+
+            # Langevin deterministic + geometric terms
+            det_term = -ηD * momenta[d, i] * Δt + geo_term
+
+            # Langevin stochastic term
+            sto_term = 0.0
+            for j in 1:dimensions
+                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
+                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+            end
+
+            # Store computed forces
+            deterministic_terms[d, i] = det_term
+            stochastic_terms[d, i] = sto_term
+        end
+    end
+end
 
 # ============================================================================
 # Momentum and Position Updates
