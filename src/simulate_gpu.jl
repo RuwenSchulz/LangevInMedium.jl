@@ -117,7 +117,7 @@ function simulate_ensemble_bulk_gpu(
         random_directions ./= random_norms
 
         # === Langevin dynamics loop ===
-        @showprogress 10 "Running Langevin simulation..." for step in 1:steps
+        @showprogress 10 "Running Langevin simulation GPU Cartesian..." for step in 1:steps
             CUDA.randn!(ξ)  # Sample Gaussian noise at every step
 
             # Step 1: Transform momenta to local rest frame (LRF)

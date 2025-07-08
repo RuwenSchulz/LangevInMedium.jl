@@ -58,7 +58,7 @@ function simulate_ensemble_bulk_cpu(
     position, moment = sample_initial_particles_from_pdf!(
         m, dimensions, N_particles,
         initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-        (0., 10.), 200)
+        (0.0, maximum(xgrid)), 150)
 
     positions = copy(position)
     momenta = copy(moment)

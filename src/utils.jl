@@ -63,20 +63,31 @@ function sample_initial_particles_from_pdf!(
     γ_vals  = sqrt.(1 .+ ur_vals .^ 2)
 
     n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
-    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  # Normalize to form a probability distribution
+    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  
+    # Compute unnormalized PDF
+    #pdf_vals = n_boltz .* x_centers         # Include 2D volume element (r * dr)
+    max_pdf = maximum(pdf_vals)             # For rejection threshold
 
-    # Construct inverse CDF for sampling
-    cdf_vals = cumsum(pdf_vals) .* dx
-    cdf_vals[end] = 1.0  # Ensure normalization
-    inv_cdf = LinearInterpolation(cdf_vals, x_centers, extrapolation_bc=Flat())
+    # Rejection sampling
+    range_sampler = Uniform(x_range[1], x_range[2])
+    sampled_r = Float64[]
 
-    # Sample particle positions and thermal momenta
+    while length(sampled_r) < N_particles
+        r_try = rand(range_sampler)
+        idx = searchsortedfirst(x_centers, r_try)
+        p = idx <= length(pdf_vals) ? pdf_vals[idx] : 0.0
+        if rand() < p / max_pdf
+            push!(sampled_r, r_try)
+        end
+    end
+
+    # Assign positions and thermal momenta
     for i in 1:N_particles
-        r = inv_cdf(rand())                 # Sample radius from inverse CDF
+        r = sampled_r[i]
         T = T_profile(r, t)
         σ = sqrt(m * T)
-        positions[:, i] .= r                # Uniform radial position across all spatial dimensions
-        momenta[:, i] .= σ .* randn(dim)    # Gaussian-distributed thermal momentum
+        positions[:, i] .= r                  # Uniform radial position
+        momenta[:, i] .= σ .* randn(dim)      # Gaussian-distributed thermal momentum
     end
 
     return positions, momenta
@@ -102,51 +113,51 @@ Sample initial particle positions and momenta in Milne coordinates (τ, r) from 
 """
 function sample_initial_particles_milne!(
     m, dim::Int, N_particles::Int,
-    τ::Float64, T_profile, ur_profile, mu_profile, r_grid::Vector{Float64}
+    τ::Float64, T_profile, ur_profile, mu_profile, x_range::Tuple{Float64, Float64}, nbins::Int
     )
-    r_grid = r_grid[1:end].+1e-10
     @assert dim == 2 "Milne sampling requires dim = 2 (τ, r)"
-    dr = r_grid[2] - r_grid[1]  # uniform spacing assumed
+     positions = zeros(dim, N_particles)
+    momenta = zeros(dim, N_particles)
 
-    positions = zeros(dim, N_particles)
-    momenta   = zeros(dim, N_particles)
+    # Discretize radial domain
+    x_edges = range(x_range[1], x_range[2], length=nbins + 1)
+    dx = step(x_edges)
+    x_centers = (x_edges[1:end-1] .+ x_edges[2:end]) ./ 2
 
-    # Evaluate hydro profiles at bin centers
-    T_vals  = T_profile.(r_grid, τ)
-    ur_vals = ur_profile.(r_grid, τ)
-    mu_vals = mu_profile.(r_grid, τ)
+    # Compute normalized PDF over radial positions
+    T_vals  = T_profile.(x_centers, τ)
+    ur_vals = ur_profile.(x_centers, τ)
+    mu_vals = mu_profile.(x_centers, τ)
+    γ_vals  = sqrt.(1 .+ ur_vals .^ 2)
 
-    γ_vals = sqrt.(1 .+ ur_vals .^ 2)
-
-    # Compute PDF ∝ local equilibrium density
     n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
-    pdf_vals = n_boltz ./ sum(n_boltz) ./ dr  # Normalize
+    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  
+    # Compute unnormalized PDF
+    #pdf_vals = n_boltz .* x_centers         # Include 2D volume element (r * dr)
+    max_pdf = maximum(pdf_vals)             # For rejection threshold
 
-    # Build CDF
-    cdf_vals = cumsum(pdf_vals) .* dr
-    cdf_vals ./= cdf_vals[end]  # enforce final CDF = 1.0
+    # Rejection sampling
+    range_sampler = Uniform(x_range[1], x_range[2])
+    sampled_r = Float64[]
 
-    # Ensure CDF is strictly increasing for interpolation
-    Δcdf = diff(cdf_vals)
-    valid = findall(Δcdf .> 0.0)
-    valid = [valid; lastindex(cdf_vals)]  # include last point
-
-    cdf_clean = cdf_vals[valid]
-    r_clean = r_grid[valid]
-
-    inv_cdf = LinearInterpolation(cdf_clean, r_clean, extrapolation_bc=Flat())
+    while length(sampled_r) < N_particles
+        r_try = rand(range_sampler)
+        idx = searchsortedfirst(x_centers, r_try)
+        p = idx <= length(pdf_vals) ? pdf_vals[idx] : 0.0
+        if rand() < p / max_pdf
+            push!(sampled_r, r_try)
+        end
+    end
 
     # Sampling loop
     for i in 1:N_particles
-        r = inv_cdf(rand())
-        #println(r)
+        r = sampled_r[i]
         T = T_profile(r, τ)
-
-        pr = sqrt(m * T) * randn()
-        pτ = sqrt(m^2 + pr^2)
-
+        σ = sqrt(m * T)
+        pr = σ * randn(dim-1) 
+        pτ = sqrt(m^2 + dot(pr, pr))
         positions[:, i] .= (τ, r)
-        momenta[:, i]   .= (pτ, pr)
+        momenta[:, i]   .= (pτ, pr[1])
     end
 
     return positions, momenta

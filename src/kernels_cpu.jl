@@ -11,9 +11,10 @@ export kernel_boost_to_rest_frame_cpu!,
        interpolate_2d_cpu,
        kernel_compute_all_forces_general_coords_cpu!,
        kernel_update_positions_general_coords_cpu!,
-       kernel_update_positions_radial_milne!,
+       kernel_update_momenta_LRF_general_coords_cpu!,
        kernel_boost_to_lab_frame_general_coords_cpu!,
        kernel_boost_to_rest_frame_general_coords_cpu!
+
 
 using LinearAlgebra
 
@@ -70,17 +71,38 @@ function kernel_boost_to_rest_frame_cpu!(
     m, N, step, Δt, t0
 )
     for i in 1:N
-        v = zeros(2)
-        v[1] = sign(positions[1, i]) * interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), step * Δt + t0)
+        r = abs(positions[1, i])
+        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
         E = sqrt(sum(momenta[:, i] .^ 2) + m^2)
         γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
 
         for j in 1:size(momenta, 1)
-            βj = -v[j]
-            momenta[j, i] = γ * (momenta[j, i] - βj * E)
+            momenta[j, i] = γ * (momenta[j, i] - v * E)
         end
     end
 end
+
+
+function kernel_boost_to_rest_frame_general_coords_cpu!(
+    momenta, positions, xgrid, tgrid, VelocityEvolution,
+    m, N, step, Δt, t0
+    )
+    for i in 1:N
+        r = abs(positions[2, i])
+
+        # Local fluid velocity in r-direction
+        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
+        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
+
+        pτ = momenta[1, i]
+        pr = momenta[2, i]
+
+        # Lorentz boost into LRF
+        momenta[1, i] = γ * (pτ - v * pr)  # p^τ in LRF
+        momenta[2, i] = γ * (pr - v * pτ)  # p^r in LRF
+    end
+end
+
 
 """
     kernel_boost_to_lab_frame_cpu!(...)
@@ -92,50 +114,30 @@ function kernel_boost_to_lab_frame_cpu!(
     m, N, step, Δt, t0
 )
     for i in 1:N
-        v = zeros(2)
-        v[1] = sign(positions[1, i]) * interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), step * Δt + t0)
+        r = abs(positions[1, i])
+        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
+
+  
+        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
+
         E = sqrt(sum(momenta[:, i] .^ 2) + m^2)
-        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-5)
 
         for j in 1:size(momenta, 1)
-            βj = v[j]
-            momenta[j, i] = γ * (momenta[j, i] - βj * E)
+            momenta[j, i] = γ * (momenta[j, i] + v * E)
         end
     end
 end
 
 
-function kernel_boost_to_rest_frame_general_coords_cpu!(
+function kernel_boost_to_lab_frame_general_coords_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0
     )
     for i in 1:N
-        τ = positions[1, i]
-        r = abs(positions[2, i])
-
-        # Local fluid velocity in r-direction
-        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
-        γ = 1.0 / sqrt(1 - v^2 + 1e-5)
-
-        pτ = momenta[1, i]
-        pr = momenta[2, i]
-
-        # Lorentz boost into LRF
-        momenta[1, i] = γ * (pτ - v * pr)  # p^τ in LRF
-        momenta[2, i] = γ * (pr - v * pτ)  # p^r in LRF
-    end
-end
-
-function kernel_boost_to_lab_frame_general_coords_cpu!(
-    momenta, positions, xgrid, tgrid, VelocityEvolution,
-    m, N, step, Δt, t0
-)
-    for i in 1:N
-        τ = positions[1, i]
         r = abs(positions[2, i])
 
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
-        γ = 1.0 / sqrt(1 - v^2 + 1e-5)
+        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
 
         pτ = momenta[1, i]
         pr = momenta[2, i]
@@ -145,6 +147,7 @@ function kernel_boost_to_lab_frame_general_coords_cpu!(
         momenta[2, i] = γ * (pr + v * pτ)
     end
 end
+
 
 
 # ============================================================================
@@ -166,7 +169,7 @@ function kernel_compute_all_forces_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0
-)
+    )
     for i in 1:N
         # Compute particle momentum magnitude
         p = sqrt(sum(momenta[:, i] .^ 2))
@@ -215,7 +218,7 @@ function kernel_compute_all_forces_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0
-)
+    )
     for i in 1:N
         # Compute particle momentum magnitude
         p = sqrt(sum(momenta[:, i] .^ 2))
@@ -244,8 +247,8 @@ function kernel_compute_all_forces_cpu!(
             # Langevin stochastic term
             sto_term = 0.0
             for j in 1:dimensions
-                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
-                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+                sto_term += ((kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
+                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]) 
             end
 
             # Store computed forces
@@ -288,19 +291,19 @@ function kernel_compute_all_forces_general_coords_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0
-)
+    )
     for i in 1:N
         # Compute particle momentum magnitude
-        p = sqrt(sum(momenta[:, i] .^ 2))
+        p = sqrt(sum(momenta[2:end, i] .^ 2))
         p_mags[i] = p
 
         # Compute unit momentum vectors (with fallback if zero momentum)
-        for d in 1:dimensions
+        for d in 2:dimensions
             p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
         end
 
         # Interpolate temperature from space-time field
-        T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[1, i]), step * Δt + t0)
+        T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[2, i]), step * Δt + t0)
 
         # Compute transport coefficients
         DsT = 0.2 * T
@@ -312,10 +315,10 @@ function kernel_compute_all_forces_general_coords_cpu!(
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
 
         # Compute forces
-        for d in 1:dimensions
+        for d in 2:dimensions
             # Christoffel geometric drift term
             Γ = compute_christoffel(positions[:, i])  # Returns Γ^μ_{νρ}
-            p0 = sqrt(m^2 + sum(momenta[:, i] .^ 2))  # p^τ ≈ relativistic energy in LRF
+            p0 = sqrt(m^2 + sum(momenta[d, i] .^ 2))  # p^τ ≈ relativistic energy in LRF
 
             geo_term = 0.0
             for ν in 1:dimensions, ρ in 1:dimensions
@@ -328,7 +331,7 @@ function kernel_compute_all_forces_general_coords_cpu!(
 
             # Langevin stochastic term
             sto_term = 0.0
-            for j in 1:dimensions
+            for j in 2:dimensions
                 sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
                             kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
             end
@@ -347,7 +350,7 @@ function kernel_compute_all_forces_general_coords_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0
-)
+    )
     for i in 1:N
         # Compute particle momentum magnitude
         p = sqrt(sum(momenta[:, i] .^ 2))
@@ -419,6 +422,21 @@ function kernel_update_momenta_LRF_cpu!(
     end
 end
 
+function kernel_update_momenta_LRF_general_coords_cpu!(
+    momenta, deterministic_terms, stochastic_terms,
+    Δt, dimensions, N,m
+)
+    for i in 1:N
+        for d in 2:dimensions
+            momenta[d, i] += deterministic_terms[d, i] + sqrt(Δt) * stochastic_terms[d, i]
+        end
+        # Recalculate p^0 to satisfy mass-shell constraint
+        p_spatial_sq = sum(momenta[2:dimensions, i] .^ 2)
+        momenta[1, i] = sqrt(m^2 + p_spatial_sq)
+    end
+end
+
+
 """
     kernel_update_positions_cpu!(...)
 
@@ -426,59 +444,32 @@ Update positions from momenta assuming free motion.
 """
 function kernel_update_positions_cpu!(positions, momenta, m, Δt, N)
     for i in 1:N
-        positions[1, i] += Δt * momenta[1, i] / m
+        p = momenta[1, i]
+        E = sqrt(p^2 + m^2)
+        positions[1, i] += Δt * p / E
+
+        if positions[1, i] < 0
+            positions[1, i] = -10.
+            momenta[1, i] = 0.0
+        end
     end
 end
 
-"""
-    kernel_update_positions_general_coords_cpu!(positions, momenta, m, Δt, N)
 
-Update particle positions using momenta in **flat but non-Cartesian coordinates**.
-
-Assumes positions are in coordinate basis and momenta are contravariant.
-Uses first-order integration of:
-
-    dx^μ/dτ = p^μ / p^0
-"""
 function kernel_update_positions_general_coords_cpu!(positions, momenta, m, Δt, N)
     for i in 1:N
         # Relativistic energy in flat spacetime
-        p0 = sqrt(m^2 + sum(momenta[:, i] .^ 2))
-
+        E = momenta[1, i]
         for μ in 1:size(positions, 1)
-            positions[μ, i] += Δt * momenta[μ, i] / p0
+            positions[μ, i] += Δt * momenta[μ, i] / E
+        end
+        if positions[2, i] < 0
+            positions[2, i] = -10.
+            momenta[2, i] = 0.0
+            p_spatial_sq = sum(momenta[2, i] .^ 2)
+            momenta[1, i] = sqrt(m^2 + p_spatial_sq)
         end
 
-
-    end
-end
-
-function kernel_update_positions_radial_milne!(
-    positions::Array{Float64,2},   # [τ, r]
-    momenta::Array{Float64,2},     # [p_τ, p_r]
-    m::Float64,
-    Δt::Float64,
-    N::Int
-)
-    for i in 1:N
-        # Extract momenta
-        p_tau = momenta[1, i]
-        p_r   = momenta[2, i]
-
-        # Relativistic energy in Milne metric (flat transverse space):
-        # p^μ p_μ = -m² → p_τ² - p_r² = m²
-        # ⇒ p^τ = sqrt(m² + p_r²)
-        p0 = sqrt(m^2 + p_r^2)
-
-        # Update τ and r (in Milne, p^τ = dτ/dλ, p^r = dr/dλ)
-        positions[1, i] += Δt * p_tau / p0    # τ update
-        positions[2, i] += Δt * p_r / p0      # r update
-
-        # Reflect if r < 0
-        #if positions[2, i] < 0
-        #    positions[2, i] = -5#-positions[2, i]
-        #    momenta[2, i]   = 0#-momenta[2, i]
-        #end
     end
 end
 

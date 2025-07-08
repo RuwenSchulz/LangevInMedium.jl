@@ -36,10 +36,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
 
     # === Initialize Particles ===
     position, moment = sample_initial_particles_milne!(
-        m, dimensions, N_particles,initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,xgrid)
-
-
-
+        m, dimensions, N_particles,initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,(0., maximum(xgrid)), 200)
 
 
     positions = copy(position)
@@ -87,9 +84,9 @@ function simulate_ensemble_bulk_general_coords_cpu(
             dimensions, N_particles, step, initial_time)
 
         # 3. Langevin update of momenta
-        kernel_update_momenta_LRF_cpu!(
+        kernel_update_momenta_LRF_general_coords_cpu!(
             momenta, deterministic_terms, stochastic_terms,
-            Δt, dimensions, N_particles)
+            Δt, dimensions, N_particles,m)
 
         # 4. Boost back to lab frame
         kernel_boost_to_lab_frame_general_coords_cpu!(
@@ -97,7 +94,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
             VelocityEvolution, m, N_particles, step, Δt, initial_time)
 
         # 5. Position update in Milne coordinates
-        kernel_update_positions_radial_milne!(
+        kernel_update_positions_general_coords_cpu!(
             positions, momenta, m, Δt, N_particles)
 
         # 6. Save snapshots

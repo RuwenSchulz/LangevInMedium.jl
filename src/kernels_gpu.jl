@@ -84,8 +84,7 @@ Lorentz boost momenta from lab frame to local rest frame (LRF) using interpolate
 )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
-        v = MVector{2, Float64}(0.0, 0.0)
-        v[1] = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), steps * Δt + initial_time)
+        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), steps * Δt + initial_time)
 
         p_norm = 0.0
         for j in 1:size(momenta, 1)
@@ -95,9 +94,7 @@ Lorentz boost momenta from lab frame to local rest frame (LRF) using interpolate
         γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
 
         for j in 1:size(momenta, 1)
-            β_j = -v[j]
-            p_j = momenta[j, i]
-            @inbounds momenta[j, i] = γ * (p_j - β_j * E)
+            @inbounds momenta[j, i] = γ * (momenta[j, i] - v * E)
         end
     end
     return 
@@ -114,8 +111,8 @@ Applies inverse Lorentz boost to momenta, restoring them from LRF to lab frame.
 )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
-        v = MVector{2, Float64}(0.0, 0.0)
-        v[1] = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), steps * Δt + initial_time)
+
+        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), steps * Δt + initial_time)
 
         p_norm = 0.0
         for d in 1:size(momenta, 1)
@@ -126,9 +123,7 @@ Applies inverse Lorentz boost to momenta, restoring them from LRF to lab frame.
         γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
 
         for d in 1:size(momenta, 1)
-            β_j = v[d]
-            p_j = momenta[d, i]
-            @inbounds momenta[d, i] = γ * (p_j - β_j * E)
+            @inbounds momenta[d, i] = γ * (momenta[d, i] + v * E)
         end
     end
     return
@@ -217,8 +212,22 @@ Move particles forward based on momenta. Reflects at r = 0.
 @inline function kernel_update_positions_gpu!(positions::CuDeviceMatrix{Float64}, momenta::CuDeviceMatrix{Float64}, m::Float64, Δt::Float64, N_particles::Int)
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
-        @inbounds positions[1, idx] += Δt * momenta[1, idx] / m
+        
+        p_sq = 0.0
+
+        p_sq += momenta[1, idx]^2
+
+        E = CUDA.sqrt(p_sq + m * m)
+
+        @inbounds positions[1, idx] += Δt * momenta[1, idx] / E
+        if positions[1, idx] < 0
+            positions[1, idx] = -10.
+            momenta[1, idx] = 0.0
+        end
     end
+
+
+
     return
 end
 
