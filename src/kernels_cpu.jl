@@ -13,8 +13,8 @@ export kernel_boost_to_rest_frame_cpu!,
        kernel_update_positions_general_coords_cpu!,
        kernel_update_momenta_LRF_general_coords_cpu!,
        kernel_boost_to_lab_frame_general_coords_cpu!,
-       kernel_boost_to_rest_frame_general_coords_cpu!
-
+       kernel_boost_to_rest_frame_general_coords_cpu!,
+       kernel_save_positions_general_coords_gpu!
 
 using LinearAlgebra
 
@@ -449,8 +449,8 @@ function kernel_update_positions_cpu!(positions, momenta, m, Δt, N)
         positions[1, i] += Δt * p / E
 
         if positions[1, i] < 0
-            positions[1, i] = -10.
-            momenta[1, i] = 0.0
+            positions[1, i] = -positions[1, i]
+            momenta[1, i] = -momenta[1, i]
         end
     end
 end
@@ -463,12 +463,12 @@ function kernel_update_positions_general_coords_cpu!(positions, momenta, m, Δt,
         for μ in 1:size(positions, 1)
             positions[μ, i] += Δt * momenta[μ, i] / E
         end
-        if positions[2, i] < 0
-            positions[2, i] = -10.
-            momenta[2, i] = 0.0
-            p_spatial_sq = sum(momenta[2, i] .^ 2)
-            momenta[1, i] = sqrt(m^2 + p_spatial_sq)
-        end
+        #if positions[2, i] < 0
+        #    positions[2, i] = -10.
+        #    momenta[2, i] = 0.0
+        #    p_spatial_sq = sum(momenta[2, i] .^ 2)
+        #    momenta[1, i] = sqrt(m^2 + p_spatial_sq)
+        #end
 
     end
 end
@@ -499,9 +499,19 @@ function kernel_save_positions_cpu!(
     position_history, current_positions, save_idx::Int, N::Int
 )
     for i in 1:N
-        for d in 1:size(current_positions, 1)
-            position_history[d, i, save_idx] = current_positions[d, i]
-        end
+        #for d in 1:size(current_positions, 1)
+            position_history[1, i, save_idx] = current_positions[1, i]
+        #end
+    end
+end
+
+function kernel_save_positions_general_coords_gpu!(
+    position_history, current_positions, save_idx::Int, N::Int
+)
+    for i in 1:N
+        #for d in 1:size(current_positions, 1)
+            position_history[1, i, save_idx] = current_positions[2, i]
+        #end
     end
 end
 

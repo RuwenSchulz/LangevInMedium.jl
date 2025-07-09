@@ -83,6 +83,7 @@ function simulate_ensemble_bulk_gpu_general_coords(
         position, moment = sample_initial_particles_milne!(
         m, dimensions, N_particles,initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,(0., maximum(xgrid)), 200)
 
+
         positions = CuArray(position)
         momenta = CuArray(moment)
 

@@ -45,11 +45,12 @@ function simulate_ensemble_bulk_general_coords_cpu(
     # === History Arrays ===
     #CHANGE HERE : zeros(Float64, dimensions, N_particles, num_saves + 1)
     momenta_history = [zeros(N_particles) for _ in 1:num_saves + 1]
-    position_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
+
 
     # Store spatial momentum magnitude (in Milne: just pr)
     momenta_history[1] .= abs.(momenta[2, :])
-    position_history[:, :, 1] .= positions
+    position_history = zeros(Float64, 1, N_particles, num_saves + 1)
+    position_history[1, :, 1] .= positions[2,:]
 
     # === Buffers ===
     p_mags              = zeros(N_particles)
@@ -104,7 +105,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
             kernel_save_snapshot_cpu!(
                 momenta_history[save_idx],
                 sqrt.(sum(momenta .^ 2, dims=1))[:], N_particles)
-            kernel_save_positions_cpu!(
+            kernel_save_positions_general_coords_gpu!(
                 position_history, positions, save_idx, N_particles)
         end
     end

@@ -19,6 +19,8 @@ using ..Constants
 # === Exports ===
 export sample_initial_particles_from_pdf!
 export sample_initial_particles_milne!
+export sample_MB_r_p_pairs!
+export MB_distribution
 export sample_initial_particles_at_origin!
 export sample_initial_particles_at_origin_no_position!
 export n_rt
@@ -87,7 +89,7 @@ function sample_initial_particles_from_pdf!(
         T = T_profile(r, t)
         σ = sqrt(m * T)
         positions[:, i] .= r                  # Uniform radial position
-        momenta[:, i] .= σ .* randn(dim)      # Gaussian-distributed thermal momentum
+        momenta[:, i] .= abs.(σ .* randn(dim))      # Gaussian-distributed thermal momentum
     end
 
     return positions, momenta
@@ -157,11 +159,74 @@ function sample_initial_particles_milne!(
         pr = σ * randn(dim-1) 
         pτ = sqrt(m^2 + dot(pr, pr))
         positions[:, i] .= (τ, r)
-        momenta[:, i]   .= (pτ, pr[1])
+        momenta[:, i]   .= (pτ, abs.(pr[1]))
     end
 
     return positions, momenta
 end 
+
+
+function MB_distribution(r, t, pτ, pr, m, T_profile, mu_profile, vr_profile)
+    T = T_profile(r, t)
+    μ = mu_profile(r, t)
+    vr = vr_profile(r, t)
+    γ = 1 / sqrt(1 - vr^2)
+
+    uτ = γ
+    ur = γ * vr
+
+    p_dot_u = pτ * uτ - pr * ur  # covariant dot product with (+,−) metric
+
+    g = 6  # degeneracy factor, e.g. spin 2 × color 3
+    norm = g / (2π)^2  # 2D prefactor
+
+    f = norm * exp(-(p_dot_u - μ) / T)
+    return f
+end
+
+
+
+function sample_MB_r_p_pairs!(
+    m::Float64,
+    N_particles::Int,
+    τ::Float64,
+    T_profile,
+    mu_profile,
+    vr_profile,
+    r_range::Tuple{Float64, Float64},
+    p_range::Tuple{Float64, Float64}
+)
+    positions = zeros(2, N_particles)  # (τ, r)
+    momenta   = zeros(2, N_particles)  # (p^τ, p^r)
+
+    g = 6
+    norm = g / (2π)^2
+
+    # Estimate f_max (conservatively from center of domain)
+    r_mid = (r_range[1] + r_range[2]) / 2
+    pr_test = 0.0
+    pτ_test = sqrt(pr_test^2 + m^2)
+    f_max = MB_distribution(r_mid, τ, pτ_test, pr_test, m, T_profile, mu_profile, vr_profile)
+
+    n_accepted = 0
+    while n_accepted < N_particles
+        r = rand(Uniform(r_range[1], r_range[2]))
+        pr = rand(Uniform(p_range[1], p_range[2]))
+        pτ = sqrt(pr^2 + m^2)
+
+        f = MB_distribution(r, τ, pτ, pr, m, T_profile, mu_profile, vr_profile)
+        accept_prob = f / f_max
+
+        if rand() < accept_prob
+            n_accepted += 1
+            positions[:, n_accepted] .= (τ, r)
+            momenta[:, n_accepted]   .= (pτ, pr)
+        end
+    end
+
+    return positions, momenta
+end
+
 
 
 """
