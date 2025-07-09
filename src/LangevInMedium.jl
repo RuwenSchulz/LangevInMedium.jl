@@ -38,6 +38,6 @@ using .Simulate
 export simulate_ensemble_bulk          # Main simulation function
 export n_rt                            # Observable extraction (density vs r, t)
 export plot_n_rt_comparison_hydro_langevin  # Plotting helper
-export CPUBackend, GPUBackend, CPU_GCBackend          # Backend selectors
+export CPUBackend, GPUBackend, CPU_GCBackend, GPU_GCBackend          # Backend selectors
 export fmGeV, GevInvTofm  # Physical constants
 end # module LangevInMedium

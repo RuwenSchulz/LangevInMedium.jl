@@ -43,6 +43,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
     momenta = copy(moment)
 
     # === History Arrays ===
+    #CHANGE HERE : zeros(Float64, dimensions, N_particles, num_saves + 1)
     momenta_history = [zeros(N_particles) for _ in 1:num_saves + 1]
     position_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
 
