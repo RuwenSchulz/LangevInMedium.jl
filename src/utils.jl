@@ -26,6 +26,7 @@ export sample_initial_particles_at_origin_no_position!
 export n_rt
 export plot_n_rt_comparison_hydro_langevin
 export sample_phase_space
+export sample_phase_space2
 
 # === Function Definitions ===
 
@@ -166,6 +167,113 @@ function sample_initial_particles_milne!(
     return positions, momenta
 end 
 
+function sample_phase_space2(N_particles::Int, r_grid::Vector{Float64}, t::Float64,
+                            m, T_profile, mu_profile, dimss)
+
+    # 1. Particle density profile n(r, t) × r × t (with Bessel function)
+    function nrt_free_cham_rt(r, t)
+        T = T_profile(r, t)
+        z = exp(mu_profile(r, t))  # fugacity
+        ex = z * exp(-m / T)
+        b2 = Bessels.besselkx(2, m / T)
+        deg = 6  # spin x2, color x3
+        density = deg * (m^2 * T / (2π^2) * ex * b2) * fmGeV^3
+        return density * r * t
+    end
+
+    # 2. Normalize n(r,t) × r × t to get probability weights
+    function normalize_nrt_discrete(r_grid::Vector{Float64}, t::Float64)
+        vals = [nrt_free_cham_rt(r, t) for r in r_grid]
+        vals .= max.(vals, 0.0)  # ensure non-negative
+        dr = r_grid[2] - r_grid[1]
+        norm = sum(vals) * dr
+        return vals ./ norm
+    end
+
+    # 3. Sample positions using inverse CDF
+    function sample_positions_cdf(N_particles, r_grid, t)
+        weights = normalize_nrt_discrete(r_grid, t)
+        cdf = cumsum(weights)
+        cdf ./= cdf[end]  # normalize
+        samples = rand(N_particles)
+        indices = searchsortedfirst.(Ref(cdf), samples)
+        return r_grid[indices]
+    end
+
+    # 4. Count how many particles fall into each r_bin
+    function count_particles_in_1D_grid(sampled_positions::Vector{Float64}, r_grid::Vector{Float64})
+        Δr = r_grid[2] - r_grid[1]
+        edges = vcat(r_grid .- Δr/2, r_grid[end] + Δr/2)
+        counts = zeros(Int, length(r_grid))
+        for r in sampled_positions
+            bin = searchsortedfirst(edges, r) - 1
+            if bin ≥ 1 && bin ≤ length(counts)
+                counts[bin] += 1
+            end
+        end
+        return counts
+    end
+
+    # 5. Faster momentum sampling using pre-tabulated thermal spectrum
+    function sample_momenta_vectorized(N, T, m)
+        E_p(p) = sqrt(p^2 + m^2)
+        f_p(p) = p.^2 .* exp.(-E_p.(p) ./ T)
+
+        # Tabulate PDF and CDF
+        p_vals = range(0, stop=10*T, length=1000)
+        pdf_vals = f_p(p_vals)
+        pdf_vals ./= sum(pdf_vals)
+        cdf_vals = cumsum(pdf_vals)
+        cdf_vals ./= cdf_vals[end]
+
+        # Sample using inverse CDF
+        rands = rand(N)
+        indices = searchsortedfirst.(Ref(cdf_vals), rands)
+        return p_vals[indices]
+    end
+
+    # 6. Sample momenta for each radial bin
+    function sample_momenta_at_each_ri(N_particles_at_ri::Vector{Int}, r_grid::Vector{Float64})
+        momenta_by_r = Vector{Vector{Float64}}(undef, length(r_grid))
+        for (i, r) in enumerate(r_grid)
+            T = T_profile(r, t)
+            N = N_particles_at_ri[i]
+            if N > 0
+                momenta_by_r[i] = sample_momenta_vectorized(N, T, m)
+            else
+                momenta_by_r[i] = Float64[]
+            end
+        end
+        return momenta_by_r
+    end
+
+    # 7. Flatten phase space arrays
+    function flatten_phase_space(momenta_at_ri::Vector{Vector{Float64}}, r_grid::Vector{Float64})
+        positions = Float64[]
+        momenta = Float64[]
+        for (i, r) in enumerate(r_grid)
+            for p in momenta_at_ri[i]
+                push!(positions, r)
+                push!(momenta, p)
+            end
+        end
+        return positions, momenta
+    end
+
+    # === Execute Steps ===
+    sampled_positions = sample_positions_cdf(N_particles, r_grid, t)
+    N_particles_at_ri = count_particles_in_1D_grid(sampled_positions, r_grid)
+    momenta_by_r = sample_momenta_at_each_ri(N_particles_at_ri, r_grid)
+    positions, momenta = flatten_phase_space(momenta_by_r, r_grid)
+
+    # 8. Construct output arrays
+    pos = zeros(dimss, N_particles)
+    mom = zeros(dimss, N_particles)
+    pos[1, :] .= positions
+    mom[1, :] .= momenta
+
+    return pos, mom
+end
 
 function sample_phase_space(N_particles::Int, r_grid::Vector{Float64}, t::Float64,m,T_profile,mu_profile,dimss)
     # 1. Rejection sample positions
