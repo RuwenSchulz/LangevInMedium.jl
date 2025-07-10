@@ -80,10 +80,12 @@ function simulate_ensemble_bulk_gpu(
         VelocityEvolution = CuArray(VelocityEvolutionn)
 
         # === Sample initial particle states from hydrodynamic Boltzmann distribution ===
-        position, moment = sample_initial_particles_from_pdf!(
-            m, dimensions, N_particles,
-            initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-            (0., 10.), 200)
+
+        position, moment = sample_phase_space(N_particles, xgridd[2:end], initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+        #position, moment = sample_initial_particles_from_pdf!(
+        #    m, dimensions, N_particles,
+        #    initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
+        #    (0., 10.), 200)
 
         positions = CuArray(position)
         momenta = CuArray(moment)
