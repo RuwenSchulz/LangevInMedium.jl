@@ -6,17 +6,19 @@ using StaticArrays, LinearAlgebra, JLD2, Dierckx
 # LangevInMedium.jl
 #
 # A framework for simulating Langevin dynamics in arbitrary
-# Cartesian dimensions, where particles interact with a
-# dynamic medium defined by temperature and flow velocity fields.
+# dimensions, where particles interact with a
+# dynamic medium defined by temperature and flow velocity fields. 
+# Arbitrary coordinate systems are supported by means of providing Christophel symbols as input.  
 #
 # Features:
 # - Arbitrary dimensionality (1D, 2D, 3D, ...)
+# - General coordinate systems (Cartesian, spherical, etc.)
 # - Background temperature and velocity evolution
 # - Ensemble-based simulations
 # - Supports CPU and (optionally) GPU backends
 # - Modular and extensible
 #
-# Entry point: `simulate_ensemble_bulk(::CPUBackend/GPUBackend, ...)`
+# Entry point: `simulate_ensemble_bulk(::CPUBackend/GPUBackend/CPU_GCBackend/GPU_GCBackend, ...)`
 # ─────────────────────────────────────────────────────────────
 
 # Load internal modules
