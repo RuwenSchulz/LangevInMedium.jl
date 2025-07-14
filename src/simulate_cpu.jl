@@ -55,7 +55,7 @@ function simulate_ensemble_bulk_cpu(
     xgrid, tgrid = SpaceTimeGrid
 
     # Initial particle positions and momenta from Boltzmann distribution
-    position, moment = sample_phase_space(N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+    position, moment = sample_phase_space2(N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
 
     #position, moment = sample_initial_particles_from_pdf!(
     #    m, dimensions, N_particles,
