@@ -367,7 +367,7 @@ Move particles forward based on momenta. Reflects at r = 0.
 
         @inbounds positions[1, idx] += Δt * momenta[1, idx] / E
         if positions[1, idx] < 0
-            positions[1, idx] = -10 #positions[1, idx]
+            positions[1, idx] = -20 #positions[1, idx]
             momenta[1, idx] =  0 #-momenta[1, idx]
         end
     end
