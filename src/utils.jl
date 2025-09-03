@@ -25,7 +25,6 @@ export sample_initial_particles_at_origin!
 export sample_initial_particles_at_origin_no_position!
 export n_rt
 export plot_n_rt_comparison_hydro_langevin
-export sample_phase_space
 export sample_phase_space2
 
 # === Function Definitions ===
@@ -50,8 +49,8 @@ Sample initial particle positions and momenta from a Boltzmann distribution base
 function sample_initial_particles_from_pdf!(
     m, dim, N_particles,
     t, T_profile, ur_profile, mu_profile,
-    x_range::Tuple{Float64, Float64}, nbins::Int
-)
+    x_range::Tuple{Float64, Float64}, nbins::Int    
+    )
     positions = zeros(dim, N_particles)
     momenta = zeros(dim, N_particles)
 
@@ -167,37 +166,42 @@ function sample_initial_particles_milne!(
     return positions, momenta
 end 
 
-function sample_phase_space2(N_particles::Int, r_grid::Vector{Float64}, t::Float64,
-                            m, T_profile, mu_profile, dimss)
+function sample_phase_space2(N_particles::Int, r_grid::Vector{Float64}, t0::Float64,
+                            m, T_profile, fug_profile, dimss)
 
-    # 1. Particle density profile n(r, t) × r × t (with Bessel function)
-    function nrt_free_cham_rt(r, t)
+    function density_free_charm(r,t,T_profile,fug_profile)
         T = T_profile(r, t)
-        z = exp(mu_profile(r, t))  # fugacity
-        ex = z * exp(-m / T)
-        b2 = Bessels.besselkx(2, m / T)
-        deg = 6  # spin x2, color x3
-        density = deg * (m^2 * T / (2π^2) * ex * b2) * fmGeV^3
-        return density * r * t
+        fug = fug_profile(r, t) 
+        m = 1.5
+        b2 = Bessels.besselkx(2,m/T)
+        ex = exp(fug-m/T)
+        deg = 6 #spin x2,color x3
+        density = deg*(m^2* T /(2 *π^2)* ex* b2)* 1/GevInvTofm^3; #fm-3
+        return density
     end
 
-    # 2. Normalize n(r,t) × r × t to get probability weights
-    function normalize_nrt_discrete(r_grid::Vector{Float64}, t::Float64)
-        vals = [nrt_free_cham_rt(r, t) for r in r_grid]
-        vals .= max.(vals, 0.0)  # ensure non-negative
+    # n_r at t0, normalized once using the integral at t0
+    function normalize_nrt_discrete(r_grid::Vector{Float64}, t0::Float64)
+        @assert length(r_grid) > 1 "r_grid must have at least 2 points"
+        vals = [max(density_free_charm(r, t0, T_profile, fug_profile), 0.0) for r in r_grid]
         dr = r_grid[2] - r_grid[1]
         norm = sum(vals) * dr
-        return vals ./ norm
+        norm = (norm == 0.0) ? 1.0 : norm         # avoid divide-by-zero
+        return vals ./ norm                        # length(r_grid) vector
     end
 
-    # 3. Sample positions using inverse CDF
-    function sample_positions_cdf(N_particles, r_grid, t)
-        weights = normalize_nrt_discrete(r_grid, t)
+    # CDF sampler for a single time (uses a 1D weight vector)
+    function sample_positions_cdf(weights::AbstractVector{<:Real}, r_grid::AbstractVector, N_particles::Int)
+        @assert length(weights) == length(r_grid) "weights and r_grid must match in length"
         cdf = cumsum(weights)
-        cdf ./= cdf[end]  # normalize
+        total = cdf[end]
+        if total == 0
+            return fill(r_grid[1], N_particles)    # fallback; customize if needed
+        end
+        cdf ./= total
         samples = rand(N_particles)
-        indices = searchsortedfirst.(Ref(cdf), samples)
-        return r_grid[indices]
+        idx = searchsortedfirst.(Ref(cdf), samples)
+        return r_grid[idx]
     end
 
     # 4. Count how many particles fall into each r_bin
@@ -236,7 +240,7 @@ function sample_phase_space2(N_particles::Int, r_grid::Vector{Float64}, t::Float
     function sample_momenta_at_each_ri(N_particles_at_ri::Vector{Int}, r_grid::Vector{Float64})
         momenta_by_r = Vector{Vector{Float64}}(undef, length(r_grid))
         for (i, r) in enumerate(r_grid)
-            T = T_profile(r, t)
+            T = T_profile(r, t0)
             N = N_particles_at_ri[i]
             if N > 0
                 momenta_by_r[i] = sample_momenta_vectorized(N, T, m)
@@ -261,9 +265,13 @@ function sample_phase_space2(N_particles::Int, r_grid::Vector{Float64}, t::Float
     end
 
     # === Execute Steps ===
-    sampled_positions = sample_positions_cdf(N_particles, r_grid, t)
+    n_rt =    normalize_nrt_discrete(r_grid, t0)
+    sampled_positions = sample_positions_cdf(n_rt, r_grid,N_particles)
+
     N_particles_at_ri = count_particles_in_1D_grid(sampled_positions, r_grid)
+
     momenta_by_r = sample_momenta_at_each_ri(N_particles_at_ri, r_grid)
+
     positions, momenta = flatten_phase_space(momenta_by_r, r_grid)
 
     # 8. Construct output arrays
@@ -274,112 +282,6 @@ function sample_phase_space2(N_particles::Int, r_grid::Vector{Float64}, t::Float
 
     return pos, mom
 end
-
-function sample_phase_space(N_particles::Int, r_grid::Vector{Float64}, t::Float64,m,T_profile,mu_profile,dimss)
-    # 1. Rejection sample positions
-    function nrt_free_cham_rt(r, t)
-        T = T_profile(r, t)
-        z = exp(mu_profile(r, t))  # fugacity
-        ex = z * exp(-m / T)               # this is z * e^{-m/T}
-        b2 = Bessels.besselkx(2, m / T)
-        deg = 6  # spin x2, color x3
-        density = deg * (m^2 * T / (2 * π^2) * ex * b2) * fmGeV^3
-        return density* r *t
-    end
-
-    function normalize_nrt_discrete(r_grid::Vector{Float64}, t::Float64)
-        vals = [nrt_free_cham_rt(r, t) for r in r_grid]
-        dr = r_grid[2] - r_grid[1]
-        norm = sum(vals) * dr  # discrete approximation of ∫ n(r) dr
-        normalized_vals = vals ./ norm
-        return normalized_vals
-    end
-
-
-    function rejection_sample_positions(N_particles, r_grid::Vector{Float64}, t)
-        weights = normalize_nrt_discrete(r_grid,t)#[nrt_free_cham_rt(r, t) for r in r_grid]
-        for i in eachindex(weights)
-            if !isfinite(weights[i]) || weights[i] < 0
-                weights[i] = 0.0
-            end
-        end
-        f_max = maximum(weights)
-        if f_max == 0
-            error("All weights are zero or invalid. Cannot sample.")
-        end
-        r_min, r_max = extrema(r_grid)
-        sampled_r = Float64[]
-        while length(sampled_r) < N_particles
-            r_try = rand() * (r_max - r_min) + r_min
-            y_try = rand() * f_max
-            f_r = nrt_free_cham_rt(r_try, t)
-            if isfinite(f_r) && f_r ≥ y_try
-                push!(sampled_r, r_try)
-            end
-        end
-        return sampled_r
-    end
-
-    function count_particles_in_1D_grid(sampled_positions::Vector{Float64}, r_grid::Vector{Float64})
-        Δr = r_grid[2] - r_grid[1]
-        edges = vcat(r_grid .- Δr/2, r_grid[end] + Δr/2)
-        counts = zeros(Int, length(r_grid))
-        for r in sampled_positions
-            bin = searchsortedfirst(edges, r) - 1
-            if bin ≥ 1 && bin ≤ length(counts)
-                counts[bin] += 1
-            end
-        end
-        return counts
-    end
-
-    function sample_momenta_at_each_ri(N_particles_at_ri::Vector{Int}, r_grid::Vector{Float64})
-       
-        momenta_by_r = Vector{Vector{Float64}}(undef, length(r_grid))
-        for (i, r) in enumerate(r_grid)
-            T = T_profile(r, t)
-            N = N_particles_at_ri[i]
-            sampled = Float64[]
-            E_p(p) = sqrt(p^2 + m^2)
-            f_p(p) = p^2 * exp(-E_p(p) / T)
-            p_max = 10.0
-            f_max = f_p(sqrt(2 * m * T))
-            while length(sampled) < N
-                p_try = rand() * p_max
-                y_try = rand() * f_max
-                if y_try < f_p(p_try)
-                    push!(sampled, p_try)
-                end
-            end
-            momenta_by_r[i] = sampled
-        end
-        return momenta_by_r
-    end
-
-    function flatten_phase_space(momenta_at_ri::Vector{Vector{Float64}}, r_grid::Vector{Float64})
-        positions = Float64[]
-        momenta = Float64[]
-        for (i, r) in enumerate(r_grid)
-            for p in momenta_at_ri[i]
-                push!(positions, r)
-                push!(momenta, p)
-            end
-        end
-        return positions, momenta
-    end
-
-    # === Execute Steps ===
-    sampled_positions = rejection_sample_positions(N_particles, r_grid, t)
-    N_particles_at_ri = count_particles_in_1D_grid(sampled_positions, r_grid)
-    momenta_by_r = sample_momenta_at_each_ri(N_particles_at_ri, r_grid)
-    positions, momenta = flatten_phase_space(momenta_by_r, r_grid)
-    pos = zeros(dimss, N_particles)
-    mom = zeros(dimss, N_particles)
-    pos[1,:] .= positions
-    mom[1,:] .= momenta
-    return pos, mom
-end
-
 
 
 """
