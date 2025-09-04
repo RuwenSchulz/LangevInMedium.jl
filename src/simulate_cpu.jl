@@ -55,7 +55,8 @@ function simulate_ensemble_bulk_cpu(
     xgrid, tgrid = SpaceTimeGrid
 
     # Initial particle positions and momenta from Boltzmann distribution
-    position, moment = sample_phase_space2(N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+    n_rt = compute_MIS_distribution(xgrid, initial_time,T_profile_MIS,mu_profile_MIS,m)
+    position, moment = sample_phase_space3(n_rt, N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
 
     #position, moment = sample_initial_particles_from_pdf!(
     #    m, dimensions, N_particles,
@@ -65,9 +66,16 @@ function simulate_ensemble_bulk_cpu(
     positions = copy(position)
     momenta = copy(moment)
 
+
+
     # History arrays for positions and momenta
     momenta_history = [zeros(N_particles) for _ in 1:num_saves + 1]
     position_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
+
+
+    kernel_boost_to_lab_frame_cpu!(
+    momenta, positions, xgrid, tgrid,
+    VelocityEvolutionn, m, N_particles, 0, Δt, initial_time)
 
     momenta_history[1] .= sqrt.(sum(momenta .^ 2, dims=1))[:]
     position_history[:, :, 1] .= positions
