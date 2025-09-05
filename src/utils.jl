@@ -28,7 +28,7 @@ export plot_n_rt_comparison_hydro_langevin
 export sample_phase_space2
 export compute_MIS_distribution
 export sample_phase_space3
-
+export sample_phase_space4
 # === Function Definitions ===
 
 """
@@ -404,6 +404,120 @@ function sample_phase_space3(n_rt,N_particles::Int, r_grid::Vector{Float64}, t0:
 end
 
 
+function sample_phase_space4(n_rt, N_particles::Int, r_grid::Vector{Float64}, t0::Float64,
+    m, T_profile, fug_profile, dimss)
+
+
+
+    # CDF sampler for a single time (uses a 1D weight vector)
+    function sample_positions_cdf(weights::AbstractVector{<:Real}, r_grid::AbstractVector, N_particles::Int)
+        @assert length(weights) == length(r_grid) "weights and r_grid must match in length"
+        cdf = cumsum(weights)
+        total = cdf[end]
+        if total == 0
+            return fill(r_grid[1], N_particles)    # fallback; customize if needed
+        end
+        cdf ./= total
+        samples = rand(N_particles)
+        idx = searchsortedfirst.(Ref(cdf), samples)
+        return r_grid[idx]
+    end
+
+    # 4. Count how many particles fall into each r_bin
+    function count_particles_in_1D_grid(sampled_positions::Vector{Float64}, r_grid::Vector{Float64})
+        Δr = r_grid[2] - r_grid[1]
+        edges = vcat(r_grid .- Δr / 2, r_grid[end] + Δr / 2)
+        counts = zeros(Int, length(r_grid))
+        for r in sampled_positions
+            bin = searchsortedfirst(edges, r) - 1
+            if bin ≥ 1 && bin ≤ length(counts)
+                counts[bin] += 1
+            end
+        end
+        return counts
+    end
+
+    function sample_pmag_MJ(N::Int, T::Float64, m::Float64)
+        # guardrails
+        if N == 0 || T <= 0
+            return zeros(Float64, max(N, 0))
+        end
+        # Choose a tail large enough for both NR and relativistic regimes
+        pmax = max(10T, 10 * sqrt(m * T + T^2))
+        p_vals = range(0, stop=pmax, length=2000)
+        E_vals = sqrt.(p_vals .^ 2 .+ m^2)
+        pdf = (p_vals .^ 2) .* exp.(-E_vals ./ T)
+        s = sum(pdf)
+        if s == 0 || !isfinite(s)
+            return zeros(Float64, N)
+        end
+        pdf ./= s
+        cdf = cumsum(pdf)
+        cdf ./= cdf[end]
+        u = rand(N)
+        idx = searchsortedfirst.(Ref(cdf), u)
+        return p_vals[idx]
+    end
+
+    function sample_pr_MJ(N::Int, T::Float64, m::Float64)
+        if N == 0
+            return Float64[]
+        end
+        pmag = sample_pmag_MJ(N, T, m)
+        cosθ = @. 2rand() - 1                # independent of |p|
+        return pmag .* cosθ
+    end
+
+    function sample_pr_at_each_ri(N_at_ri::Vector{Int}, r_grid::Vector{Float64})
+        pr_by_r = Vector{Vector{Float64}}(undef, length(r_grid))
+        for (i, r) in enumerate(r_grid)
+            N = N_at_ri[i]
+            if N > 0
+                Tloc = T_profile(r, t0)
+                pr_by_r[i] = sample_pr_MJ(N, Tloc, m)
+            else
+                pr_by_r[i] = Float64[]
+            end
+        end
+        return pr_by_r
+    end
+
+    # Flatten into contiguous arrays (positions parallel to momenta)
+    function flatten_phase_space(pr_by_r::Vector{Vector{Float64}}, r_grid::Vector{Float64})
+        positions = Vector{Float64}(undef, sum(length.(pr_by_r)))
+        momenta = similar(positions)
+        k = 0
+        for (i, r) in enumerate(r_grid)
+            vpr = pr_by_r[i]
+            ni = length(vpr)
+            if ni == 0
+                continue
+            end
+            @inbounds begin
+                positions[k+1:k+ni] .= r
+                momenta[k+1:k+ni] .= vpr
+            end
+            k += ni
+        end
+        return positions, momenta
+    end
+
+    # --- Pipeline ---
+    sampled_positions = sample_positions_cdf(n_rt, r_grid, N_particles)
+    N_particles_at_ri = count_particles_in_1D_grid(sampled_positions, r_grid)
+    pr_by_r = sample_pr_at_each_ri(N_particles_at_ri, r_grid)
+    positions, momenta = flatten_phase_space(pr_by_r, r_grid)
+
+    @assert length(positions) == N_particles == length(momenta)
+
+    # --- Output arrays ---
+    pos = zeros(dimss, N_particles)
+    mom = zeros(dimss, N_particles)
+    pos[1, :] .= positions              # store r
+    mom[1, :] .= momenta               # store p_r (radial component)
+
+    return pos, mom
+end
 """
     sample_initial_particles_at_origin!(...)
 
