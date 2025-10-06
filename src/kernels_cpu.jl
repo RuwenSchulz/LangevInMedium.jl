@@ -448,11 +448,11 @@ function kernel_update_positions_cpu!(positions, momenta, m, Δt, N)
         E = sqrt(p^2 + m^2)
         positions[1, i] += Δt * p / E
 
-        #if positions[1, i] < 0
+        if positions[1, i] < 0
         #    #@warn "position <0, reflecting"
-        #    positions[1, i] = -positions[1, i]
-        #    #momenta[1, i] = -momenta[1, i]
-        #end
+            positions[1, i] = -positions[1, i]
+            momenta[1, i] = -momenta[1, i]
+        end
     end
 end
 

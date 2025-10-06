@@ -403,7 +403,6 @@ function sample_phase_space3(n_rt,N_particles::Int, r_grid::Vector{Float64}, t0:
     return pos, mom
 end
 
-
 function sample_phase_space4(n_rt, N_particles::Int, r_grid::Vector{Float64}, t0::Float64,
     m, T_profile, fug_profile, dimss)
 
@@ -514,7 +513,7 @@ function sample_phase_space4(n_rt, N_particles::Int, r_grid::Vector{Float64}, t0
     pos = zeros(dimss, N_particles)
     mom = zeros(dimss, N_particles)
     pos[1, :] .= positions              # store r
-    mom[1, :] .= momenta               # store p_r (radial component)
+    #mom[1, :] .= momenta               # store p_r (radial component)
 
     return pos, mom
 end
