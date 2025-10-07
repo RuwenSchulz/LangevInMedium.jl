@@ -20,6 +20,7 @@ to evolve particle ensembles over a hydrodynamic background.
 
 # Arguments
 - `backend::GPUBackend`: A tag type to select GPU-based execution.
+- `heavy_quark_density`: Heavy quark density profile (GPU array).
 - `T_profile_MIS`, `ur_profile_MIS`, `mu_profile_MIS`: Hydrodynamic field functions.
 - `TemperatureEvolutionn`, `VelocityEvolutionn`: Precomputed spacetime evolution arrays.
 - `SpaceTimeGrid`: Tuple of coordinate arrays `(x, t)`.
@@ -31,6 +32,7 @@ to evolve particle ensembles over a hydrodynamic background.
 - `final_time`: End time of the simulation.
 - `save_interval`: Interval between saved frames.
 - `m`: Particle mass.
+- `DsT`: Diffusion coefficient parameter (default 0.2).
 - `dimensions`: Number of spatial dimensions (default 3).
 
 # Returns
@@ -38,6 +40,7 @@ to evolve particle ensembles over a hydrodynamic background.
 """
 function Simulate.simulate_ensemble_bulk(
     backend::GPUBackend,
+    heavy_quark_density,
     T_profile_MIS,
     ur_profile_MIS,
     mu_profile_MIS,
@@ -50,14 +53,15 @@ function Simulate.simulate_ensemble_bulk(
     final_time::Float64 = 1.0,
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
+    DsT::Float64 = 0.2,
     dimensions::Int = 3,
 )
-    return SimulateGPU.simulate_ensemble_bulk_gpu(
+    return SimulateGPU.simulate_ensemble_bulk_gpu(heavy_quark_density,
         T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,
         initial_time = initial_time, final_time = final_time,
-        save_interval = save_interval, m = m, dimensions = dimensions
+        save_interval = save_interval, m = m, DsT = DsT, dimensions = dimensions
     )
 end
 

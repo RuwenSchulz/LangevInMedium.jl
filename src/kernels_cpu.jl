@@ -168,7 +168,7 @@ function kernel_compute_all_forces_cpu!(
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N, step, t0
+    dimensions, N, step, t0,DsT
     )
     for i in 1:N
         # Compute particle momentum magnitude
@@ -184,7 +184,7 @@ function kernel_compute_all_forces_cpu!(
         T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[1, i]), step * Δt + t0)
 
         # Compute transport coefficients
-        DsT = 0.2 * T
+        #DsT = 0.2 * T
         M = 1.5
         ηD = T^2 / (M * DsT)
         κ = 2 * T^3 / DsT

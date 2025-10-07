@@ -29,6 +29,85 @@ export sample_phase_space2
 export compute_MIS_distribution
 export sample_phase_space3
 export sample_phase_space4
+export sample_heavy_quarks
+
+
+
+
+
+
+function sample_heavy_quarks(N::Int, τ;
+                             grid::Vector{Float64},
+                             m::Float64,
+                             T_profile,
+                             hq_number_density
+                             )
+    # -------------------------------------------------------------------------
+
+    if length(grid) != length(hq_number_density)
+        @warn "Length mismatch: grid has $(length(grid)) points, \
+               but hq_number_density has $(length(hq_number_density)) values. \
+               Results may be inconsistent."
+    end
+
+
+    # -------------------------------------------------------------------------
+    # 2. Build CDF for position sampling
+    # -------------------------------------------------------------------------
+
+    vals = hq_number_density
+    cdf = cumsum(0.5 .* diff(grid) .* (vals[1:end-1] .+ vals[2:end]))
+    cdf ./= cdf[end]
+
+    # -------------------------------------------------------------------------
+    # 3. Inverse-transform sample radii
+    # -------------------------------------------------------------------------
+    rs = Vector{Float64}(undef, N)
+    for i in 1:N
+        u = rand()
+        j = searchsortedfirst(cdf, u)
+        if j <= 1
+            rs[i] = grid[1]
+        elseif j >= length(grid)
+            rs[i] = grid[end-1]
+        else
+            t = (u - cdf[j-1]) / (cdf[j] - cdf[j-1])
+            rs[i] = grid[j-1] + t * (grid[j] - grid[j-1])
+        end
+    end
+
+    # -------------------------------------------------------------------------
+    # 4. Sample transverse momenta at each rᵢ
+    # -------------------------------------------------------------------------
+    pTs = Vector{Float64}(undef, N)
+    for i in 1:N
+        r = rs[i]
+        Tloc = T_profile(r, τ)
+
+        # Rejection sampling of p_T
+        pmax = 10Tloc + 5m
+        while true
+            ptry = rand() * pmax
+            y = rand()
+            f = ptry * exp(-sqrt(ptry^2 + m^2) / Tloc)
+            fmax = m * exp(-m / Tloc)
+            if y < f / fmax
+                pTs[i] = ptry
+                break
+            end
+        end
+    end
+
+    # -------------------------------------------------------------------------
+return reshape(rs, 1, :), reshape(pTs, 1, :)
+end
+
+
+
+
+
+
+
 # === Function Definitions ===
 
 """
@@ -398,7 +477,7 @@ function sample_phase_space3(n_rt,N_particles::Int, r_grid::Vector{Float64}, t0:
     pos = zeros(dimss, N_particles)
     mom = zeros(dimss, N_particles)
     pos[1, :] .= positions
-    mom[1, :] .= momenta
+    #mom[1, :] .= momenta
 
     return pos, mom
 end

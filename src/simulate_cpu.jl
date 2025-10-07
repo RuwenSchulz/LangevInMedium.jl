@@ -28,13 +28,14 @@ Run a CPU-based Langevin simulation of particle motion in a hydrodynamic backgro
 - `save_interval`: Time interval at which to record snapshots.
 - `m`: Particle mass.
 - `dimensions`: Number of spatial dimensions.
+- `DsT`: Diffusion coefficient parameter (default 0.2).
 
 # Returns
 - `time_points`: Vector of saved time points.
 - `momenta_history`: Vector of momentum magnitudes at each time point.
 - `position_history_vec`: Vector of position arrays at each time point.
 """
-function simulate_ensemble_bulk_cpu(
+function simulate_ensemble_bulk_cpu(heavy_quark_density,
     T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
     TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
     N_particles::Int = 10_000,
@@ -43,6 +44,7 @@ function simulate_ensemble_bulk_cpu(
     final_time::Float64 = 1.0,
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
+    DsT::Float64 = 0.2,
     dimensions::Int = 3,
 )
 
@@ -55,8 +57,16 @@ function simulate_ensemble_bulk_cpu(
     xgrid, tgrid = SpaceTimeGrid
 
     # Initial particle positions and momenta from Boltzmann distribution
-    n_rt = compute_MIS_distribution(xgrid, initial_time,T_profile_MIS,mu_profile_MIS,m)
-    position, moment = sample_phase_space4(n_rt, N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+    #n_rt = compute_MIS_distribution(xgrid, initial_time,T_profile_MIS,mu_profile_MIS,m)
+    position, moment = sample_phase_space4(heavy_quark_density, N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+
+    #position, moment = sample_heavy_quarks(N_particles, initial_time;
+    #                         grid = xgrid,
+    #                         m = m,
+    #                         T_profile = T_profile_MIS,
+    #                         hq_number_density = heavy_quark_density
+    #                         )
+
 
     #position, moment = sample_initial_particles_from_pdf!(
     #    m, dimensions, N_particles,
@@ -66,7 +76,7 @@ function simulate_ensemble_bulk_cpu(
     positions = copy(position)
     momenta = copy(moment)
 
-
+    
 
     # History arrays for positions and momenta
     momenta_history = [zeros(N_particles) for _ in 1:num_saves + 1]
@@ -112,7 +122,7 @@ function simulate_ensemble_bulk_cpu(
             ηD_vals, kL_vals, kT_vals,
             ξ, deterministic_terms, stochastic_terms,
             Δt, m, random_directions,
-            dimensions, N_particles, step, initial_time)
+            dimensions, N_particles, step, initial_time,DsT)
 
         # 3. Update momenta
         kernel_update_momenta_LRF_cpu!(

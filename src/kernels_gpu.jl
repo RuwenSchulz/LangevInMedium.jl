@@ -191,7 +191,7 @@ Compute Langevin drag and stochastic forces in the local rest frame.
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N_particles, steps, initial_time
+    dimensions, N_particles, steps, initial_time,DsT
 )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -211,7 +211,7 @@ Compute Langevin drag and stochastic forces in the local rest frame.
         T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, abs(positions[1, i]), steps * Δt + initial_time)
 
         # Transport coefficients
-        DsT = 0.2 * T
+        #DsT = 0.2 * T
         M = 1.5
         ηD = T^2 / (M * DsT)
         κ  = 2 * T^3 / DsT
@@ -366,10 +366,10 @@ Move particles forward based on momenta. Reflects at r = 0.
         E = CUDA.sqrt(p_sq + m * m)
 
         @inbounds positions[1, idx] += Δt * momenta[1, idx] / E
-        #if positions[1, idx] < 0
-        #    positions[1, idx] = -20 #positions[1, idx]
-        #    momenta[1, idx] =  0 #-momenta[1, idx]
-        #end
+        if positions[1, idx] < 0
+            positions[1, idx] = -positions[1, idx]
+            momenta[1, idx] =  -momenta[1, idx]
+        end
     end
 
     return

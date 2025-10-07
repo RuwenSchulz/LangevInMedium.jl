@@ -24,6 +24,7 @@ Run a bulk particle ensemble simulation using the CPU backend.
 
 # Arguments
 - `backend::CPUBackend`: A CPU backend instance.
+- `heavy_quark_density`: Initial spatial density distribution of heavy quarks.
 - `T_profile_MIS`, `ur_profile_MIS`, `mu_profile_MIS`: Hydrodynamic profile data for initialization.
 - `TemperatureEvolutionn`: Time-evolving temperature field.
 - `VelocityEvolutionn`: Time-evolving velocity field.
@@ -36,6 +37,7 @@ Run a bulk particle ensemble simulation using the CPU backend.
 - `final_time`: End time of the simulation.
 - `save_interval`: Interval at which to store snapshots.
 - `m`: Mass of each particle.
+- `DsT`: Diffusion coefficient times temperature.
 - `dimensions`: Number of spatial dimensions (1, 2, or 3).
 
 # Returns
@@ -43,6 +45,7 @@ Output from the `simulate_ensemble_bulk_cpu` routine containing full trajectory 
 """
 function simulate_ensemble_bulk(
     backend::CPUBackend,
+    heavy_quark_density,
     T_profile_MIS,
     ur_profile_MIS,
     mu_profile_MIS,
@@ -55,14 +58,15 @@ function simulate_ensemble_bulk(
     final_time::Float64 = 1.0,
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
+    DsT::Float64 = 0.2,
     dimensions::Int = 3,
 )
-    return simulate_ensemble_bulk_cpu(
+    return simulate_ensemble_bulk_cpu(heavy_quark_density,
         T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,
         initial_time = initial_time, final_time = final_time,
-        save_interval = save_interval, m = m, dimensions = dimensions
+        save_interval = save_interval, m = m,DsT = DsT, dimensions = dimensions
     )
 end
 

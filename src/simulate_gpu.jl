@@ -33,6 +33,7 @@ end
 Run a Langevin simulation on the GPU using hydrodynamic background profiles and CUDA kernels.
 
 # Arguments
+- `heavy_quark_density`: Heavy quark density profile (GPU array).
 - `T_profile_MIS`, `ur_profile_MIS`, `mu_profile_MIS`: Hydrodynamic profiles for temperature, velocity, and chemical potential.
 - `TemperatureEvolutionn`, `VelocityEvolutionn`: Precomputed evolution grids (CPU arrays).
 - `SpaceTimeGrid`: Tuple of spacetime grid arrays `(x, t)`.
@@ -42,13 +43,14 @@ Run a Langevin simulation on the GPU using hydrodynamic background profiles and 
 - `save_interval`: Interval for saving snapshots of the system.
 - `m`: Particle mass.
 - `dimensions`: Number of spatial dimensions (typically 3).
+- `DsT`: Diffusion coefficient parameter (default 0.2).
 
 # Returns
 - `time_points`: Vector of saved time points.
 - `momenta_history_vec`: Vector of momenta arrays (one per save point).
 - `position_history_vec`: Vector of position arrays (one per save point).
 """
-function simulate_ensemble_bulk_gpu(
+function simulate_ensemble_bulk_gpu(heavy_quark_density,
     T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
     TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
     N_particles::Int64=10_000,
@@ -57,6 +59,7 @@ function simulate_ensemble_bulk_gpu(
     final_time::Float64=1.0,
     save_interval::Float64=0.1,
     m::Float64=1.0,
+    DsT::Float64=0.2,
     dimensions::Int64=3,
 )
     CUDA.reclaim()  # Free any unused GPU memory
@@ -80,8 +83,16 @@ function simulate_ensemble_bulk_gpu(
         VelocityEvolution = CuArray(VelocityEvolutionn)
 
         # === Sample initial particle states from hydrodynamic Boltzmann distribution ===
+        #n_rt = compute_MIS_distribution(xgridd, initial_time,T_profile_MIS,mu_profile_MIS,m)
+        position, moment = sample_phase_space4(heavy_quark_density,N_particles, xgridd, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
 
-        position, moment = sample_phase_space2(N_particles, xgridd, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+        #position, moment = sample_heavy_quarks(N_particles, initial_time;
+        #                     grid = xgrid,
+        #                     m = m,
+        #                     T_profile = T_profile_MIS,
+        #                     hq_number_density = heavy_quark_density
+        #                     )
+
 
         #position = zeros(dimensions, N_particles)
         #moment = zeros(dimensions, N_particles)
@@ -139,7 +150,7 @@ function simulate_ensemble_bulk_gpu(
                 p_mags, p_units, ηD_vals, kL_vals, kT_vals,
                 ξ, deterministic_terms, stochastic_terms,
                 Δt, m, random_directions, dimensions, N_particles,
-                step, initial_time)
+                step, initial_time,DsT)
 
             # Step 3: Update momenta in LRF
             @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
