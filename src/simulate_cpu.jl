@@ -58,11 +58,12 @@ function simulate_ensemble_bulk_cpu(heavy_quark_density,
 
     # Initial particle positions and momenta from Boltzmann distribution
     #n_rt = compute_MIS_distribution(xgrid, initial_time,T_profile_MIS,mu_profile_MIS,m)
-    position, moment = sample_heavy_quarks(heavy_quark_density, N_particles, xgrid, initial_time,m,T_profile_MIS,dimensions)
+    #position, moment = sample_heavy_quarks(heavy_quark_density, N_particles, xgrid, initial_time,m,T_profile_MIS,dimensions)
 
-     position, moment = sample_phase_space4(n_rt, N_particles, xgrid, initial_time,
+    position, moment = sample_phase_space4(n_rt, N_particles, xgrid, initial_time,
     m, T_profile_MIS, mu_profile_MIS, dimensions)
-
+    
+    #position, moment = sample_initial_particles_at_origin!(m, spatial_dimensions, N_particles,t0, T_profile_MIS)
 
 
 
@@ -135,7 +136,7 @@ function simulate_ensemble_bulk_cpu(heavy_quark_density,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time)
         end 
         # 5. Update positions
-        kernel_update_positions_cpu!(positions, momenta, m, Δt, N_particles)
+        kernel_update_positions_cpu!(positions, momenta, m, Δt, dimensions,N_particles)
 
         # 6. Save snapshots
         if step % save_every == 0

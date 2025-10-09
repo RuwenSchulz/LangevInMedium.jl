@@ -109,24 +109,60 @@ end
 
 Inverse Lorentz boost to transform momenta from LRF back to the lab frame.
 """
-function kernel_boost_to_lab_frame_cpu!(
-    momenta, positions, xgrid, tgrid, VelocityEvolution,
-    m, N, step, Δt, t0
+function kernel_update_positions_cpu!(
+    positions, momenta, m, Δt, N;
+    dimensions::Int = 2,
+    radial_mode::Bool = false,
+    D::Union{Nothing, Float64} = nothing
 )
-    for i in 1:N
-        r = abs(positions[1, i])
-        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
+    @inbounds for i in 1:N
+        # Compute energy (on-shell)
+        E2 = m^2
+        for d in 1:dimensions
+            E2 += momenta[d, i]^2
+        end
+        E = sqrt(E2)
 
-  
-        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
+        if radial_mode
+            # --- Radial evolution with optional geometric drift ---
+            r = positions[1, i]
+            pr = momenta[1, i]
 
-        E = sqrt(sum(momenta[:, i] .^ 2) + m^2)
+            # Kinematic drift
+            dr = (pr / E) * Δt
 
-        for j in 1:size(momenta, 1)
-            momenta[j, i] = γ * (momenta[j, i] + v * E)
+            # Add geometric drift and stochastic term if diffusion coefficient D is provided
+            if D !== nothing
+                ξ = randn()
+                dr += (D / r) * Δt + sqrt(2 * D * Δt) * ξ
+            end
+
+            # Update and reflect at r = 0
+            r_new = r + dr
+            if r_new < 0
+                r_new = -r_new
+                momenta[1, i] = -momenta[1, i]
+            end
+
+            positions[1, i] = r_new
+
+        else
+            # --- Full 2D (or 3D) Cartesian evolution ---
+            for d in 1:dimensions
+                positions[d, i] += Δt * momenta[d, i] / E
+            end
+
+            # Reflective boundaries (optional)
+            for d in 1:dimensions
+                if positions[d, i] < 0
+                    positions[d, i] = -positions[d, i]
+                    momenta[d, i]   = -momenta[d, i]
+                end
+            end
         end
     end
 end
+
 
 
 function kernel_boost_to_lab_frame_general_coords_cpu!(
@@ -443,16 +479,28 @@ end
 
 Update positions from momenta assuming free motion.
 """
-function kernel_update_positions_cpu!(positions, momenta, m, Δt, N)
-    for i in 1:N
-        p = momenta[1, i]
-        E = sqrt(p^2 + m^2)
-        positions[1, i] += Δt * p / E
+function kernel_update_positions_cpu!(
+    positions, momenta, m, Δt, dimensions, N
+)
+    @inbounds for i in 1:N
+        # compute energy in local rest frame
+        E² = m^2
+        for d in 1:dimensions
+            E² += momenta[d, i]^2
+        end
+        E = sqrt(E²)
 
-        if positions[1, i] < 0
-        #    #@warn "position <0, reflecting"
-            positions[1, i] = -positions[1, i]
-            momenta[1, i] = -momenta[1, i]
+        # update each coordinate component
+        for d in 1:dimensions
+            positions[d, i] += Δt * momenta[d, i] / E
+        end
+
+        # optional reflection if any coordinate goes negative
+        for d in 1:dimensions
+            if positions[d, i] < 0
+                positions[d, i] = -positions[d, i]
+                momenta[d, i]   = -momenta[d, i]
+            end
         end
     end
 end

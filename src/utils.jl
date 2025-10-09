@@ -45,13 +45,7 @@ function sample_heavy_quarks(
     @assert length(σ_r) == length(r_grid) "weights and grid must match"
     @assert length(r_grid) ≥ 2
     
-    # Optionally refine the grid at small r
-    if refine_small_r
-        _r_grid, _σ_r = refine_grid_near_zero(r_grid, σ_r; r_cutoff=2.0, factor=10)
-    else
-        _r_grid = r_grid
-        _σ_r = σ_r
-    end
+
 
     function sample_positions_cdf_stable(transverse_density::AbstractVector{<:Real},
                                          r_grid::AbstractVector, N::Int)
@@ -122,42 +116,6 @@ function sample_heavy_quarks(
     return pos, mom
 end
 
-# Helper function to refine grid near r=0
-function refine_grid_near_zero(r_grid::Vector{Float64}, 
-                               σ_r::Vector{Float64};
-                               r_cutoff::Float64=2.0,
-                               factor::Int=10)
-    """
-    Create a refined grid with much finer spacing for r < r_cutoff.
-    """
-    using Interpolations
-    
-    # Split into small-r and large-r regions
-    idx_cutoff = findfirst(r_grid .>= r_cutoff)
-    if isnothing(idx_cutoff)
-        idx_cutoff = length(r_grid)
-    end
-    
-    # Original points
-    r_small = r_grid[1:idx_cutoff]
-    r_large = r_grid[idx_cutoff:end]
-    σ_small = σ_r[1:idx_cutoff]
-    σ_large = σ_r[idx_cutoff:end]
-    
-    # Interpolation function
-    itp = LinearInterpolation(r_grid, σ_r, extrapolation_bc=Line())
-    
-    # Create refined grid in small-r region
-    n_fine = (length(r_small) - 1) * factor
-    r_fine = range(r_grid[1], r_cutoff, length=n_fine)
-    σ_fine = itp.(r_fine)
-    
-    # Combine with coarse grid for large r
-    r_refined = vcat(collect(r_fine), r_large[2:end])
-    σ_refined = vcat(collect(σ_fine), σ_large[2:end])
-    
-    return r_refined, σ_refined
-end
 function sample_initial_particles_from_pdf!(
     m, dim, N_particles,
     t, T_profile, ur_profile, mu_profile,
@@ -262,9 +220,7 @@ end
 
 function sample_initial_particles_at_origin!(
     m, dim, N_particles,
-    t, T_profile, ur_profile, mu_profile,
-    x_range::Tuple{Float64, Float64}, nbins::Int
-    )
+    t, T_profile)
     positions = zeros(dim, N_particles)
     momenta = zeros(dim, N_particles)
 
