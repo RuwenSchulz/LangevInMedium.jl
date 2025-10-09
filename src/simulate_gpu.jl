@@ -84,14 +84,8 @@ function simulate_ensemble_bulk_gpu(heavy_quark_density,
 
         # === Sample initial particle states from hydrodynamic Boltzmann distribution ===
         #n_rt = compute_MIS_distribution(xgridd, initial_time,T_profile_MIS,mu_profile_MIS,m)
-        position, moment = sample_phase_space4(heavy_quark_density,N_particles, xgridd, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+        position, moment = sample_heavy_quarks(heavy_quark_density,N_particles, xgridd, initial_time,m,T_profile_MIS,dimensions)
 
-        #position, moment = sample_heavy_quarks(N_particles, initial_time;
-        #                     grid = xgrid,
-        #                     m = m,
-        #                     T_profile = T_profile_MIS,
-        #                     hq_number_density = heavy_quark_density
-        #                     )
 
 
         #position = zeros(dimensions, N_particles)

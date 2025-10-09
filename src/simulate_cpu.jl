@@ -58,20 +58,13 @@ function simulate_ensemble_bulk_cpu(heavy_quark_density,
 
     # Initial particle positions and momenta from Boltzmann distribution
     #n_rt = compute_MIS_distribution(xgrid, initial_time,T_profile_MIS,mu_profile_MIS,m)
-    position, moment = sample_phase_space4(heavy_quark_density, N_particles, xgrid, initial_time,m,T_profile_MIS,mu_profile_MIS,dimensions)
+    position, moment = sample_heavy_quarks(heavy_quark_density, N_particles, xgrid, initial_time,m,T_profile_MIS,dimensions)
 
-    #position, moment = sample_heavy_quarks(N_particles, initial_time;
-    #                         grid = xgrid,
-    #                         m = m,
-    #                         T_profile = T_profile_MIS,
-    #                         hq_number_density = heavy_quark_density
-    #                         )
+     position, moment = sample_phase_space4(n_rt, N_particles, xgrid, initial_time,
+    m, T_profile_MIS, mu_profile_MIS, dimensions)
 
 
-    #position, moment = sample_initial_particles_from_pdf!(
-    #    m, dimensions, N_particles,
-    #    initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-    #    (0.0, maximum(xgrid)), 150)
+
 
     positions = copy(position)
     momenta = copy(moment)
@@ -110,30 +103,37 @@ function simulate_ensemble_bulk_cpu(heavy_quark_density,
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
         ξ .= randn(dimensions, N_particles)
 
+
         # 1. Boost momenta to local rest frame
         kernel_boost_to_rest_frame_cpu!(
             momenta, positions, xgrid, tgrid,
             VelocityEvolutionn, m, N_particles, step, Δt, initial_time)
 
-        # 2. Compute forces in rest frame
-        kernel_compute_all_forces_cpu!(
-            TemperatureEvolutionn, xgrid, tgrid,
-            momenta, positions, p_mags, p_units,
-            ηD_vals, kL_vals, kT_vals,
-            ξ, deterministic_terms, stochastic_terms,
-            Δt, m, random_directions,
-            dimensions, N_particles, step, initial_time,DsT)
+        if DsT == 0.0
+            kernel_set_to_fluid_velocity_cpu!(
+                momenta, positions,  xgrid, tgrid,
+                VelocityEvolutionn, m, N_particles, step, Δt, initial_time)
+        else 
+            # 2. Compute forces in rest frame
+            kernel_compute_all_forces_cpu!(
+                TemperatureEvolutionn, xgrid, tgrid,
+                momenta, positions, p_mags, p_units,
+                ηD_vals, kL_vals, kT_vals,
+                ξ, deterministic_terms, stochastic_terms,
+                Δt, m, random_directions,
+                dimensions, N_particles, step, initial_time,DsT)
 
-        # 3. Update momenta
-        kernel_update_momenta_LRF_cpu!(
-            momenta, deterministic_terms, stochastic_terms,
-            Δt, dimensions, N_particles)
+    
+            # 3. Update momenta
+            kernel_update_momenta_LRF_cpu!(
+                momenta, deterministic_terms, stochastic_terms,
+                Δt, dimensions, N_particles)
 
-        # 4. Boost updated momenta back to lab frame
-        kernel_boost_to_lab_frame_cpu!(
-            momenta, positions, xgrid, tgrid,
-            VelocityEvolutionn, m, N_particles, step, Δt, initial_time)
-
+            # 4. Boost updated momenta back to lab frame
+            kernel_boost_to_lab_frame_cpu!(
+                momenta, positions, xgrid, tgrid,
+                VelocityEvolutionn, m, N_particles, step, Δt, initial_time)
+        end 
         # 5. Update positions
         kernel_update_positions_cpu!(positions, momenta, m, Δt, N_particles)
 

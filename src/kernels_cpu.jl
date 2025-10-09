@@ -14,8 +14,8 @@ export kernel_boost_to_rest_frame_cpu!,
        kernel_update_momenta_LRF_general_coords_cpu!,
        kernel_boost_to_lab_frame_general_coords_cpu!,
        kernel_boost_to_rest_frame_general_coords_cpu!,
-       kernel_save_positions_general_coords_gpu!
-
+       kernel_save_positions_general_coords_gpu!,
+       kernel_set_to_fluid_velocity_cpu!
 using LinearAlgebra
 
 # ============================================================================
@@ -74,7 +74,7 @@ function kernel_boost_to_rest_frame_cpu!(
         r = abs(positions[1, i])
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
         E = sqrt(sum(momenta[:, i] .^ 2) + m^2)
-        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
+        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-10)
 
         for j in 1:size(momenta, 1)
             momenta[j, i] = γ * (momenta[j, i] - v * E)
@@ -92,7 +92,7 @@ function kernel_boost_to_rest_frame_general_coords_cpu!(
 
         # Local fluid velocity in r-direction
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
-        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
+        γ = 1.0 / sqrt(1 - v^2 + 1e-10)
 
         pτ = momenta[1, i]
         pr = momenta[2, i]
@@ -402,6 +402,7 @@ function kernel_compute_all_forces_general_coords_cpu!(
     end
 end
 
+
 # ============================================================================
 # Momentum and Position Updates
 # ============================================================================
@@ -515,5 +516,29 @@ function kernel_save_positions_general_coords_gpu!(
         #end
     end
 end
+
+function kernel_set_to_fluid_velocity_cpu!(
+    momenta::Array{Float64,2},
+    positions::Array{Float64,2},
+    xgrid, tgrid, VelocityEvolution,             
+    m::Float64,
+    N::Int,
+    step::Int,
+    Δt::Float64,
+    t0::Float64)
+
+    for i in 1:N
+        r = abs(positions[1, i])
+        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, step * Δt + t0)
+        
+        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-10)
+
+        for j in 1:size(momenta, 1)
+            momenta[j, i] = m* γ * v
+        end
+    end 
+    #return nothing
+end
+
 
 end # module KernelsCPU
