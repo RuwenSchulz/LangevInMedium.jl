@@ -9,11 +9,7 @@ using CUDA
 # === Exports ===
 export simulate_ensemble_bulk_gpu
 
-"""
-    print_cuda_status()
 
-Prints the status of the currently active CUDA device, including name, compute capability, and memory usage.
-"""
 function print_cuda_status()
     dev = CUDA.device()
     name = CUDA.name(dev)
@@ -24,33 +20,8 @@ function print_cuda_status()
     CUDA.memory_status()
 end
 
-"""
-    simulate_ensemble_bulk_gpu(T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-                               TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
-                               N_particles=10_000, Δt=0.001, initial_time=0.0,
-                               final_time=1.0, save_interval=0.1, m=1.0, dimensions=3)
 
-Run a Langevin simulation on the GPU using hydrodynamic background profiles and CUDA kernels.
-
-# Arguments
-- `heavy_quark_density`: Heavy quark density profile (GPU array).
-- `T_profile_MIS`, `ur_profile_MIS`, `mu_profile_MIS`: Hydrodynamic profiles for temperature, velocity, and chemical potential.
-- `TemperatureEvolutionn`, `VelocityEvolutionn`: Precomputed evolution grids (CPU arrays).
-- `SpaceTimeGrid`: Tuple of spacetime grid arrays `(x, t)`.
-- `N_particles`: Number of particles to simulate (default 10,000).
-- `Δt`: Time step for integration.
-- `initial_time`, `final_time`: Simulation time window.
-- `save_interval`: Interval for saving snapshots of the system.
-- `m`: Particle mass.
-- `dimensions`: Number of spatial dimensions (typically 3).
-- `DsT`: Diffusion coefficient parameter (default 0.2).
-
-# Returns
-- `time_points`: Vector of saved time points.
-- `momenta_history_vec`: Vector of momenta arrays (one per save point).
-- `position_history_vec`: Vector of position arrays (one per save point).
-"""
-function simulate_ensemble_bulk_gpu(heavy_quark_density,
+function simulate_ensemble_bulk_gpu(r_grid_Langevin,heavy_quark_density,
     T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
     TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
     N_particles::Int64=10_000,
@@ -82,21 +53,35 @@ function simulate_ensemble_bulk_gpu(heavy_quark_density,
         TemperatureEvolution = CuArray(TemperatureEvolutionn)
         VelocityEvolution = CuArray(VelocityEvolutionn)
 
-        # === Sample initial particle states from hydrodynamic Boltzmann distribution ===
-        #n_rt = compute_MIS_distribution(xgridd, initial_time,T_profile_MIS,mu_profile_MIS,m)
-        position, moment = sample_heavy_quarks(heavy_quark_density,N_particles, xgridd, initial_time,m,T_profile_MIS,dimensions)
+        x_matrix, p_matrix = sample_particles_from_density(r_grid_Langevin, heavy_quark_density, N_particles, T_profile_MIS)
 
+         if dimensions == 1
+            radial_mode = true
+        else 
+            radial_mode = false
+        end
 
+        if radial_mode
+            # --- radial reduction ---
+            # compute r = sqrt(x^2 + y^2)
+            r_samples = sqrt.(x_matrix[1, :].^2 .+ x_matrix[2, :].^2)
 
-        #position = zeros(dimensions, N_particles)
-        #moment = zeros(dimensions, N_particles)
-        #position .= 1
-        #moment .= 1
+            # avoid division by zero
+            r_safe = @. ifelse(r_samples < eps(), eps(), r_samples)
 
-        #position, moment = sample_initial_particles_from_pdf!(
-        #    m, dimensions, N_particles,
-        #    initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-        #    (0., 10.), 200)
+            # compute p_r = (x·p_x + y·p_y) / r
+            p_r_samples = (x_matrix[1, :] .* p_matrix[1, :] .+
+                        x_matrix[2, :] .* p_matrix[2, :]) ./ r_safe
+
+            # reshape to shape [1, N]
+            position = reshape(r_samples, 1, :)
+            moment   = reshape(p_r_samples, 1, :)
+
+        else
+            # --- full Cartesian mode ---
+            position = copy(x_matrix)
+            moment   = copy(p_matrix)
+        end
 
         positions = CuArray(position)
         momenta = CuArray(moment)
@@ -104,12 +89,11 @@ function simulate_ensemble_bulk_gpu(heavy_quark_density,
         # === Boost initial momenta into lab frame ===
         @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
             momenta, positions, xgrid, tgrid,
-            VelocityEvolution, m, N_particles, 1, Δt, initial_time)
+            VelocityEvolution, m, N_particles, 1, Δt, initial_time,radial_mode)
 
         # === Allocate history arrays ===
-        momenta_history_gpu = CUDA.zeros(Float64, N_particles, num_saves + 1)
-        p_mags = sqrt.(sum(momenta .^ 2, dims=1))
-        momenta_history_gpu[:, 1] .= p_mags[1, :]
+        momenta_history_gpu = CUDA.zeros(Float64, dimensions, N_particles, num_saves + 1)
+        momenta_history_gpu[:,:, 1] .= momenta
 
         position_history_gpu = CUDA.zeros(Float64, dimensions, N_particles, num_saves + 1)
         position_history_gpu[:, :, 1] .= positions
@@ -122,58 +106,96 @@ function simulate_ensemble_bulk_gpu(heavy_quark_density,
         kT_vals             = CUDA.zeros(Float64, N_particles)
         stochastic_terms    = CUDA.zeros(Float64, dimensions, N_particles)
         deterministic_terms = CUDA.zeros(Float64, dimensions, N_particles)
-        ξ                   = CUDA.zeros(Float64, dimensions, N_particles)
-        random_directions   = CUDA.randn(Float64, dimensions, N_particles)
-
-        # Normalize random direction vectors
-        random_norms = sqrt.(sum(random_directions .^ 2, dims=1))
-        random_directions ./= random_norms
+        ξ_momentum          = CUDA.zeros(Float64, dimensions, N_particles)
+        ξ_position          = CUDA.zeros(Float64, dimensions, N_particles)  # NEW: for position diffusion
+        random_directions   = CUDA.zeros(Float64, dimensions, N_particles)
 
         # === Langevin dynamics loop ===
         @showprogress 10 "Running Langevin simulation GPU Cartesian..." for step in 1:steps
-            CUDA.randn!(ξ)  # Sample Gaussian noise at every step
+            CUDA.randn!(ξ_momentum)  # Sample Gaussian noise at every step
+            CUDA.randn!(ξ_position)  # Sample Gaussian noise at every step
+            CUDA.randn!(random_directions)  # Sample Gaussian noise at every step
+
+            # Normalize random direction vectors
+            random_norms = sqrt.(sum(random_directions .^ 2, dims=1))
+            random_directions ./= random_norms
 
             # Step 1: Transform momenta to local rest frame (LRF)
             @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
                 momenta, positions, xgrid, tgrid, VelocityEvolution,
-                m, N_particles, step, Δt, initial_time)
+                m, N_particles, step, Δt, initial_time,radial_mode)
 
-            # Step 2: Compute deterministic and stochastic terms in LRF
-            @cuda threads=threads blocks=blocks kernel_compute_all_forces_gpu!(
-                TemperatureEvolution, xgrid, tgrid, momenta, positions,
-                p_mags, p_units, ηD_vals, kL_vals, kT_vals,
-                ξ, deterministic_terms, stochastic_terms,
-                Δt, m, random_directions, dimensions, N_particles,
-                step, initial_time,DsT)
+            if DsT == 0.0
 
-            # Step 3: Update momenta in LRF
-            @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
-                momenta, deterministic_terms, stochastic_terms,
-                Δt, dimensions, N_particles)
+                @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
+                    momenta, positions, xgrid, tgrid,
+                    VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode)
+            else
+                # Step 2: Compute deterministic and stochastic terms in LRF
+                @cuda threads=threads blocks=blocks kernel_compute_all_forces_gpu!(
+                    TemperatureEvolution, xgrid, tgrid, momenta, positions,
+                    p_mags, p_units, ηD_vals, kL_vals, kT_vals,
+                    ξ_momentum, deterministic_terms, stochastic_terms,
+                    Δt, m, random_directions, dimensions, N_particles,
+                    step, initial_time,DsT,radial_mode)
 
-            # Step 4: Boost updated momenta back to lab frame
-            @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
-                momenta, positions, xgrid, tgrid, VelocityEvolution,
-                m, N_particles, step, Δt, initial_time)
+                # Step 3: Update momenta in LRF
+                @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
+                    momenta, deterministic_terms, stochastic_terms,
+                    Δt, dimensions, N_particles)
 
+                # Step 4: Boost updated momenta back to lab frame
+                @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
+                    momenta, positions, xgrid, tgrid, VelocityEvolution,
+                    m, N_particles, step, Δt, initial_time,radial_mode)
+            end 
             # Step 5: Update particle positions based on momenta
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
-                positions, momenta, m, Δt, N_particles)
+                positions, momenta, m, Δt, N_particles,steps,initial_time,xgrid,tgrid,TemperatureEvolution,DsT,dimensions,radial_mode,ξ_position)
 
             # Step 6: Save state if necessary
             if step % save_every == 0
                 save_idx = div(step, save_every) + 1
-                @cuda threads=threads blocks=blocks kernel_save_snapshot_gpu!(
-                    momenta_history_gpu, momenta, save_idx, N_particles)
+                @cuda threads=threads blocks=blocks kernel_save_momenta_gpu!(
+                    momenta_history_gpu, momenta, save_idx, N_particles,dimensions)
                 @cuda threads=threads blocks=blocks kernel_save_positions_gpu!(
-                    position_history_gpu, positions, save_idx, N_particles)
+                    position_history_gpu, positions, save_idx, N_particles,dimensions)
             end
         end
 
         # === Transfer saved histories back to CPU ===
         time_points = range(initial_time, final_time, length=num_saves + 1)
-        momenta_history_vec = [Array(momenta_history_gpu[:, step]) for step in 1:num_saves+1]
+        momenta_history_vec  = [Array(momenta_history_gpu[:, :, step]) for step in 1:num_saves+1]
         position_history_vec = [Array(position_history_gpu[:, :, step]) for step in 1:num_saves+1]
+
+        # Finalize all CuArrays
+        finalize(p_mags)
+        finalize(p_units)
+        finalize(ηD_vals)
+        finalize(kL_vals)
+        finalize(kT_vals)
+        finalize(stochastic_terms)
+        finalize(deterministic_terms)
+        finalize(ξ_momentum)
+        finalize(ξ_position)
+        finalize(random_directions)
+
+        # Clear references
+        p_mags = nothing
+        p_units = nothing
+        ηD_vals = nothing
+        kL_vals = nothing
+        kT_vals = nothing
+        stochastic_terms = nothing
+        deterministic_terms = nothing
+        ξ_momentum = nothing
+        ξ_position = nothing
+        random_directions = nothing
+
+        # Aggressive cleanup
+        GC.gc(true)
+        GC.gc(true)
+        CUDA.reclaim()
 
         return time_points, momenta_history_vec, position_history_vec
 

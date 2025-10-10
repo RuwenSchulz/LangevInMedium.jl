@@ -2,7 +2,7 @@ module SimulateGPUGeneralCoords
 
 # === Imports ===
 using ProgressMeter
-using ..KernelsGPU
+using ..KernelsGPU_GC
 using ..Utils
 using CUDA
 

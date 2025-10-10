@@ -17,34 +17,10 @@ export simulate_ensemble_bulk
 
 # ────────────────────────────────────────────────
 # CPU Backend — always available
-"""
-    simulate_ensemble_bulk(::CPUBackend, ...)
 
-Run a bulk particle ensemble simulation using the CPU backend.
-
-# Arguments
-- `backend::CPUBackend`: A CPU backend instance.
-- `heavy_quark_density`: Initial spatial density distribution of heavy quarks.
-- `T_profile_MIS`, `ur_profile_MIS`, `mu_profile_MIS`: Hydrodynamic profile data for initialization.
-- `TemperatureEvolutionn`: Time-evolving temperature field.
-- `VelocityEvolutionn`: Time-evolving velocity field.
-- `SpaceTimeGrid`: Grid defining spatial and temporal structure of the simulation.
-
-# Keyword Arguments
-- `N_particles`: Number of particles to simulate (default: 10,000).
-- `Δt`: Time step size.
-- `initial_time`: Start time of the simulation.
-- `final_time`: End time of the simulation.
-- `save_interval`: Interval at which to store snapshots.
-- `m`: Mass of each particle.
-- `DsT`: Diffusion coefficient times temperature.
-- `dimensions`: Number of spatial dimensions (1, 2, or 3).
-
-# Returns
-Output from the `simulate_ensemble_bulk_cpu` routine containing full trajectory and observable data.
-"""
 function simulate_ensemble_bulk(
     backend::CPUBackend,
+    r_grid_Langevin,
     heavy_quark_density,
     T_profile_MIS,
     ur_profile_MIS,
@@ -61,7 +37,7 @@ function simulate_ensemble_bulk(
     DsT::Float64 = 0.2,
     dimensions::Int = 3,
 )
-    return simulate_ensemble_bulk_cpu(heavy_quark_density,
+    return simulate_ensemble_bulk_cpu(r_grid_Langevin,heavy_quark_density,
         T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,

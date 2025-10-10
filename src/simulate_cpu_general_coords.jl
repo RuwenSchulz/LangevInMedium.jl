@@ -1,7 +1,7 @@
 module SimulateCPUGeneralCoords
 
 using ProgressMeter
-using ..KernelsCPU
+using ..KernelsCPU_GC
 using ..Utils
 
 export simulate_ensemble_bulk_general_coords_cpu

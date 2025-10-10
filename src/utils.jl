@@ -13,107 +13,68 @@ using LaTeXStrings
 using StatsBase: Histogram, fit
 using Statistics: mean, std
 using Printf
+using QuadGK
 
 using ..Constants
 
 # === Exports ===
 export sample_initial_particles_from_pdf!
 export sample_initial_particles_milne!
-export sample_MB_r_p_pairs!
-export MB_distribution
 export sample_initial_particles_at_origin!
 export sample_initial_particles_at_origin_no_position!
-export n_rt
-export plot_n_rt_comparison_hydro_langevin
-export sample_phase_space2
 export compute_MIS_distribution
-export sample_phase_space3
-export sample_phase_space4
-export sample_heavy_quarks
+export sample_particles_from_density
 
 
-function sample_heavy_quarks(
-    σ_r::Vector{Float64},          # τ·n(r,τ) = 2D density in x-y plane [fm^-2]
-    N_particles::Int,
-    r_grid::Vector{Float64},
-    τ::Float64,
-    m::Float64,
-    T_profile,
-    dimss::Int;
-    refine_small_r::Bool=true)     # NEW: option to refine grid
+function sample_particles_from_density(r_values, n_rt, N_samples::Int, T_interp; 
+                                       n_cdf_points=1000, rmax=10.0, t0=0.0)
+    # Create interpolation for density
+    interp = LinearInterpolation(r_values, n_rt, extrapolation_bc=0.0)
     
-    @assert length(σ_r) == length(r_grid) "weights and grid must match"
-    @assert length(r_grid) ≥ 2
+    # Compute normalization constant
+    norm, _ = quadgk(r -> r * interp(r), 0, rmax)
     
-
-
-    function sample_positions_cdf_stable(transverse_density::AbstractVector{<:Real},
-                                         r_grid::AbstractVector, N::Int)
-        n_bins = length(r_grid) - 1
-        dr = diff(r_grid)
-        
-        # Compute weights for each BIN
-        weights = zeros(Float64, n_bins)
-        
-        for i in 1:n_bins
-            r_lo = r_grid[i]
-            r_hi = r_grid[i+1]
-            σ_lo = transverse_density[i]
-            σ_hi = transverse_density[i+1]
-            
-            r_mid = 0.5 * (r_lo + r_hi)
-            σ_mid = 0.5 * (σ_lo + σ_hi)
-            
-            weights[i] = r_mid * σ_mid * dr[i]
-        end
-        
-        weights = max.(weights, 0.0)
-        weights[.!isfinite.(weights)] .= 0.0
-        
-        total = sum(weights)
-        if total ≤ 0
-            return fill(r_grid[1], N)
-        end
-        
-        cdf = cumsum(weights) ./ total
-        
-        samples = rand(N)
-        bin_idx = searchsortedfirst.(Ref(cdf), samples)
-        bin_idx = clamp.(bin_idx, 1, n_bins)
-        
-        rs = zeros(Float64, N)
-        for k in 1:N
-            i = bin_idx[k]
-            r_lo = r_grid[i]
-            r_hi = r_grid[i+1]
-            rs[k] = r_lo + rand() * (r_hi - r_lo)
-        end
-        
-        return rs
+    # Pre-compute CDF for inverse transform sampling
+    r_cdf = range(0, rmax, length=n_cdf_points)
+    cdf_values = zeros(n_cdf_points)
+    
+    for i in 2:n_cdf_points
+        result, _ = quadgk(r′ -> r′ * interp(r′) / norm, 0, r_cdf[i])
+        cdf_values[i] = result
     end
-
-    function sample_pr_MB_at_positions(rs::Vector{Float64})
-        N = length(rs)
-        pr = Vector{Float64}(undef, N)
-        @inbounds for i in 1:N
-            Tloc = T_profile(rs[i], τ)
-            if Tloc <= 0
-                pr[i] = 0.0
-            else
-                σ = sqrt(m * Tloc)
-                pr[i] = σ * randn()
-            end
+    
+    # Ensure CDF is strictly monotonic
+    for i in 2:n_cdf_points
+        if cdf_values[i] <= cdf_values[i-1]
+            cdf_values[i] = cdf_values[i-1] + 1e-9
         end
-        return pr
     end
-
-    rs = sample_positions_cdf_stable(_σ_r, _r_grid, N_particles)
-    prs = sample_pr_MB_at_positions(rs)
-
-    pos = zeros(dimss, N_particles)
-    mom = zeros(dimss, N_particles)
-    pos[1, :] .= rs
-    return pos, mom
+    cdf_values[end] = 1.0
+    
+    # Create inverse CDF interpolation
+    inverse_cdf = LinearInterpolation(cdf_values, collect(r_cdf), extrapolation_bc=Line())
+    
+    # Initialize matrices [dim, N_samples]
+    x_matrix = zeros(2, N_samples)  # [x, y]
+    p_matrix = zeros(2, N_samples)  # [px, py]
+    
+    for i in 1:N_samples
+        # Sample position
+        u = rand()
+        r = inverse_cdf(u)
+        φ = 2π * rand()
+        x_matrix[1, i] = r * cos(φ)  # x
+        x_matrix[2, i] = r * sin(φ)  # y
+        
+        # Evaluate temperature at this position
+        T_local = T_interp(r, t0)
+        
+        # Sample momentum from 2D Maxwell-Boltzmann distribution
+        p_matrix[1, i] = sqrt(T_local) * randn()  # px
+        p_matrix[2, i] = sqrt(T_local) * randn()  # py
+    end
+    
+    return x_matrix, p_matrix
 end
 
 function sample_initial_particles_from_pdf!(

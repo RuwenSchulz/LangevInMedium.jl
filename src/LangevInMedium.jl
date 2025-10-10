@@ -26,6 +26,7 @@ include("constants.jl")         # Physical constants and parameters
 include("backends.jl")          # CPU/GPU backend markers
 include("utils.jl")             # Utilities: plotting, interpolation, etc.
 include("kernels_cpu.jl")       # CPU-side numerical integration kernels
+include("kernels_cpu_GC.jl")    # CPU-side numerical integration kernels for general coordinates
 include("simulate_cpu.jl")      # High-level CPU simulation loop
 include("simulate_cpu_general_coords.jl")      # High-level CPU simulation loop
 include("simulate.jl")          # Unified frontend with conditional GPU logic

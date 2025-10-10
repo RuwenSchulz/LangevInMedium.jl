@@ -10,16 +10,9 @@ export
     kernel_compute_all_forces_gpu!,
     kernel_update_momenta_LRF_gpu!,
     kernel_update_positions_gpu!,
-
-    kernel_boost_to_rest_frame_general_coords_gpu!,
-    kernel_boost_to_lab_frame_general_coords_gpu!,
-    kernel_compute_all_forces_general_coords_gpu!,
-    kernel_update_momenta_LRF_general_coords_gpu!,
-    kernel_update_positions_general_coords_gpu!,
-    kernel_save_positions_general_coords_gpu!,
-
-
+    kernel_set_to_fluid_velocity_gpu!,
     kernel_save_snapshot_gpu!,
+    kernel_save_momenta_gpu!,
     kernel_save_positions_gpu!,
     interpolate_2d_cuda
 
@@ -27,20 +20,6 @@ export
 # GPU Utility Function: Bilinear Interpolation
 # ============================================================================
 
-"""
-    interpolate_2d_cuda(x::Vector, y::Vector, values::Matrix, xi, yi)
-
-Bilinear interpolation over a 2D array of `values` defined on grid `(x, y)`.  
-Assumes `values[i, j]` corresponds to `(x[i], y[j])`.
-
-# Arguments
-- `x`, `y`: 1D grid vectors.
-- `values`: 2D matrix over the `(x, y)` grid.
-- `xi`, `yi`: Target coordinates.
-
-# Returns
-- Interpolated value at `(xi, yi)`.
-"""
 @inline function interpolate_2d_cuda(x, y, values, xi, yi)
     i = 1
     for k in 1:length(x) - 1
@@ -82,188 +61,153 @@ end
 # CUDA Kernels for Langevin Evolution
 # ============================================================================
 
-"""
-    kernel_boost_to_rest_frame_gpu!
-
-Lorentz boost momenta from lab frame to local rest frame (LRF) using interpolated background velocity.
-"""
 @inline function kernel_boost_to_rest_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
-    m::Float64, N_particles::Int, steps, Δt, initial_time
-)
+    m::Float64, N_particles::Int, steps, Δt, initial_time,
+    radial_mode::Bool
+    )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), steps * Δt + initial_time)
+        # --- compute current proper time ---
+        t_now = steps * Δt + initial_time
 
-        p_norm = 0.0
-        for j in 1:size(momenta, 1)
-            p_norm += momenta[j, i]^2
+        # --- compute radius r ---
+        r2 = 0.0
+        for d in 1:size(positions, 1)
+            r2 += positions[d, i]^2
         end
-        E = sqrt(p_norm + m^2)
-        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
+        r = sqrt(r2)
+        if r < eps(Float64)
+            return
+        end
 
-        for j in 1:size(momenta, 1)
-            @inbounds momenta[j, i] = γ * (momenta[j, i] - v * E)
+        # --- local radial fluid velocity ---
+        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
+        v2 = v * v
+        γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
+
+        # --- particle energy ---
+        p2 = 0.0
+        for d in 1:size(momenta, 1)
+            p2 += momenta[d, i]^2
+        end
+        E = sqrt(p2 + m^2)
+
+        if radial_mode
+            # ==================================
+            # 🟣 Radial mode (1D momentum)
+            # ==================================
+            @inbounds momenta[1, i] = γ * (momenta[1, i] - v * E)
+
+        else
+            # ==================================
+            # 🟢 Cartesian mode (2D or 3D)
+            # ==================================
+            # Extract coordinates
+            x = positions[1, i]
+            y = positions[2, i]
+            rhatx, rhaty = x / r, y / r
+
+            # Decompose momentum into parallel/perpendicular
+            px, py = momenta[1, i], momenta[2, i]
+            p_parallel = px * rhatx + py * rhaty
+            p_perp_x = px - p_parallel * rhatx
+            p_perp_y = py - p_parallel * rhaty
+
+            # Lorentz boost along radial direction
+            p_parallel_new = γ * (p_parallel - v * E)
+
+            # Reconstruct boosted momentum components
+            @inbounds momenta[1, i] = p_parallel_new * rhatx + p_perp_x
+            @inbounds momenta[2, i] = p_parallel_new * rhaty + p_perp_y
         end
     end
-    return 
+    return
 end
 
-@inline function kernel_boost_to_rest_frame_general_coords_gpu!(
-    momenta, positions, xgrid, tgrid, VelocityEvolution,
-    m::Float64, N_particles::Int, steps, Δt, initial_time
-)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        r = abs(positions[2, i])
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, steps * Δt + initial_time)
-
-        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
-
-        pτ = momenta[1, i]
-        pr = momenta[2, i]
-
-        # Lorentz boost into LRF
-        momenta[1, i] = γ * (pτ - v * pr)  # p^τ in LRF
-        momenta[2, i] = γ * (pr - v * pτ)  # p^r in LRF
-    end
-    return 
-end
-
-"""
-    kernel_boost_to_lab_frame_gpu!
-
-Applies inverse Lorentz boost to momenta, restoring them from LRF to lab frame.
-"""
 @inline function kernel_boost_to_lab_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
-    m::Float64, N_particles::Int, steps, Δt, initial_time
-)
+    m::Float64, N_particles::Int, steps, Δt, initial_time,
+    radial_mode::Bool
+    )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
-
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, abs(positions[1, i]), steps * Δt + initial_time)
-
-        p_norm = 0.0
-        for d in 1:size(momenta, 1)
-            @inbounds p_norm += momenta[d, i]^2
+        # --- compute radius ---
+        r2 = 0.0
+        for d in 1:size(positions, 1)
+            r2 += positions[d, i]^2
+        end
+        r = sqrt(r2)
+        if r < eps(Float64)
+            return
         end
 
-        E = sqrt(p_norm + m^2)
-        γ = 1.0 / sqrt(1.0 - sum(v .^ 2) + 1e-8)
+        # --- local fluid velocity ---
+        t_now = steps * Δt + initial_time
+        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
+        v2 = v * v
+        γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
+        # --- particle energy in LRF ---
+        p2 = 0.0
         for d in 1:size(momenta, 1)
-            @inbounds momenta[d, i] = γ * (momenta[d, i] + v * E)
+            p2 += momenta[d, i]^2
+        end
+        E = sqrt(p2 + m^2)
+
+        if radial_mode
+            # ======================================
+            # 🟣 Radial mode (1D evolution)
+            # ======================================
+            @inbounds momenta[1, i] = γ * (momenta[1, i] + v * E)
+
+        else
+            # ======================================
+            # 🟢 Cartesian mode (2D, rotation invariant)
+            # ======================================
+            x = positions[1, i]
+            y = positions[2, i]
+            rhatx, rhaty = x / r, y / r
+
+            # Decompose momentum along / perpendicular to radial direction
+            px, py = momenta[1, i], momenta[2, i]
+            p_parallel = px * rhatx + py * rhaty
+            p_perp_x = px - p_parallel * rhatx
+            p_perp_y = py - p_parallel * rhaty
+
+            # Lorentz boost back to lab frame (sign flip vs. rest frame)
+            p_parallel_new = γ * (p_parallel + v * E)
+
+            # Recombine momentum vector
+            @inbounds momenta[1, i] = p_parallel_new * rhatx + p_perp_x
+            @inbounds momenta[2, i] = p_parallel_new * rhaty + p_perp_y
         end
     end
     return
 end
 
-@inline function kernel_boost_to_lab_frame_general_coords_gpu!(
-    momenta, positions, xgrid, tgrid, VelocityEvolution,
-    m::Float64, N_particles::Int, steps, Δt, initial_time
-)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        r = abs(positions[2, i])
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, steps * Δt + initial_time)
-
-        γ = 1.0 / sqrt(1 - v^2 + 1e-8)
-
-        pτ = momenta[1, i]
-        pr = momenta[2, i]
-
-        # Inverse Lorentz boost back to lab frame
-        momenta[1, i] = γ * (pτ + v * pr)
-        momenta[2, i] = γ * (pr + v * pτ)
-    end
-    return
-end
-
-"""
-    kernel_compute_all_forces_gpu!
-
-Compute Langevin drag and stochastic forces in the local rest frame.
-"""
 @inline function kernel_compute_all_forces_gpu!(
     TemperatureEvolution, xgrid, tgrid,
     momenta, positions, p_mags, p_units,
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N_particles, steps, initial_time,DsT
-)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        # Compute magnitude and unit direction of momentum
-        p_sq = 0.0
-        for d in 1:dimensions
-            p_sq += momenta[d, i]^2
-        end
-        p = sqrt(p_sq)
-        p_mags[i] = p
-
-        for d in 1:dimensions
-            @inbounds p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
-        end
-
-        # Interpolate background temperature
-        T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, abs(positions[1, i]), steps * Δt + initial_time)
-
-        # Transport coefficients
-        #DsT = 0.2 * T
-        M = 1.5
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
-        kL = sqrt(κ)
-        kT = sqrt(κ)
-
-        @inbounds ηD_vals[i] = ηD
-        @inbounds kL_vals[i] = kL
-        @inbounds kT_vals[i] = kT
-
-        for d in 1:dimensions
-            det_term = -ηD * momenta[d, i] * Δt
-            sto_term = 0.0
-            for j in 1:dimensions
-                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
-                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
-            end
-            @inbounds deterministic_terms[d, i] = det_term
-            @inbounds stochastic_terms[d, i] = sto_term
-        end
-    end
-    return
-end
-
-
-@inline function kernel_compute_all_forces_general_coords_gpu!(
-    TemperatureEvolution, xgrid, tgrid,
-    momenta, positions, p_mags, p_units,
-    ηD_vals, kL_vals, kT_vals,
-    ξ, deterministic_terms, stochastic_terms,
-    Δt, m, random_directions,
-    dimensions, N_particles, steps, initial_time
+    dimensions, N_particles, steps, initial_time, DsT,
+    radial_mode::Bool
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
-        # Compute magnitude and unit direction of momentum
-        p_sq = 0.0
-        for d in 2:dimensions
-            p_sq += momenta[d, i]^2
+        M = m  # heavy-quark mass (can be parameterized)
+
+        # --- local temperature ---
+        r2 = 0.0
+        for d in 1:dimensions
+            r2 += positions[d, i]^2
         end
-        p = sqrt(p_sq)
+        r = sqrt(r2)
+        T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, r, steps * Δt + initial_time)
 
-        for d in 2:dimensions
-            @inbounds p_units[d, i] = p < eps() ? random_directions[d, i] : momenta[d, i] / p
-        end
-
-        # Interpolate background temperature
-        T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, abs(positions[2, i]), steps * Δt + initial_time)
-
-        # Transport coefficients
-        DsT = 0.2 * T
-        M = 1.5
+        # --- transport coefficients ---
         ηD = T^2 / (M * DsT)
         κ  = 2 * T^3 / DsT
         kL = sqrt(κ)
@@ -273,53 +217,51 @@ end
         @inbounds kL_vals[i] = kL
         @inbounds kT_vals[i] = kT
 
-        function compute_christoffel(position::SVector{2, Float64})
-            Γ = @MArray zeros(Float64, 2, 2, 2)
-            # Fill Γ[...] as needed
-            return Γ
-        end
+        if radial_mode
+            # ==========================================
+            # 🟣 Radial / 1D mode: noise projected along p̂
+            # ==========================================
+            p_sq = 0.0
+            for d in 1:dimensions
+                p_sq += momenta[d, i]^2
+            end
+            p = sqrt(p_sq)
+            @inbounds p_mags[i] = p
 
-
-        for d in 2:dimensions
-            # Christoffel geometric drift term
-            @inbounds begin
-                # Extract the position (τ, r) for particle i
-                pos = @SVector [positions[1, i], positions[2, i]]
-                Γ = compute_christoffel(pos)
-                # Now use Γ safely
+            # Unit vector along momentum (or random if p≈0)
+            for d in 1:dimensions
+                @inbounds p_units[d, i] = p < eps(Float64) ? random_directions[d, i] :
+                                                              momenta[d, i] / p
             end
 
-            p0 = sqrt(m^2 + momenta[2, i] .^ 2)  # p^τ ≈ relativistic energy in LRF
+            for d in 1:dimensions
+                # Deterministic drag
+                det_term = -ηD * momenta[d, i] * Δt
 
-            geo_term = 0.0
-            for ν in 1:dimensions, ρ in 1:dimensions
-                geo_term += -Γ[d, ν, ρ] * momenta[ν, i] * momenta[ρ, i] / p0
-            end
-            geo_term *= Δt
+                # Stochastic force with projection
+                sto_term = 0.0
+                for j in 1:dimensions
+                    sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
+                                kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+                end
 
-            # Langevin deterministic + geometric terms
-            det_term = -ηD * momenta[d, i] * Δt + geo_term
-
-            # Langevin stochastic term
-            sto_term = 0.0
-            for j in 2:dimensions
-                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
-                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+                @inbounds deterministic_terms[d, i] = det_term
+                @inbounds stochastic_terms[d, i]    = sto_term
             end
 
-            # Store computed forces
-            @inbounds deterministic_terms[d, i] = det_term
-            @inbounds stochastic_terms[d, i] = sto_term
+        else
+            # ==========================================
+            # 🟢 Cartesian mode: independent px, py
+            # ==========================================
+            for d in 1:dimensions
+                @inbounds deterministic_terms[d, i] = -ηD * momenta[d, i] * Δt
+                @inbounds stochastic_terms[d, i]    = kT * ξ[d, i]
+            end
         end
     end
     return
 end
 
-"""
-    kernel_update_momenta_LRF_gpu!
-
-Update momenta of each particle in LRF using Langevin forces.
-"""
 @inline function kernel_update_momenta_LRF_gpu!(
     momenta, deterministic_terms, stochastic_terms,
     Δt, dimensions, N_particles
@@ -334,110 +276,149 @@ Update momenta of each particle in LRF using Langevin forces.
     return
 end
 
-@inline function kernel_update_momenta_LRF_general_coords_gpu!(
-    momenta, deterministic_terms, stochastic_terms,
-    Δt, dimensions, N_particles,m
+@inline function kernel_update_positions_gpu!(
+    positions, 
+    momenta, 
+    m::Float64, 
+    Δt::Float64, 
+    N_particles::Int,
+    steps::Int,
+    initial_time::Float64,
+    xgrid,
+    tgrid,
+    Tfield,
+    DsT::Float64,
+    dimensions::Int,
+    radial_mode::Bool,
+    random_normals  # pre-generated random numbers for diffusion
     )
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        for d in 2:dimensions
-            momenta[d, i] += deterministic_terms[d, i] + sqrt(Δt) * stochastic_terms[d, i]
-        end
-        # Recalculate p^0 to satisfy mass-shell constraint
-        p0 = sqrt(m^2 + momenta[2, i] .^ 2) 
-        momenta[1, i] = p0
-    end
-    return
-end
-
-"""
-    kernel_update_positions_gpu!
-
-Move particles forward based on momenta. Reflects at r = 0.
-"""
-@inline function kernel_update_positions_gpu!(positions::CuDeviceMatrix{Float64}, momenta::CuDeviceMatrix{Float64}, m::Float64, Δt::Float64, N_particles::Int)
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
-        
-        p_sq = 0.0
+        # Compute energy
+        E2 = m * m
+        for d in 1:dimensions
+            E2 += momenta[d, idx]^2
+        end
+        E = CUDA.sqrt(E2)
 
-        p_sq += momenta[1, idx]^2
+        if radial_mode
+            r = positions[1, idx]
+            pr = momenta[1, idx]
 
-        E = CUDA.sqrt(p_sq + m * m)
+            T = interpolate_2d_cuda(xgrid, tgrid, Tfield, abs(r), steps * Δt + initial_time)
+            D = DsT / T
 
-        @inbounds positions[1, idx] += Δt * momenta[1, idx] / E
-        if positions[1, idx] < 0
-            positions[1, idx] = -positions[1, idx]
-            momenta[1, idx] =  -momenta[1, idx]
+            # deterministic motion
+            dr = (pr / E) * Δt
+
+            # add geometric drift & noise if D>0
+            if D > 0.0
+                ξ = random_normals[1, idx]
+                dr += (D / r) * Δt + CUDA.sqrt(2.0 * D * Δt) * ξ
+            end
+
+            # reflection boundary
+            r_new = r + dr
+            if r_new < 0.0
+                r_new = -r_new
+                @inbounds momenta[1, idx] = -momenta[1, idx]
+            end
+
+            @inbounds positions[1, idx] = r_new
+
+        else
+            # --- full Cartesian update ---
+            for d in 1:dimensions
+                @inbounds positions[d, idx] += Δt * momenta[d, idx] / E
+            end
         end
     end
-
     return
 end
 
-@inline function kernel_update_positions_general_coords_gpu!(positions::CuDeviceMatrix{Float64}, momenta::CuDeviceMatrix{Float64}, m::Float64, Δt::Float64, N_particles::Int)
+@inline function kernel_save_momenta_gpu!(
+    momenta_history::CuDeviceArray{Float64, 3},
+    current_momentum,
+    save_idx::Int,
+    N_particles::Int,
+    dimensions::Int
+    )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
-        
-        E = momenta[1, idx]
-        for μ in 1:size(positions, 1)
-            positions[μ, idx] += Δt * momenta[μ, idx] / E
-        end
-        if positions[2, idx] < 0
-            positions[2, idx] = -10.
-            momenta[2, idx] = 0.0
-            p_spatial_sq = sum(momenta[2, idx] .^ 2)
-            momenta[1, idx] = sqrt(m^2 + p_spatial_sq)
-        end
-    end
-
-    return
-end
-
-"""
-    kernel_save_snapshot_gpu!
-
-Save 1D momenta magnitudes into a flattened buffer for snapshotting.
-"""
-@inline function kernel_save_snapshot_gpu!(history, snapshot, idx, N_particles)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        @inbounds history[i + (idx - 1) * N_particles] = snapshot[i]
-    end
-    return
-end
-
-@inline function kernel_save_snapshot_general_coords_gpu!(history, snapshot, idx, N_particles)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N_particles
-        @inbounds history[i + (idx - 1) * N_particles] = snapshot[i]
-    end
-    return
-end
-
-"""
-    kernel_save_positions_gpu!
-
-Save particle positions at current time step into history array.
-"""
-@inline function kernel_save_positions_gpu!(position_history, current_positions, save_idx::Int, N::Int)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N
-        for d in 1:size(current_positions, 1)
-            @inbounds position_history[d, i, save_idx] = current_positions[d, i]
+        for d in 1:dimensions
+            @inbounds momenta_history[d, idx, save_idx] = current_momentum[d, idx]
         end
     end
     return
 end
 
-@inline function kernel_save_positions_general_coords_gpu!(position_history, current_positions, save_idx::Int, N::Int)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    if i <= N
-        
-        for d in 2:size(current_positions, 1)
-            @inbounds position_history[d, i, save_idx] = current_positions[d, i]
+@inline function kernel_save_positions_gpu!(
+    position_history::CuDeviceArray{Float64, 3},
+    current_positions,
+    save_idx::Int,
+    N_particles::Int,
+    dimensions::Int
+    )
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= N_particles
+        for d in 1:dimensions
+            @inbounds position_history[d, idx, save_idx] = current_positions[d, idx]
         end
-        
+    end
+    return
+end
+
+@inline function kernel_set_to_fluid_velocity_gpu!(
+    momenta,
+    positions,
+    xgrid,
+    tgrid,
+    VelocityEvolution,
+    m::Float64,
+    N_particles::Int,
+    steps::Int,
+    Δt::Float64,
+    initial_time::Float64,
+    radial_mode::Bool
+    )
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= N_particles
+        # --- Compute position & radius ---
+        if radial_mode
+            # In radial mode, positions has shape [1, N]
+            r = positions[1, idx]
+        else
+            # In Cartesian mode, positions has shape [2, N]
+            x = positions[1, idx]
+            y = positions[2, idx]
+            r = CUDA.sqrt(x * x + y * y)
+        end
+
+        if r < eps(Float64)  # avoid divide-by-zero
+            return
+        end
+
+        # --- Interpolate fluid velocity from (r, τ) field ---
+        τ_now = steps * Δt + initial_time
+        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, τ_now)
+
+        # --- Lorentz factor ---
+        γ = 1.0 / CUDA.sqrt(1.0 - v * v + 1e-10)
+
+        if radial_mode
+            # =====================================
+            # 🟣 Radial mode (1D)
+            # =====================================
+            @inbounds momenta[1, idx] = m * γ * v
+
+        else
+            # =====================================
+            # 🟢 Cartesian mode (2D, rotation invariant)
+            # =====================================
+            # Set momentum along local radial direction
+            @inbounds momenta[1, idx] = m * γ * v * (x / r)
+            @inbounds momenta[2, idx] = m * γ * v * (y / r)
+        end
     end
     return
 end
