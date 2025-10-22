@@ -25,6 +25,7 @@ function simulate_ensemble_bulk(
     T_profile_MIS,
     ur_profile_MIS,
     mu_profile_MIS,
+    nur_profile_MIS,
     TemperatureEvolutionn,
     VelocityEvolutionn,
     SpaceTimeGrid;
@@ -38,7 +39,7 @@ function simulate_ensemble_bulk(
     dimensions::Int = 3,
 )
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,heavy_quark_density,
-        T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
+        T_profile_MIS, ur_profile_MIS, mu_profile_MIS,nur_profile_MIS,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,
         initial_time = initial_time, final_time = final_time,

@@ -10,7 +10,7 @@ export simulate_ensemble_bulk_cpu
 
 function simulate_ensemble_bulk_cpu(
     r_grid_Langevin, heavy_quark_density,
-    T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
+    T_profile_MIS, ur_profile_MIS, mu_profile_MIS,nur_profile_MIS,
     TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
     N_particles::Int = 10_000,
     Δt::Float64 = 0.001,
@@ -29,7 +29,7 @@ function simulate_ensemble_bulk_cpu(
 
     xgrid, tgrid = SpaceTimeGrid
 
-    x_matrix, p_matrix = sample_particles_from_density(r_grid_Langevin, heavy_quark_density, N_particles, T_profile_MIS)
+    x_matrix, p_matrix = sample_particles_from_density(r_grid_Langevin, heavy_quark_density, N_particles, T_profile_MIS,nur_profile_MIS, mu_profile_MIS;t0 = initial_time,mode=:density,m=m)
     if dimensions == 1
         radial_mode = true
     else 

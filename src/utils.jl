@@ -26,56 +26,135 @@ export compute_MIS_distribution
 export sample_particles_from_density
 
 
-function sample_particles_from_density(r_values, n_rt, N_samples::Int, T_interp; 
-                                       n_cdf_points=1000, rmax=10.0, t0=0.0)
-    # Create interpolation for density
-    interp = LinearInterpolation(r_values, n_rt, extrapolation_bc=0.0)
-    
-    # Compute normalization constant
-    norm, _ = quadgk(r -> r * interp(r), 0, rmax)
-    
-    # Pre-compute CDF for inverse transform sampling
-    r_cdf = range(0, rmax, length=n_cdf_points)
-    cdf_values = zeros(n_cdf_points)
-    
-    for i in 2:n_cdf_points
-        result, _ = quadgk(r′ -> r′ * interp(r′) / norm, 0, r_cdf[i])
-        cdf_values[i] = result
-    end
-    
-    # Ensure CDF is strictly monotonic
-    for i in 2:n_cdf_points
-        if cdf_values[i] <= cdf_values[i-1]
-            cdf_values[i] = cdf_values[i-1] + 1e-9
+using Interpolations, QuadGK, Random
+
+
+
+
+function sample_particles_from_density(r_values, n_rt, N_samples::Int, T_interp,nur_interp, fugacity_interp;
+                                       n_cdf_points=1000, rmax=10.0, t0=0.0,
+                                       mode::Symbol = :density, m=1.5)
+
+    # helper: sample |p| from relativistic 2D MB at local T
+    sample_p_mag = function (T_local)
+        # simple robust cutoff (same as your MB2D branch)
+        pmax = 15 * max(T_local, eps())
+        p_grid = range(0, pmax, length=800)
+        dp = step(p_grid)
+        # f(p) ∝ p * exp(-sqrt(p^2 + m^2)/T)
+        f_p = @. p_grid * exp(-sqrt(p_grid^2 + m^2)/max(T_local, eps()))
+        Z = sum(f_p) * dp
+        if Z == 0.0
+            return 0.0
         end
+        f_p ./= Z
+        cdf_p = cumsum(f_p) * dp
+        cdf_p[end] = 1.0
+        inverse_cdf_p = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Line())
+        return inverse_cdf_p(rand())
     end
-    cdf_values[end] = 1.0
-    
-    # Create inverse CDF interpolation
-    inverse_cdf = LinearInterpolation(cdf_values, collect(r_cdf), extrapolation_bc=Line())
-    
-    # Initialize matrices [dim, N_samples]
-    x_matrix = zeros(2, N_samples)  # [x, y]
-    p_matrix = zeros(2, N_samples)  # [px, py]
-    
-    for i in 1:N_samples
-        # Sample position
-        u = rand()
-        r = inverse_cdf(u)
-        φ = 2π * rand()
-        x_matrix[1, i] = r * cos(φ)  # x
-        x_matrix[2, i] = r * sin(φ)  # y
-        
-        # Evaluate temperature at this position
-        T_local = T_interp(r, t0)
-        
-        # Sample momentum from 2D Maxwell-Boltzmann distribution
-        p_matrix[1, i] = sqrt(T_local) * randn()  # px
-        p_matrix[2, i] = sqrt(T_local) * randn()  # py
+
+    if mode == :density
+        # ------------------------------
+        # 1) Spatial sampling from user-supplied n_rt(r)
+        # ------------------------------
+        interp = LinearInterpolation(r_values, n_rt, extrapolation_bc=0.0)
+        norm, _ = quadgk(r -> r * interp(r), 0, rmax)
+
+        # Precompute CDF for r
+        r_cdf = range(0, rmax, length=n_cdf_points)
+        cdf_values = zeros(n_cdf_points)
+        for i in 2:n_cdf_points
+            result, _ = quadgk(r′ -> r′ * interp(r′) / norm, 0, r_cdf[i])
+            cdf_values[i] = result
+        end
+
+        # Enforce monotonicity
+        for i in 2:n_cdf_points
+            if cdf_values[i] <= cdf_values[i-1]
+                cdf_values[i] = cdf_values[i-1] + 1e-9
+            end
+        end
+        cdf_values[end] = 1.0
+        inverse_cdf = LinearInterpolation(cdf_values, collect(r_cdf), extrapolation_bc=Line())
+
+     
+
+        # ------------------------------
+        # 2) Sample positions and relativistic MB momenta
+        # ------------------------------
+        x_matrix = zeros(2, N_samples)
+        p_matrix = zeros(2, N_samples)
+
+        for i in 1:N_samples
+            # position from n_rt
+            r = inverse_cdf(rand())
+            φ = 2π * rand()
+            x_matrix[1,i] = r * cos(φ)
+            x_matrix[2,i] = r * sin(φ)
+
+            # momentum from SAME relativistic MB as MB2D
+            T_local = T_interp(r, t0)
+            p_mag = sample_p_mag(T_local)
+            φp = 2π * rand()
+            p_matrix[1,i] = p_mag * cos(φp)
+            p_matrix[2,i] = p_mag * sin(φp)
+        end
+
+    elseif mode == :MB2D
+        # ------------------------------
+        # 1) Spatial sampling from thermal MB radial density
+        #     n_MB(r) ∝ r * ∫ p exp(-sqrt(p^2+m^2)/T(r)) dp
+        # ------------------------------
+        n_MB = zeros(length(r_values))
+        for (j, r) in enumerate(r_values)
+            T_local = T_interp(r, t0)
+            pmax = 15 * max(T_local, eps())
+            p_grid = range(0, pmax, length=800)
+            dp = step(p_grid)
+            f_p = @. p_grid * exp(-sqrt(p_grid^2 + m^2)/max(T_local, eps()))
+            n_MB[j] = sum(f_p) * dp * r  # include 2D Jacobian r
+        end
+
+        # Normalize and build CDF over r_values
+        total = sum(n_MB)
+        if total == 0.0
+            error("Thermal radial weights are zero; check T_interp and parameters.")
+        end
+        n_MB ./= total
+        cdf_values = cumsum(n_MB)
+        cdf_values ./= cdf_values[end]
+        inverse_cdf = LinearInterpolation(cdf_values, collect(r_values), extrapolation_bc=Line())
+
+        # ------------------------------
+        # 2) Sample positions and SAME relativistic MB momenta
+        # ------------------------------
+        x_matrix = zeros(2, N_samples)
+        p_matrix = zeros(2, N_samples)
+
+        for i in 1:N_samples
+            # position from thermal n_MB(r)
+            r = inverse_cdf(rand())
+            φ = 2π * rand()
+            x_matrix[1,i] = r * cos(φ)
+            x_matrix[2,i] = r * sin(φ)
+
+            # momentum from SAME relativistic MB
+            T_local = T_interp(r, t0)
+            p_mag = sample_p_mag(T_local)
+            φp = 2π * rand()
+            p_matrix[1,i] = p_mag * cos(φp)
+            p_matrix[2,i] = p_mag * sin(φp)
+        end
+
+    else
+        error("Invalid mode. Use :density or :MB2D")
     end
-    
+
     return x_matrix, p_matrix
 end
+
+
 
 function sample_initial_particles_from_pdf!(
     m, dim, N_particles,
