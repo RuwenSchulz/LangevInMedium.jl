@@ -24,11 +24,66 @@ export sample_initial_particles_at_origin!
 export sample_initial_particles_at_origin_no_position!
 export compute_MIS_distribution
 export sample_particles_from_density
-
+export sample_particles_from_FONLL
 
 using Interpolations, QuadGK, Random
 
 
+function sample_particles_from_FONLL(r_grid, f_HQ_init_FONLL, N_samples::Int;
+                                     p_max = 10., n_cdf_points=500, rmax=maximum(r_grid))
+    p_grid = range(0, p_max, length=size(f_HQ_init_FONLL,1))
+    # 1. Normalize full PDF: P(r,p) ∝ r * p * f(r,p)
+    dr = step(r_grid)
+    dp = step(p_grid)
+    P_rp = @. r_grid' .* p_grid .* f_HQ_init_FONLL  # shape (length(p_grid), length(r_grid))
+
+    # total normalization
+    Z = sum(P_rp) * dr * dp
+    if Z == 0
+        error("Distribution normalization is zero.")
+    end
+    P_rp ./= Z
+
+    # 2. Marginal PDF for r
+    P_r = sum(P_rp, dims=1)[:] * dp  # integrate over p
+    cdf_r = cumsum(P_r) * dr
+    cdf_r ./= cdf_r[end]
+
+    inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Line())
+
+    # 3. Precompute conditional CDFs for p|r
+    inverse_cdf_p_given_r = Vector{Any}(undef, length(r_grid))
+    for (i, r) in enumerate(r_grid)
+        p_pdf = P_rp[:, i]
+        if sum(p_pdf) > 0
+            cdf_p = cumsum(p_pdf) * dp
+            cdf_p ./= cdf_p[end]
+            inverse_cdf_p_given_r[i] = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Line())
+        else
+            inverse_cdf_p_given_r[i] = r -> 0.0
+        end
+    end
+
+    # 4. Sample particles
+    x_matrix = zeros(2, N_samples)
+    p_matrix = zeros(2, N_samples)
+
+    for i in 1:N_samples
+        # Sample r, φ
+        r = inverse_cdf_r(rand())
+        φ = 2π * rand()
+        x_matrix[:, i] .= (r * cos(φ), r * sin(φ))
+
+        # Sample p|r, φ_p
+        j = findfirst(>(r), r_grid)
+        j = clamp(j, 1, length(r_grid))
+        p_mag = inverse_cdf_p_given_r[j](rand())
+        φp = 2π * rand()
+        p_matrix[:, i] .= (p_mag * cos(φp), p_mag * sin(φp))
+    end
+
+    return x_matrix, p_matrix
+end
 
 
 function sample_particles_from_density(r_values, n_rt, N_samples::Int, T_interp,nur_interp, fugacity_interp;
