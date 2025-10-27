@@ -22,8 +22,7 @@ end
 
 
 function simulate_ensemble_bulk_gpu(
-    r_grid_Langevin,heavy_quark_density,
-    T_profile_MIS, ur_profile_MIS, mu_profile_MIS,nur_profile_MIS,
+    r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
     TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
     N_particles::Int64=10_000,
     Δt::Float64=0.001,
@@ -53,11 +52,10 @@ function simulate_ensemble_bulk_gpu(
         tgrid = CuArray(ttgrid)
         TemperatureEvolution = CuArray(TemperatureEvolutionn)
         VelocityEvolution = CuArray(VelocityEvolutionn)
-
         
-        #x_matrix, p_matrix = sample_particles_from_density(r_grid_Langevin, heavy_quark_density, N_particles,T_profile_MIS, nur_profile_MIS, mu_profile_MIS, t0=initial_time,mode=:density, m=m)
-        x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin, heavy_quark_density, N_particles)
-         if dimensions == 1
+        x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin,p_grid_Langevin, heavy_quark_density, N_particles)
+        
+        if dimensions == 1
             radial_mode = true
         else 
             radial_mode = false

@@ -29,9 +29,9 @@ export sample_particles_from_FONLL
 using Interpolations, QuadGK, Random
 
 
-function sample_particles_from_FONLL(r_grid, f_HQ_init_FONLL, N_samples::Int;
-                                     p_max = 10., n_cdf_points=500, rmax=maximum(r_grid))
-    p_grid = range(0, p_max, length=size(f_HQ_init_FONLL,1))
+function sample_particles_from_FONLL(r_grid,p_grid, f_HQ_init_FONLL, N_samples::Int;
+                                    n_cdf_points=500)
+
     # 1. Normalize full PDF: P(r,p) ∝ r * p * f(r,p)
     dr = step(r_grid)
     dp = step(p_grid)
