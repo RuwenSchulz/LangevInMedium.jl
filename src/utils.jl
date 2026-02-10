@@ -29,13 +29,26 @@ export sample_particles_from_FONLL
 using Interpolations, QuadGK, Random
 
 
-function sample_particles_from_FONLL(r_grid,p_grid, f_HQ_init_FONLL, N_samples::Int;
-                                    n_cdf_points=500)
+function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples::Int;
+                                     n_cdf_points=500)
 
     # 1. Normalize full PDF: P(r,p) ∝ r * p * f(r,p)
-    dr = step(r_grid)
-    dp = step(p_grid)
-    P_rp = @. r_grid' .* p_grid .* f_HQ_init_FONLL  # shape (length(p_grid), length(r_grid))
+    # Expect f_HQ_init_FONLL to be indexed as f[p_index, r_index] (Np × Nr).
+    # If user passes Nr × Np, transpose it for robustness.
+    Nr = length(r_grid)
+    Np = length(p_grid)
+    f = f_HQ_init_FONLL
+    if !(size(f, 1) == Np && size(f, 2) == Nr)
+        if size(f, 1) == Nr && size(f, 2) == Np
+            f = permutedims(f)
+        else
+            error("sample_particles_from_FONLL: f_HQ_init_FONLL has size $(size(f)), expected ($Np, $Nr) (p×r) or ($Nr, $Np) (r×p).")
+        end
+    end
+
+    dr = mean(diff(collect(r_grid)))
+    dp = mean(diff(collect(p_grid)))
+    P_rp = @. r_grid' .* p_grid .* f  # shape (Np, Nr)
 
     # total normalization
     Z = sum(P_rp) * dr * dp
@@ -47,20 +60,33 @@ function sample_particles_from_FONLL(r_grid,p_grid, f_HQ_init_FONLL, N_samples::
     # 2. Marginal PDF for r
     P_r = sum(P_rp, dims=1)[:] * dp  # integrate over p
     cdf_r = cumsum(P_r) * dr
-    cdf_r ./= cdf_r[end]
+    # Ensure well-defined inverse CDF at u≈0 and monotonicity
+    if !isempty(cdf_r)
+        cdf_r[1] = 0.0
+        for i in 2:length(cdf_r)
+            cdf_r[i] = max(cdf_r[i], cdf_r[i-1] + eps(Float64))
+        end
+        cdf_r ./= cdf_r[end]
+        cdf_r[end] = 1.0
+    end
 
-    inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Line())
+    inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Flat())
 
     # 3. Precompute conditional CDFs for p|r
     inverse_cdf_p_given_r = Vector{Any}(undef, length(r_grid))
-    for (i, r) in enumerate(r_grid)
+    for i in eachindex(r_grid)
         p_pdf = P_rp[:, i]
         if sum(p_pdf) > 0
             cdf_p = cumsum(p_pdf) * dp
+            cdf_p[1] = 0.0
+            for k in 2:length(cdf_p)
+                cdf_p[k] = max(cdf_p[k], cdf_p[k-1] + eps(Float64))
+            end
             cdf_p ./= cdf_p[end]
-            inverse_cdf_p_given_r[i] = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Line())
+            cdf_p[end] = 1.0
+            inverse_cdf_p_given_r[i] = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Flat())
         else
-            inverse_cdf_p_given_r[i] = r -> 0.0
+            inverse_cdf_p_given_r[i] = _ -> 0.0
         end
     end
 
@@ -71,11 +97,12 @@ function sample_particles_from_FONLL(r_grid,p_grid, f_HQ_init_FONLL, N_samples::
     for i in 1:N_samples
         # Sample r, φ
         r = inverse_cdf_r(rand())
+        r = clamp(r, first(r_grid), last(r_grid))
         φ = 2π * rand()
         x_matrix[:, i] .= (r * cos(φ), r * sin(φ))
 
         # Sample p|r, φ_p
-        j = findfirst(>(r), r_grid)
+        j = searchsortedlast(r_grid, r)
         j = clamp(j, 1, length(r_grid))
         p_mag = inverse_cdf_p_given_r[j](rand())
         φp = 2π * rand()

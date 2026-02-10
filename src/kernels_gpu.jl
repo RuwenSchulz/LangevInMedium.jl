@@ -305,7 +305,10 @@ end
             r = positions[1, idx]
             pr = momenta[1, idx]
 
-            T = interpolate_2d_cuda(xgrid, tgrid, Tfield, abs(r), steps * Δt + initial_time)
+            r_abs  = CUDA.abs(r)
+            r_safe = (r_abs < eps(Float64)) ? eps(Float64) : r_abs
+
+            T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r_safe, steps * Δt + initial_time)
             D = DsT / T
 
             # deterministic motion
@@ -314,7 +317,7 @@ end
             # add geometric drift & noise if D>0
             if D > 0.0
                 ξ = random_normals[1, idx]
-                dr += (D / r) * Δt + CUDA.sqrt(2.0 * D * Δt) * ξ
+                dr += (D / r_safe) * Δt + CUDA.sqrt(2.0 * D * Δt) * ξ
             end
 
             # reflection boundary
@@ -330,6 +333,22 @@ end
             # --- full Cartesian update ---
             for d in 1:dimensions
                 @inbounds positions[d, idx] += Δt * momenta[d, idx] / E
+            end
+
+            # Spatial diffusion in Cartesian coordinates (consistent with r-mode):
+            # x_d -> x_d + sqrt(2 D dt) * ξ_d, with D = DsT / T(r,τ)
+            r2 = 0.0
+            for d in 1:dimensions
+                r2 += positions[d, idx]^2
+            end
+            r = CUDA.sqrt(r2)
+            T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
+            D = DsT / T
+            if D > 0.0
+                σ = CUDA.sqrt(2.0 * D * Δt)
+                for d in 1:dimensions
+                    @inbounds positions[d, idx] += σ * random_normals[d, idx]
+                end
             end
         end
     end

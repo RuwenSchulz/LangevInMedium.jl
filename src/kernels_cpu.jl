@@ -313,15 +313,18 @@ function kernel_update_positions_cpu!(
             r = positions[1, i]
             pr = momenta[1, i]
 
-            T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(r), step * Δt + t0)
-            D = DsT/T
+            r_abs  = abs(r)
+            r_safe = (r_abs < eps()) ? eps() : r_abs
+
+            T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_safe, step * Δt + t0)
+            D = DsT / T
             # deterministic motion
             dr = (pr / E) * Δt
 
             # add geometric drift & noise if D>0
             if D > 0
                 ξ = randn()
-                dr += (D / r) * Δt + sqrt(2 * D * Δt) * ξ
+                dr += (D / r_safe) * Δt + sqrt(2 * D * Δt) * ξ
             end
 
             # reflection boundary
@@ -337,6 +340,23 @@ function kernel_update_positions_cpu!(
             # --- full Cartesian update ---
             for d in 1:dimensions
                 positions[d, i] += Δt * momenta[d, i] / E
+            end
+
+            # Optional spatial diffusion consistent with radial-mode drift/noise:
+            # If you include a coordinate-space diffusion coefficient D = DsT/T,
+            # you must apply it to x,y as well; otherwise r-mode and x,y-mode differ.
+            r2 = 0.0
+            for d in 1:dimensions
+                r2 += positions[d, i]^2
+            end
+            r_now = sqrt(r2)
+            T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_now, step * Δt + t0)
+            D = DsT / T
+            if D > 0
+                σ = sqrt(2 * D * Δt)
+                for d in 1:dimensions
+                    positions[d, i] += σ * randn()
+                end
             end
         end
     end
