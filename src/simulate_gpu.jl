@@ -87,9 +87,10 @@ function simulate_ensemble_bulk_gpu(
         momenta = CuArray(moment)
 
         # === Boost initial momenta into lab frame ===
+        # Keep step indexing consistent with the CPU backend (t = t0 at initialization).
         @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
             momenta, positions, xgrid, tgrid,
-            VelocityEvolution, m, N_particles, 1, Δt, initial_time,radial_mode)
+            VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode)
 
         # === Allocate history arrays ===
         momenta_history_gpu = CUDA.zeros(Float64, dimensions, N_particles, num_saves + 1)
@@ -150,8 +151,10 @@ function simulate_ensemble_bulk_gpu(
                     m, N_particles, step, Δt, initial_time,radial_mode)
             end 
             # Step 5: Update particle positions based on momenta
+            # IMPORTANT: pass the current time-step, not the total number of steps.
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
-                positions, momenta, m, Δt, N_particles,steps,initial_time,xgrid,tgrid,TemperatureEvolution,DsT,dimensions,radial_mode,ξ_position)
+                positions, momenta, m, Δt, N_particles, step, initial_time,
+                xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, ξ_position)
 
             # Step 6: Save state if necessary
             if step % save_every == 0

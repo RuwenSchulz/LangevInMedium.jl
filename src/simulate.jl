@@ -53,6 +53,7 @@ function simulate_ensemble_bulk(
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
     p0 = 1.0,
+    DsT = 0.2,
     initial_condition = "delta",
     dimensions::Int = 3,
 )
@@ -60,7 +61,7 @@ function simulate_ensemble_bulk(
         T;
         N_particles = N_particles, Δt = Δt,
         initial_time = initial_time, final_time = final_time,
-        save_interval = save_interval, m = m, dimensions = dimensions,initial_condition = initial_condition, p0 = p0
+        save_interval = save_interval, m = m,dimensions = dimensions,initial_condition = initial_condition, p0 = p0
     )
 end
 
