@@ -300,6 +300,7 @@ function kernel_update_positions_cpu!(
     xgrid,tgrid, Tfield,DsT;
     dimensions::Int = 2,
     radial_mode::Bool = false,
+    position_diffusion::Bool = false,
     )
     @inbounds for i in 1:N
         # Compute energy
@@ -316,15 +317,20 @@ function kernel_update_positions_cpu!(
             r_abs  = abs(r)
             r_safe = (r_abs < eps()) ? eps() : r_abs
 
-            T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_safe, step * Δt + t0)
-            D = DsT / T
             # deterministic motion
             dr = (pr / E) * Δt
 
-            # add geometric drift & noise if D>0
-            if D > 0
-                ξ = randn()
-                dr += (D / r_safe) * Δt + sqrt(2 * D * Δt) * ξ
+            # Optional coordinate-space diffusion (overdamped Brownian motion).
+            # Default is OFF because the underdamped Langevin already produces spatial
+            # diffusion through momentum kicks + advection; enabling this typically
+            # double-counts diffusion compared to hydro.
+            if position_diffusion
+                T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_safe, step * Δt + t0)
+                D = DsT / T
+                if D > 0
+                    ξ = randn()
+                    dr += (D / r_safe) * Δt + sqrt(2 * D * Δt) * ξ
+                end
             end
 
             # reflection boundary
@@ -342,20 +348,20 @@ function kernel_update_positions_cpu!(
                 positions[d, i] += Δt * momenta[d, i] / E
             end
 
-            # Optional spatial diffusion consistent with radial-mode drift/noise:
-            # If you include a coordinate-space diffusion coefficient D = DsT/T,
-            # you must apply it to x,y as well; otherwise r-mode and x,y-mode differ.
-            r2 = 0.0
-            for d in 1:dimensions
-                r2 += positions[d, i]^2
-            end
-            r_now = sqrt(r2)
-            T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_now, step * Δt + t0)
-            D = DsT / T
-            if D > 0
-                σ = sqrt(2 * D * Δt)
+            # Optional coordinate-space diffusion (see note above).
+            if position_diffusion
+                r2 = 0.0
                 for d in 1:dimensions
-                    positions[d, i] += σ * randn()
+                    r2 += positions[d, i]^2
+                end
+                r_now = sqrt(r2)
+                T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_now, step * Δt + t0)
+                D = DsT / T
+                if D > 0
+                    σ = sqrt(2 * D * Δt)
+                    for d in 1:dimensions
+                        positions[d, i] += σ * randn()
+                    end
                 end
             end
         end

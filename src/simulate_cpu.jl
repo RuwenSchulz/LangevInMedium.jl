@@ -18,7 +18,9 @@ function simulate_ensemble_bulk_cpu(
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
     DsT::Float64 = 0.2,
-    dimensions::Int = 3)
+    dimensions::Int = 3,
+    position_diffusion::Bool = false,
+    momentum_langevin::Bool = true)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
@@ -94,7 +96,7 @@ function simulate_ensemble_bulk_cpu(
             momenta, positions, xgrid, tgrid,
             VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
 
-        if DsT == 0.0
+        if !momentum_langevin || DsT == 0.0
             kernel_set_to_fluid_velocity_cpu!(
                 momenta, positions,  xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
@@ -126,7 +128,8 @@ function simulate_ensemble_bulk_cpu(
                     positions, momenta, m, Δt, N_particles,step,initial_time,
                     xgrid,tgrid, TemperatureEvolutionn,DsT;
                     dimensions,
-                    radial_mode = radial_mode
+                    radial_mode = radial_mode,
+                    position_diffusion = position_diffusion
                 )
 
 

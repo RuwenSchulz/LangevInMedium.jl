@@ -32,6 +32,8 @@ function simulate_ensemble_bulk_gpu(
     m::Float64=1.0,
     DsT::Float64=0.2,
     dimensions::Int64=3,
+    position_diffusion::Bool = false,
+    momentum_langevin::Bool = true,
 )
     CUDA.reclaim()  # Free any unused GPU memory
     print_cuda_status()
@@ -126,7 +128,7 @@ function simulate_ensemble_bulk_gpu(
                 momenta, positions, xgrid, tgrid, VelocityEvolution,
                 m, N_particles, step, Δt, initial_time,radial_mode)
 
-            if DsT == 0.0
+            if !momentum_langevin || DsT == 0.0
 
                 @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
                     momenta, positions, xgrid, tgrid,
@@ -154,7 +156,8 @@ function simulate_ensemble_bulk_gpu(
             # IMPORTANT: pass the current time-step, not the total number of steps.
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
                 positions, momenta, m, Δt, N_particles, step, initial_time,
-                xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, ξ_position)
+                xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, position_diffusion, ξ_position)
+            
 
             # Step 6: Save state if necessary
             if step % save_every == 0
