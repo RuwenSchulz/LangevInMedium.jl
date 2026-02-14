@@ -89,6 +89,7 @@ function simulate_ensemble_bulk(
     final_time::Float64 = 1.0,
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
+    DsT::Float64 = 0.2,
     dimensions::Int = 2,  # Milne: τ, r
 )
     return simulate_ensemble_bulk_general_coords_cpu(
@@ -96,7 +97,7 @@ function simulate_ensemble_bulk(
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,
         initial_time = initial_time, final_time = final_time,
-        save_interval = save_interval, m = m, dimensions = dimensions
+        save_interval = save_interval, m = m, DsT = DsT, dimensions = dimensions
     )
 end
 

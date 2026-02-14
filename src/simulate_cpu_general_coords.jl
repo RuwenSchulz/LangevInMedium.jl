@@ -23,6 +23,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
     final_time::Float64 = 1.0,
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
+    DsT::Float64 = 0.2,
     dimensions::Int = 2  # Milne: τ, r
 )
 
@@ -83,7 +84,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
             ηD_vals, kL_vals, kT_vals,
             ξ, deterministic_terms, stochastic_terms,
             Δt, m, random_directions,
-            dimensions, N_particles, step, initial_time)
+            dimensions, N_particles, step, initial_time, DsT)
 
         # 3. Langevin update of momenta
         kernel_update_momenta_LRF_general_coords_cpu!(

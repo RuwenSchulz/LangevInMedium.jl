@@ -111,7 +111,7 @@ function kernel_compute_all_forces_general_coords_cpu!(
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N, step, t0
+    dimensions, N, step, t0, DsT
     )
     for i in 1:N
         # Compute particle momentum magnitude
@@ -127,10 +127,12 @@ function kernel_compute_all_forces_general_coords_cpu!(
         T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[2, i]), step * Δt + t0)
 
         # Compute transport coefficients
-        DsT = 0.2 * T
-        M = 1.5
+        # Here, DsT is interpreted as the dimensionless quantity D_s * T.
+        # (Einstein relation, non-relativistic approximation):
+        #   η_D = T^2 / (m * DsT),   κ = 2 T^3 / DsT
+        M = m
         ηD = T^2 / (M * DsT)
-        κ = 2 * T^3 / DsT
+        κ  = 2 * T^3 / DsT
         kL, kT = sqrt(κ), sqrt(κ)
 
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
@@ -170,7 +172,7 @@ function kernel_compute_all_forces_general_coords_cpu!(
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N, step, t0
+    dimensions, N, step, t0, DsT
     )
     for i in 1:N
         # Compute particle momentum magnitude
@@ -185,11 +187,10 @@ function kernel_compute_all_forces_general_coords_cpu!(
         # Interpolate temperature from space-time field
         
 
-        # Compute transport coefficients
-        DsT = 0.2 * T
-        M = 1.5
+        # Compute transport coefficients (see docstring above)
+        M = m
         ηD = T^2 / (M * DsT)
-        κ = 2 * T^3 / DsT
+        κ  = 2 * T^3 / DsT
         kL, kT = sqrt(κ), sqrt(κ)
 
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT

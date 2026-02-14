@@ -239,6 +239,7 @@ end
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N_particles, steps, initial_time
+    , DsT
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -257,8 +258,8 @@ end
         T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, abs(positions[2, i]), steps * Δt + initial_time)
 
         # Transport coefficients
-        DsT = 0.2 * T
-        M = 1.5
+        # DsT is interpreted as the dimensionless quantity D_s * T.
+        M = m
         ηD = T^2 / (M * DsT)
         κ  = 2 * T^3 / DsT
         kL = sqrt(κ)

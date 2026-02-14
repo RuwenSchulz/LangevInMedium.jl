@@ -57,6 +57,7 @@ function simulate_ensemble_bulk_gpu_general_coords(
     final_time::Float64=1.0,
     save_interval::Float64=0.1,
     m::Float64=1.0,
+    DsT::Float64 = 0.2,
     dimensions::Int64=3,
 )
     CUDA.reclaim()  # Free any unused GPU memory
@@ -130,7 +131,7 @@ function simulate_ensemble_bulk_gpu_general_coords(
                 p_mags, p_units, ηD_vals, kL_vals, kT_vals,
                 ξ, deterministic_terms, stochastic_terms,
                 Δt, m, random_directions, dimensions, N_particles,
-                step, initial_time)
+                step, initial_time, DsT)
 
             # Step 3: Update momenta in LRF
             @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_general_coords_gpu!(
