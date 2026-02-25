@@ -68,12 +68,29 @@ function simulate_ensemble_bulk_gpu(
             # compute r = sqrt(x^2 + y^2)
             r_samples = sqrt.(x_matrix[1, :].^2 .+ x_matrix[2, :].^2)
 
-            # avoid division by zero
-            r_safe = @. ifelse(r_samples < eps(), eps(), r_samples)
+            # At r≈0 the radial direction ê_r is undefined. Avoid p_r=(x·p)/r.
+            dr0 = (length(r_grid_Langevin) >= 2) ? abs(float(r_grid_Langevin[2] - r_grid_Langevin[1])) : 0.0
+            r_axis_eps = max(1e-12, 0.5 * dr0)
 
-            # compute p_r = (x·p_x + y·p_y) / r
-            p_r_samples = (x_matrix[1, :] .* p_matrix[1, :] .+
-                        x_matrix[2, :] .* p_matrix[2, :]) ./ r_safe
+            ex = similar(r_samples)
+            ey = similar(r_samples)
+            is_regular = r_samples .> r_axis_eps
+            @inbounds begin
+                ex[is_regular] .= x_matrix[1, is_regular] ./ r_samples[is_regular]
+                ey[is_regular] .= x_matrix[2, is_regular] ./ r_samples[is_regular]
+
+                nsmall = count(.!is_regular)
+                if nsmall > 0
+                    rx = randn(nsmall)
+                    ry = randn(nsmall)
+                    invn = 1.0 ./ (sqrt.(rx.^2 .+ ry.^2) .+ eps())
+                    ex[.!is_regular] .= rx .* invn
+                    ey[.!is_regular] .= ry .* invn
+                end
+            end
+
+            # p_r = p⃗ · ê_r
+            p_r_samples = ex .* p_matrix[1, :] .+ ey .* p_matrix[2, :]
 
             # reshape to shape [1, N]
             position = reshape(r_samples, 1, :)

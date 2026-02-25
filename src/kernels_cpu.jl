@@ -302,6 +302,13 @@ function kernel_update_positions_cpu!(
     radial_mode::Bool = false,
     position_diffusion::Bool = false,
     )
+    # Grid-based axis cutoff for the geometric drift term D/r.
+    # Using machine eps() here can create enormous dr near r=0.
+    r_axis_eps = if length(xgrid) >= 2
+        max(1e-12, 0.5 * abs(float(xgrid[2] - xgrid[1])))
+    else
+        1e-6
+    end
     @inbounds for i in 1:N
         # Compute energy
         E2 = m^2
@@ -315,7 +322,7 @@ function kernel_update_positions_cpu!(
             pr = momenta[1, i]
 
             r_abs  = abs(r)
-            r_safe = (r_abs < eps()) ? eps() : r_abs
+            r_safe = (r_abs < r_axis_eps) ? r_axis_eps : r_abs
 
             # deterministic motion
             dr = (pr / E) * Δt

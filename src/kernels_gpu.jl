@@ -307,7 +307,9 @@ end
             pr = momenta[1, idx]
 
             r_abs  = CUDA.abs(r)
-            r_safe = (r_abs < eps(Float64)) ? eps(Float64) : r_abs
+            dr0 = (length(xgrid) >= 2) ? CUDA.abs(xgrid[2] - xgrid[1]) : 0.0
+            r_axis_eps = CUDA.max(1e-12, 0.5 * dr0)
+            r_safe = (r_abs < r_axis_eps) ? r_axis_eps : r_abs
 
             # deterministic motion
             dr = (pr / E) * Δt
