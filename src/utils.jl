@@ -30,7 +30,8 @@ using Interpolations, QuadGK, Random
 
 
 function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples::Int;
-                                     n_cdf_points=500)
+                                     n_cdf_points=500,
+                                     cartesian_spatial_sampling::Bool=false)
 
     # 1. Normalize full PDF: P(r,p) ∝ r * p * f(r,p)
     # Expect f_HQ_init_FONLL to be indexed as f[p_index, r_index] (Np × Nr).
@@ -48,34 +49,13 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
 
     dr = mean(diff(collect(r_grid)))
     dp = mean(diff(collect(p_grid)))
-    P_rp = @. r_grid' .* p_grid .* f  # shape (Np, Nr)
 
-    # total normalization
-    Z = sum(P_rp) * dr * dp
-    if Z == 0
-        error("Distribution normalization is zero.")
-    end
-    P_rp ./= Z
-
-    # 2. Marginal PDF for r
-    P_r = sum(P_rp, dims=1)[:] * dp  # integrate over p
-    cdf_r = cumsum(P_r) * dr
-    # Ensure well-defined inverse CDF at u≈0 and monotonicity
-    if !isempty(cdf_r)
-        cdf_r[1] = 0.0
-        for i in 2:length(cdf_r)
-            cdf_r[i] = max(cdf_r[i], cdf_r[i-1] + eps(Float64))
-        end
-        cdf_r ./= cdf_r[end]
-        cdf_r[end] = 1.0
-    end
-
-    inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Flat())
-
-    # 3. Precompute conditional CDFs for p|r
-    inverse_cdf_p_given_r = Vector{Any}(undef, length(r_grid))
-    for i in eachindex(r_grid)
-        p_pdf = P_rp[:, i]
+    # --- Precompute conditional CDFs for p|r (needed by both sampling modes) ---
+    # Build P(p|r) ∝ p * f(r,p) for each r
+    P_p_given_r = @. p_grid .* f  # shape (Np, Nr), unnormalized
+    inverse_cdf_p_given_r = Vector{Any}(undef, Nr)
+    for i in 1:Nr
+        p_pdf = P_p_given_r[:, i]
         if sum(p_pdf) > 0
             cdf_p = cumsum(p_pdf) * dp
             cdf_p[1] = 0.0
@@ -90,23 +70,101 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
         end
     end
 
-    # 4. Sample particles
     x_matrix = zeros(2, N_samples)
     p_matrix = zeros(2, N_samples)
 
-    for i in 1:N_samples
-        # Sample r, φ
-        r = inverse_cdf_r(rand())
-        r = clamp(r, first(r_grid), last(r_grid))
-        φ = 2π * rand()
-        x_matrix[:, i] .= (r * cos(φ), r * sin(φ))
+    if cartesian_spatial_sampling
+        # =====================================================================
+        # Cartesian (x,y) rejection sampling — no grid artifacts at r→0
+        # =====================================================================
+        # P(x,y) ∝ n_spatial(√(x²+y²))  (no geometric r factor in Cartesian)
 
-        # Sample p|r, φ_p
-        j = searchsortedlast(r_grid, r)
-        j = clamp(j, 1, length(r_grid))
-        p_mag = inverse_cdf_p_given_r[j](rand())
-        φp = 2π * rand()
-        p_matrix[:, i] .= (p_mag * cos(φp), p_mag * sin(φp))
+        rmax = Float64(last(r_grid))
+
+        # Marginal spatial density on radial grid: n_spatial(r) = ∫ p f(r,p) dp
+        f_spatial = vec(sum(P_p_given_r, dims=1)) * dp   # length Nr
+
+        # Interpolate onto arbitrary r
+        r_grid_vec = collect(Float64, r_grid)
+        f_spatial_interp = LinearInterpolation(r_grid_vec, f_spatial, extrapolation_bc=0.0)
+
+        # Envelope for rejection: maximum of n_spatial(r) over the grid
+        f_max = maximum(f_spatial) + eps()
+
+        n_accepted = 0
+        n_trials   = 0
+        @info "Cartesian rejection sampling: rmax=$(rmax) fm, f_max=$(f_max)"
+
+        while n_accepted < N_samples
+            n_trials += 1
+            # Uniform proposal in the square [-rmax, rmax]²
+            x = rmax * (2*rand() - 1)
+            y = rmax * (2*rand() - 1)
+            r = sqrt(x^2 + y^2)
+
+            # Reject points outside the disk or by density ratio
+            if r > rmax
+                continue
+            end
+            if rand() * f_max > f_spatial_interp(r)
+                continue
+            end
+
+            n_accepted += 1
+            x_matrix[:, n_accepted] .= (x, y)
+
+            # --- Sample p|r using the conditional CDF ---
+            r = clamp(r, first(r_grid), last(r_grid))
+            j = searchsortedlast(r_grid_vec, r)
+            j = clamp(j, 1, Nr)
+            p_mag = inverse_cdf_p_given_r[j](rand())
+            φp = 2π * rand()
+            p_matrix[:, n_accepted] .= (p_mag * cos(φp), p_mag * sin(φp))
+        end
+
+        @info "Rejection sampling done: $(n_accepted) accepted / $(n_trials) trials " *
+              "(efficiency = $(round(100*n_accepted/n_trials; digits=1))%)"
+
+    else
+        # =====================================================================
+        # Original polar (r,φ) spatial sampling
+        # =====================================================================
+        P_rp = @. r_grid' .* p_grid .* f  # shape (Np, Nr)
+
+        # total normalization
+        Z = sum(P_rp) * dr * dp
+        if Z == 0
+            error("Distribution normalization is zero.")
+        end
+        P_rp ./= Z
+
+        # Marginal PDF for r
+        P_r = sum(P_rp, dims=1)[:] * dp  # integrate over p
+        cdf_r = cumsum(P_r) * dr
+        if !isempty(cdf_r)
+            cdf_r[1] = 0.0
+            for i in 2:length(cdf_r)
+                cdf_r[i] = max(cdf_r[i], cdf_r[i-1] + eps(Float64))
+            end
+            cdf_r ./= cdf_r[end]
+            cdf_r[end] = 1.0
+        end
+        inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Flat())
+
+        for i in 1:N_samples
+            # Sample r, φ
+            r = inverse_cdf_r(rand())
+            r = clamp(r, first(r_grid), last(r_grid))
+            φ = 2π * rand()
+            x_matrix[:, i] .= (r * cos(φ), r * sin(φ))
+
+            # Sample p|r, φ_p
+            j = searchsortedlast(r_grid, r)
+            j = clamp(j, 1, length(r_grid))
+            p_mag = inverse_cdf_p_given_r[j](rand())
+            φp = 2π * rand()
+            p_matrix[:, i] .= (p_mag * cos(φp), p_mag * sin(φp))
+        end
     end
 
     return x_matrix, p_matrix

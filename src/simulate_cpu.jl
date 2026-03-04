@@ -30,7 +30,8 @@ function simulate_ensemble_bulk_cpu(
 
     xgrid, tgrid = SpaceTimeGrid
 
-    x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin,p_grid_Langevin, heavy_quark_density, N_particles)
+    x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin,p_grid_Langevin, heavy_quark_density, N_particles;
+        cartesian_spatial_sampling = (dimensions >= 2))
     
     if dimensions == 1
         radial_mode = true
