@@ -19,6 +19,8 @@ function simulate_ensemble_bulk_cpu(
     m::Float64 = 1.0,
     DsT::Float64 = 0.2,
     dimensions::Int = 3,
+    cartesian_spatial_sampling::Union{Nothing,Bool} = nothing,
+    antithetic_momenta::Bool = false,
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true)
 
@@ -30,8 +32,41 @@ function simulate_ensemble_bulk_cpu(
 
     xgrid, tgrid = SpaceTimeGrid
 
-    x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin,p_grid_Langevin, heavy_quark_density, N_particles;
-        cartesian_spatial_sampling = (dimensions >= 2))
+    do_cartesian_sampling = cartesian_spatial_sampling === nothing ? (dimensions >= 2) : cartesian_spatial_sampling
+
+    # Initial sampling: optionally use antithetic momentum pairs (p and -p) at
+    # the same position in the local rest frame. This is a pure variance-reduction
+    # technique: it preserves n and J^τ exactly (depends only on counts/|p|) and
+    # strongly reduces noise in signed currents like J^r.
+    if antithetic_momenta
+        N_half = N_particles ÷ 2
+        N_rem  = N_particles - 2 * N_half
+
+        x_half, p_half = sample_particles_from_FONLL(r_grid_Langevin, p_grid_Langevin, heavy_quark_density, N_half;
+            cartesian_spatial_sampling = do_cartesian_sampling)
+
+        x_matrix = zeros(eltype(x_half), size(x_half, 1), N_particles)
+        p_matrix = zeros(eltype(p_half), size(p_half, 1), N_particles)
+
+        @inbounds for i in 1:N_half
+            j1 = 2i - 1
+            j2 = 2i
+            x_matrix[:, j1] .= x_half[:, i]
+            x_matrix[:, j2] .= x_half[:, i]
+            p_matrix[:, j1] .= p_half[:, i]
+            p_matrix[:, j2] .= -p_half[:, i]
+        end
+
+        if N_rem == 1
+            x1, p1 = sample_particles_from_FONLL(r_grid_Langevin, p_grid_Langevin, heavy_quark_density, 1;
+                cartesian_spatial_sampling = do_cartesian_sampling)
+            x_matrix[:, end] .= x1[:, 1]
+            p_matrix[:, end] .= p1[:, 1]
+        end
+    else
+        x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin, p_grid_Langevin, heavy_quark_density, N_particles;
+            cartesian_spatial_sampling = do_cartesian_sampling)
+    end
     
     if dimensions == 1
         radial_mode = true

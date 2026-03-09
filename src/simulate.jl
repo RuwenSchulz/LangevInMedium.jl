@@ -34,6 +34,8 @@ function simulate_ensemble_bulk(
     m::Float64 = 1.0,
     DsT::Float64 = 0.2,
     dimensions::Int = 3,
+    cartesian_spatial_sampling::Union{Nothing,Bool} = nothing,
+    antithetic_momenta::Bool = false,
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
 )
@@ -42,6 +44,8 @@ function simulate_ensemble_bulk(
         N_particles = N_particles, Δt = Δt,
         initial_time = initial_time, final_time = final_time,
         save_interval = save_interval, m = m, DsT = DsT, dimensions = dimensions,
+        cartesian_spatial_sampling = cartesian_spatial_sampling,
+        antithetic_momenta = antithetic_momenta,
         position_diffusion = position_diffusion,
         momentum_langevin = momentum_langevin
     )

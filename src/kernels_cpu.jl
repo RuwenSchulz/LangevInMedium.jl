@@ -16,6 +16,13 @@ export interpolate_2d_cpu,
 
 
 function interpolate_2d_cpu(x, y, values, xi, yi)
+    # Clamp query points to the tabulated domain.
+    # The old code clamped *indices* but still extrapolated when xi/yi were
+    # outside the grid, which can create unphysical values (e.g. |v|>1) and
+    # lead to NaNs in Lorentz factors.
+    xi = clamp(xi, first(x), last(x))
+    yi = clamp(yi, first(y), last(y))
+
     i = searchsortedlast(x, xi)
     j = searchsortedlast(y, yi)
 
@@ -28,8 +35,10 @@ function interpolate_2d_cpu(x, y, values, xi, yi)
     v00, v10 = values[i, j], values[i + 1, j]
     v01, v11 = values[i, j + 1], values[i + 1, j + 1]
 
-    xd = (xi - x0) / (x1 - x0)
-    yd = (yi - y0) / (y1 - y0)
+    dx = (x1 - x0)
+    dy = (y1 - y0)
+    xd = abs(dx) < eps() ? 0.0 : (xi - x0) / dx
+    yd = abs(dy) < eps() ? 0.0 : (yi - y0) / dy
 
     c0 = v00 * (1 - xd) + v10 * xd
     c1 = v01 * (1 - xd) + v11 * xd
@@ -58,6 +67,9 @@ function kernel_boost_to_rest_frame_cpu!(
 
         # --- local radial fluid velocity ---
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
+        # Guard against superluminal values due to numerical noise.
+        vmax = sqrt(1.0 - 1e-12)
+        v = clamp(v, -vmax, vmax)
         v2 = v * v
         γ  = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -123,6 +135,8 @@ function kernel_boost_to_lab_frame_cpu!(
         # --- local fluid velocity ---
         t_now = step * Δt + t0
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
+        vmax = sqrt(1.0 - 1e-12)
+        v = clamp(v, -vmax, vmax)
         v2 = v * v
         γ  = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -184,10 +198,15 @@ function kernel_compute_all_forces_cpu!(
         # --- local temperature ---
         r = sqrt(sum(positions[:, i].^2))
         T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)
+        # Temperature should be non-negative; clamp to avoid NaNs from T<0.
+        T = max(float(T), 0.0)
+
+        # Guard against invalid transport inputs.
+        DsT_safe = DsT <= 0 ? 0.0 : DsT
 
         # --- transport coefficients ---
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
+        ηD = DsT_safe == 0.0 ? 0.0 : (T^2 / (M * DsT_safe))
+        κ  = DsT_safe == 0.0 ? 0.0 : (2 * T^3 / DsT_safe)
         kL = sqrt(κ)
         kT = sqrt(κ)
 
@@ -225,9 +244,24 @@ function kernel_compute_all_forces_cpu!(
             # ==========================================
             # 🟢 Cartesian mode: independent px, py
             # ==========================================
-            for d in 1:dimensions
-                deterministic_terms[d, i] = -ηD * momenta[d, i] * Δt
-                stochastic_terms[d, i]    = kT * ξ[d, i]
+            # Numerically stable discretization (exact OU for constant coefficients):
+            #   dp = -ηD p dt + kT dW
+            # Exact: p_{n+1} = a p_n + kT * sqrt((1-a^2)/(2ηD)) * ξ
+            # where a = exp(-ηD dt). We encode this into the existing
+            # (deterministic_terms + sqrt(dt)*stochastic_terms) update.
+            if ηD > 0
+                a = exp(-ηD * Δt)
+                # Noise prefactor to be multiplied by sqrt(Δt) in the updater.
+                noise_pref = (Δt > 0) ? (kT * sqrt((1 - a * a) / (2 * ηD * Δt))) : 0.0
+                for d in 1:dimensions
+                    deterministic_terms[d, i] = (a - 1) * momenta[d, i]
+                    stochastic_terms[d, i]    = noise_pref * ξ[d, i]
+                end
+            else
+                for d in 1:dimensions
+                    deterministic_terms[d, i] = 0.0
+                    stochastic_terms[d, i]    = kT * ξ[d, i]
+                end
             end
         end
     end
@@ -437,6 +471,8 @@ function kernel_set_to_fluid_velocity_cpu!(
         # --- Interpolate fluid velocity from (r, τ) field ---
         τ_now = step * Δt + t0
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, τ_now)
+        vmax = sqrt(1.0 - 1e-12)
+        v = clamp(v, -vmax, vmax)
 
         # --- Lorentz factor ---
         γ = 1.0 / sqrt(1.0 - v^2 + 1e-10)
