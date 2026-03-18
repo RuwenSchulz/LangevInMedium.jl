@@ -14,6 +14,8 @@ export kernel_save_snapshot_cpu!,
        kernel_set_to_fluid_velocity_cpu!
 
 using LinearAlgebra
+using ..Constants: fmGeV
+using ..Transport: eval_tau_n_spline
 
 # ============================================================================
 # Interpolation
@@ -111,7 +113,10 @@ function kernel_compute_all_forces_general_coords_cpu!(
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N, step, t0, DsT
+    dimensions, N, step, t0, DsT;
+    tau_Tmin::Float64,
+    tau_invdT::Float64,
+    tau_vals::AbstractVector{<:Real}
     )
     for i in 1:N
         # Compute particle momentum magnitude
@@ -126,13 +131,12 @@ function kernel_compute_all_forces_general_coords_cpu!(
         # Interpolate temperature from space-time field
         T = interpolate_2d_cpu(xgrid, tgrid, Tfield, abs(positions[2, i]), step * Δt + t0)
 
-        # Compute transport coefficients
-        # Here, DsT is interpreted as the dimensionless quantity D_s * T.
-        # (Einstein relation, non-relativistic approximation):
-        #   η_D = T^2 / (m * DsT),   κ = 2 T^3 / DsT
+        # Compute transport coefficients from splined τn(T) (main3 logic).
+        DsT_safe = DsT <= 0 ? 0.0 : DsT
         M = m
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
+        τn = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
+        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
+        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * T) / τn) : 0.0
         kL, kT = sqrt(κ), sqrt(κ)
 
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
@@ -172,7 +176,10 @@ function kernel_compute_all_forces_general_coords_cpu!(
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N, step, t0, DsT
+    dimensions, N, step, t0, DsT;
+    tau_Tmin::Float64,
+    tau_invdT::Float64,
+    tau_vals::AbstractVector{<:Real}
     )
     for i in 1:N
         # Compute particle momentum magnitude
@@ -187,10 +194,12 @@ function kernel_compute_all_forces_general_coords_cpu!(
         # Interpolate temperature from space-time field
         
 
-        # Compute transport coefficients (see docstring above)
+        # Compute transport coefficients from splined τn(T) (main3 logic).
+        DsT_safe = DsT <= 0 ? 0.0 : DsT
         M = m
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
+        τn = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
+        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
+        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * T) / τn) : 0.0
         kL, kT = sqrt(κ), sqrt(κ)
 
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT

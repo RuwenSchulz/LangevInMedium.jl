@@ -25,6 +25,7 @@ using StaticArrays, LinearAlgebra, JLD2, Dierckx
 include("constants.jl")         # Physical constants and parameters
 include("backends.jl")          # CPU/GPU backend markers
 include("utils.jl")             # Utilities: plotting, interpolation, etc.
+include("transport.jl")         # main3-style τn(T) + spline helper
 include("kernels_cpu.jl")       # CPU-side numerical integration kernels
 include("kernels_cpu_GC.jl")    # CPU-side numerical integration kernels for general coordinates
 include("simulate_cpu.jl")      # High-level CPU simulation loop
@@ -35,6 +36,7 @@ include("simulate.jl")          # Unified frontend with conditional GPU logic
 using .Constants
 using .Backends
 using .Utils
+using .Transport
 using .Simulate
 
 # Public API
@@ -43,4 +45,5 @@ export n_rt                            # Observable extraction (density vs r, t)
 export plot_n_rt_comparison_hydro_langevin  # Plotting helper
 export CPUBackend, GPUBackend, CPU_GCBackend, GPU_GCBackend          # Backend selectors
 export fmGeV, GevInvTofm  # Physical constants
+export tau_n_main3, build_tau_n_spline, eval_tau_n_spline
 end # module LangevInMedium

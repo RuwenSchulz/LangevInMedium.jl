@@ -3,6 +3,7 @@ module SimulateCPUGeneralCoords
 using ProgressMeter
 using ..KernelsCPU_GC
 using ..Utils
+using ..Transport
 
 export simulate_ensemble_bulk_general_coords_cpu
 
@@ -68,6 +69,16 @@ function simulate_ensemble_bulk_general_coords_cpu(
     norm_factors = sqrt.(sum(random_directions .^ 2, dims=1))
     random_directions ./= norm_factors
 
+    # === Precompute τn(T) spline (main3 logic) ===
+    tau_Tmin::Float64 = 0.0
+    tau_invdT::Float64 = 1.0
+    tau_vals = Float64[0.0, 0.0]
+    if DsT > 0.0
+        Tmin = max(float(minimum(TemperatureEvolution)), 0.0)
+        Tmax = max(float(maximum(TemperatureEvolution)), Tmin + eps(Float64))
+        tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
+    end
+
     # === Main Time Evolution ===
     @showprogress 10 "Running Langevin CPU simulation in Milne (τ,r)..." for step in 1:steps
         ξ .= randn(dimensions, N_particles)
@@ -84,7 +95,10 @@ function simulate_ensemble_bulk_general_coords_cpu(
             ηD_vals, kL_vals, kT_vals,
             ξ, deterministic_terms, stochastic_terms,
             Δt, m, random_directions,
-            dimensions, N_particles, step, initial_time, DsT)
+            dimensions, N_particles, step, initial_time, DsT;
+            tau_Tmin = tau_Tmin,
+            tau_invdT = tau_invdT,
+            tau_vals = tau_vals)
 
         # 3. Langevin update of momenta
         kernel_update_momenta_LRF_general_coords_cpu!(

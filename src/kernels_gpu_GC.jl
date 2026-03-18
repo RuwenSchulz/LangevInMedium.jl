@@ -2,6 +2,7 @@ module KernelsGPU_GC
 
 using CUDA
 using StaticArrays
+using ..Constants: fmGeV
 
 # === Exported Symbols ===
 export 
@@ -17,6 +18,24 @@ export
     kernel_save_snapshot_gpu!,
     kernel_save_positions_gpu!,
     interpolate_2d_cuda
+
+# ---------------------------------------------------------------------------
+# τn(T) spline evaluation (uniform-grid linear interpolation)
+# ---------------------------------------------------------------------------
+@inline function _eval_tau_n_spline_cuda(T::Float64, Tmin::Float64, invdT::Float64, tau_vals)
+    n = length(tau_vals)
+    n < 2 && return Float64(tau_vals[1])
+    if !isfinite(T)
+        return 0.0
+    end
+    u = (T - Tmin) * invdT
+    i = Int(floor(u)) + 1
+    i = clamp(i, 1, n - 1)
+    t = u - (i - 1)
+    y0 = Float64(tau_vals[i])
+    y1 = Float64(tau_vals[i + 1])
+    return (1.0 - t) * y0 + t * y1
+end
 
 # ============================================================================
 # GPU Utility Function: Bilinear Interpolation
@@ -186,7 +205,8 @@ Compute Langevin drag and stochastic forces in the local rest frame.
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N_particles, steps, initial_time,DsT
+    dimensions, N_particles, steps, initial_time, DsT,
+    tau_Tmin::Float64, tau_invdT::Float64, tau_vals
 )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -205,11 +225,11 @@ Compute Langevin drag and stochastic forces in the local rest frame.
         # Interpolate background temperature
         T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, abs(positions[1, i]), steps * Δt + initial_time)
 
-        # Transport coefficients
-        #DsT = 0.2 * T
-        M = 1.5
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
+        # Transport coefficients (main3 τn spline):
+        M = m
+        τn = (DsT > 0.0) ? _eval_tau_n_spline_cuda(Float64(T), tau_Tmin, tau_invdT, tau_vals) : 0.0
+        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
+        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * Float64(T)) / τn) : 0.0
         kL = sqrt(κ)
         kT = sqrt(κ)
 
@@ -238,8 +258,9 @@ end
     ηD_vals, kL_vals, kT_vals,
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
-    dimensions, N_particles, steps, initial_time
-    , DsT
+    dimensions, N_particles, steps, initial_time,
+    DsT,
+    tau_Tmin::Float64, tau_invdT::Float64, tau_vals
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -257,11 +278,11 @@ end
         # Interpolate background temperature
         T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, abs(positions[2, i]), steps * Δt + initial_time)
 
-        # Transport coefficients
-        # DsT is interpreted as the dimensionless quantity D_s * T.
+        # Transport coefficients (main3 τn spline):
         M = m
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
+        τn = (DsT > 0.0) ? _eval_tau_n_spline_cuda(Float64(T), tau_Tmin, tau_invdT, tau_vals) : 0.0
+        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
+        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * Float64(T)) / τn) : 0.0
         kL = sqrt(κ)
         kT = sqrt(κ)
 

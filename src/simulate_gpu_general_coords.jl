@@ -5,6 +5,7 @@ using ProgressMeter
 using ..KernelsGPU_GC
 using ..Utils
 using CUDA
+using ..Transport
 
 # === Exports ===
 export simulate_ensemble_bulk_gpu_general_coords
@@ -80,6 +81,17 @@ function simulate_ensemble_bulk_gpu_general_coords(
         TemperatureEvolution = CuArray(TemperatureEvolutionn)
         VelocityEvolution = CuArray(VelocityEvolutionn)
 
+        # === Precompute τn(T) spline (main3 logic) on CPU and upload to GPU ===
+        tau_Tmin::Float64 = 0.0
+        tau_invdT::Float64 = 1.0
+        tau_vals = Float64[0.0, 0.0]
+        if DsT > 0.0
+            Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
+            Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
+            tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
+        end
+        tau_vals_d = CuArray(tau_vals)
+
         # === Sample initial particle states from hydrodynamic Boltzmann distribution ===
         position, moment = sample_initial_particles_milne!(
         m, dimensions, N_particles,initial_time, T_profile_MIS, ur_profile_MIS, mu_profile_MIS,(0., maximum(xgrid)), 200)
@@ -131,7 +143,8 @@ function simulate_ensemble_bulk_gpu_general_coords(
                 p_mags, p_units, ηD_vals, kL_vals, kT_vals,
                 ξ, deterministic_terms, stochastic_terms,
                 Δt, m, random_directions, dimensions, N_particles,
-                step, initial_time, DsT)
+                step, initial_time, DsT,
+                tau_Tmin, tau_invdT, tau_vals_d)
 
             # Step 3: Update momenta in LRF
             @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_general_coords_gpu!(

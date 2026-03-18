@@ -2,6 +2,7 @@ module KernelsGPU
 
 using CUDA
 using StaticArrays
+using ..Constants: fmGeV
 
 # === Exported Symbols ===
 export 
@@ -15,6 +16,24 @@ export
     kernel_save_momenta_gpu!,
     kernel_save_positions_gpu!,
     interpolate_2d_cuda
+
+# ---------------------------------------------------------------------------
+# τn(T) spline evaluation (uniform-grid linear interpolation)
+# ---------------------------------------------------------------------------
+@inline function _eval_tau_n_spline_cuda(T::Float64, Tmin::Float64, invdT::Float64, tau_vals)
+    n = length(tau_vals)
+    n < 2 && return Float64(tau_vals[1])
+    if !isfinite(T)
+        return 0.0
+    end
+    u = (T - Tmin) * invdT
+    i = Int(floor(u)) + 1
+    i = clamp(i, 1, n - 1)
+    t = u - (i - 1)
+    y0 = Float64(tau_vals[i])
+    y1 = Float64(tau_vals[i + 1])
+    return (1.0 - t) * y0 + t * y1
+end
 
 # ============================================================================
 # GPU Utility Function: Bilinear Interpolation
@@ -193,6 +212,7 @@ end
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N_particles, steps, initial_time, DsT,
+    tau_Tmin::Float64, tau_invdT::Float64, tau_vals,
     radial_mode::Bool
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -208,8 +228,10 @@ end
         T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, r, steps * Δt + initial_time)
 
         # --- transport coefficients ---
-        ηD = T^2 / (M * DsT)
-        κ  = 2 * T^3 / DsT
+        # Enforce main3-style τn(T) via a precomputed spline in fm.
+        τn = (DsT > 0.0) ? _eval_tau_n_spline_cuda(Float64(T), tau_Tmin, tau_invdT, tau_vals) : 0.0
+        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
+        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * Float64(T)) / τn) : 0.0
         kL = sqrt(κ)
         kT = sqrt(κ)
 
@@ -316,7 +338,8 @@ end
 
             if position_diffusion
                 T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r_safe, steps * Δt + initial_time)
-                D = DsT / T
+                # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm.
+                D = (DsT / T) / fmGeV
                 if D > 0.0
                     ξ = random_normals[1, idx]
                     dr += (D / r_safe) * Δt + CUDA.sqrt(2.0 * D * Δt) * ξ
@@ -347,7 +370,8 @@ end
                 end
                 r = CUDA.sqrt(r2)
                 T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
-                D = DsT / T
+                # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm.
+                D = (DsT / T) / fmGeV
                 if D > 0.0
                     σ = CUDA.sqrt(2.0 * D * Δt)
                     for d in 1:dimensions

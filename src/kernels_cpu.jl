@@ -1,6 +1,8 @@
 module KernelsCPU
 
 using LinearAlgebra
+using ..Constants: fmGeV
+using ..Transport: eval_tau_n_spline
 
 # === Exported Symbols ===
 export interpolate_2d_cpu,
@@ -190,6 +192,9 @@ function kernel_compute_all_forces_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0, DsT;
+    tau_Tmin::Float64,
+    tau_invdT::Float64,
+    tau_vals::AbstractVector{<:Real},
     radial_mode::Bool = false
  )
     M = m  # heavy-quark mass (can be parameterized)
@@ -205,8 +210,15 @@ function kernel_compute_all_forces_cpu!(
         DsT_safe = DsT <= 0 ? 0.0 : DsT
 
         # --- transport coefficients ---
-        ηD = DsT_safe == 0.0 ? 0.0 : (T^2 / (M * DsT_safe))
-        κ  = DsT_safe == 0.0 ? 0.0 : (2 * T^3 / DsT_safe)
+        # We enforce Langevin to use the same τn(T,m,DsT) logic as FiVoHydro.jl/main3.jl.
+        # τn is provided as a precomputed spline in fm.
+        τn = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
+
+        # Define drag/diffusion consistently via τn:
+        #   ηD = 1/τn  [1/fm]
+        #   κ  = 2 m T / τn  [GeV^2/fm]
+        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
+        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * T) / τn) : 0.0
         kL = sqrt(κ)
         kT = sqrt(κ)
 
@@ -335,6 +347,7 @@ function kernel_update_positions_cpu!(
     dimensions::Int = 2,
     radial_mode::Bool = false,
     position_diffusion::Bool = false,
+    reflecting_boundary::Bool = false,
     )
     # Grid-based axis cutoff for the geometric drift term D/r.
     # Using machine eps() here can create enormous dr near r=0.
@@ -343,6 +356,8 @@ function kernel_update_positions_cpu!(
     else
         1e-6
     end
+
+    r_max = length(xgrid) >= 1 ? float(last(xgrid)) : 0.0
     @inbounds for i in 1:N
         # Compute energy
         E2 = m^2
@@ -367,7 +382,8 @@ function kernel_update_positions_cpu!(
             # double-counts diffusion compared to hydro.
             if position_diffusion
                 T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_safe, step * Δt + t0)
-                D = DsT / T
+                # D_s = DsT/T is in GeV^-1; convert to fm for x-update with Δt in fm.
+                D = (DsT / max(float(T), eps())) / fmGeV
                 if D > 0
                     ξ = randn()
                     dr += (D / r_safe) * Δt + sqrt(2 * D * Δt) * ξ
@@ -379,6 +395,15 @@ function kernel_update_positions_cpu!(
             if r_new < 0
                 r_new = -r_new
                 momenta[1, i] = -momenta[1, i]
+            end
+
+            if reflecting_boundary && r_max > 0.0 && r_new > r_max
+                r_new = 2 * r_max - r_new
+                momenta[1, i] = -momenta[1, i]
+                if r_new < 0.0
+                    r_new = -r_new
+                    momenta[1, i] = -momenta[1, i]
+                end
             end
 
             positions[1, i] = r_new
@@ -397,11 +422,39 @@ function kernel_update_positions_cpu!(
                 end
                 r_now = sqrt(r2)
                 T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_now, step * Δt + t0)
-                D = DsT / T
+                # D_s = DsT/T is in GeV^-1; convert to fm for x-update with Δt in fm.
+                D = (DsT / max(float(T), eps())) / fmGeV
                 if D > 0
                     σ = sqrt(2 * D * Δt)
                     for d in 1:dimensions
                         positions[d, i] += σ * randn()
+                    end
+                end
+            end
+
+            if reflecting_boundary && r_max > 0.0
+                r2 = 0.0
+                for d in 1:dimensions
+                    r2 += positions[d, i]^2
+                end
+                r_now = sqrt(r2)
+                if r_now > r_max
+                    # Unit radial vector (before reflection)
+                    invr = 1.0 / max(r_now, r_axis_eps)
+
+                    # Reflect momentum: flip radial component, keep tangential.
+                    ppar = 0.0
+                    for d in 1:dimensions
+                        ppar += momenta[d, i] * (positions[d, i] * invr)
+                    end
+                    for d in 1:dimensions
+                        momenta[d, i] -= 2 * ppar * (positions[d, i] * invr)
+                    end
+
+                    # Reflect position across the circle r=r_max.
+                    scale = (2 * r_max - r_now) * invr
+                    for d in 1:dimensions
+                        positions[d, i] *= scale
                     end
                 end
             end

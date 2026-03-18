@@ -5,6 +5,7 @@ using ProgressMeter
 using ..KernelsGPU
 using ..Utils
 using CUDA
+using ..Transport
 
 # === Exports ===
 export simulate_ensemble_bulk_gpu
@@ -54,6 +55,17 @@ function simulate_ensemble_bulk_gpu(
         tgrid = CuArray(ttgrid)
         TemperatureEvolution = CuArray(TemperatureEvolutionn)
         VelocityEvolution = CuArray(VelocityEvolutionn)
+
+        # === Precompute τn(T) spline (main3 logic) on CPU and upload to GPU ===
+        tau_Tmin::Float64 = 0.0
+        tau_invdT::Float64 = 1.0
+        tau_vals = Float64[0.0, 0.0]
+        if momentum_langevin && DsT > 0.0
+            Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
+            Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
+            tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
+        end
+        tau_vals_d = CuArray(tau_vals)
         
         x_matrix, p_matrix = sample_particles_from_FONLL(r_grid_Langevin,p_grid_Langevin, heavy_quark_density, N_particles;
             cartesian_spatial_sampling = (dimensions >= 2))
@@ -158,7 +170,9 @@ function simulate_ensemble_bulk_gpu(
                     p_mags, p_units, ηD_vals, kL_vals, kT_vals,
                     ξ_momentum, deterministic_terms, stochastic_terms,
                     Δt, m, random_directions, dimensions, N_particles,
-                    step, initial_time,DsT,radial_mode)
+                    step, initial_time, DsT,
+                    tau_Tmin, tau_invdT, tau_vals_d,
+                    radial_mode)
 
                 # Step 3: Update momenta in LRF
                 @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(

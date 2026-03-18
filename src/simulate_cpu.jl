@@ -4,6 +4,7 @@ module SimulateCPU
 using ProgressMeter
 using ..KernelsCPU
 using ..Utils
+using ..Transport
 
 # === Exported Symbols ===
 export simulate_ensemble_bulk_cpu
@@ -22,7 +23,8 @@ function simulate_ensemble_bulk_cpu(
     cartesian_spatial_sampling::Union{Nothing,Bool} = nothing,
     antithetic_momenta::Bool = false,
     position_diffusion::Bool = false,
-    momentum_langevin::Bool = true)
+    momentum_langevin::Bool = true,
+    reflecting_boundary::Bool = false)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
@@ -32,7 +34,11 @@ function simulate_ensemble_bulk_cpu(
 
     xgrid, tgrid = SpaceTimeGrid
 
-    do_cartesian_sampling = cartesian_spatial_sampling === nothing ? (dimensions >= 2) : cartesian_spatial_sampling
+    # For `dimensions == 1` we still evolve a *radial* degree of freedom in the
+    # transverse plane. Sampling directly in polar (r,φ) on the grid can create
+    # small-r artifacts; instead we default to Cartesian (x,y) sampling and then
+    # collapse to r = √(x²+y²) and p_r = p·ê_r.
+    do_cartesian_sampling = cartesian_spatial_sampling === nothing ? (dimensions == 1 || dimensions >= 2) : cartesian_spatial_sampling
 
     # Initial sampling: optionally use antithetic momentum pairs (p and -p) at
     # the same position in the local rest frame. This is a pure variance-reduction
@@ -142,6 +148,17 @@ function simulate_ensemble_bulk_cpu(
     norm_factors = sqrt.(sum(random_directions .^ 2, dims=1))
     random_directions ./= norm_factors
 
+    # === Precompute τn(T) spline (main3 logic) ===
+    # Only needed when we actually run momentum Langevin with DsT > 0.
+    tau_Tmin::Float64 = 0.0
+    tau_invdT::Float64 = 1.0
+    tau_vals = Float64[0.0, 0.0]
+    if momentum_langevin && DsT > 0.0
+        Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
+        Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
+        tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
+    end
+
 
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
@@ -166,6 +183,9 @@ function simulate_ensemble_bulk_cpu(
                 ξ, deterministic_terms, stochastic_terms,
                 Δt, m, random_directions,
                 dimensions, N_particles, step, initial_time,DsT,
+                tau_Tmin = tau_Tmin,
+                tau_invdT = tau_invdT,
+                tau_vals = tau_vals,
                 radial_mode = radial_mode)
     
             # 3. Update momenta
@@ -185,7 +205,8 @@ function simulate_ensemble_bulk_cpu(
                     xgrid,tgrid, TemperatureEvolutionn,DsT;
                     dimensions,
                     radial_mode = radial_mode,
-                    position_diffusion = position_diffusion
+                    position_diffusion = position_diffusion,
+                    reflecting_boundary = reflecting_boundary
                 )
 
 
