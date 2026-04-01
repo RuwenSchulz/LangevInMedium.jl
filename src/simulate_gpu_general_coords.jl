@@ -3,9 +3,9 @@ module SimulateGPUGeneralCoords
 # === Imports ===
 using ProgressMeter
 using ..KernelsGPU_GC
-using ..Utils
+using ...Utils
 using CUDA
-using ..Transport
+using ...Transport
 
 # === Exports ===
 export simulate_ensemble_bulk_gpu_general_coords

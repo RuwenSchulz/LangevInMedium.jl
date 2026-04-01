@@ -2,7 +2,7 @@ module KernelsGPU_GC
 
 using CUDA
 using StaticArrays
-using ..Constants: fmGeV
+using ...Constants: fmGeV
 
 # === Exported Symbols ===
 export 

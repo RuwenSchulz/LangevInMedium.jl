@@ -3,9 +3,9 @@ module SimulateGPU
 # === Imports ===
 using ProgressMeter
 using ..KernelsGPU
-using ..Utils
+using ...Utils
 using CUDA
-using ..Transport
+using ...Transport
 
 # === Exports ===
 export simulate_ensemble_bulk_gpu
