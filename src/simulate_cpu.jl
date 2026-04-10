@@ -19,6 +19,10 @@ function simulate_ensemble_bulk_cpu(
     save_interval::Float64 = 0.1,
     m::Float64 = 1.0,
     DsT::Float64 = 0.2,
+    DsT_linear::Bool = false,
+    DsT_slope::Float64 = 1.765,
+    DsT_offset::Float64 = -0.159,
+    Tfo::Float64 = 0.156,
     dimensions::Int = 3,
     cartesian_spatial_sampling::Union{Nothing,Bool} = nothing,
     antithetic_momenta::Bool = false,
@@ -156,7 +160,12 @@ function simulate_ensemble_bulk_cpu(
     if momentum_langevin && DsT > 0.0
         Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
         Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
-        tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
+        tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT;
+            Tmin = Tmin, Tmax = Tmax, nT = 1024,
+            DsT_linear = DsT_linear,
+            DsT_slope = DsT_slope,
+            DsT_offset = DsT_offset,
+            Tfo = Tfo)
     end
 
 

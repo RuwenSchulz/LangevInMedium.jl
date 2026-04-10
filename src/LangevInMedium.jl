@@ -45,5 +45,5 @@ export n_rt                            # Observable extraction (density vs r, t)
 export plot_n_rt_comparison_hydro_langevin  # Plotting helper
 export CPUBackend, GPUBackend, CPU_GCBackend, GPU_GCBackend          # Backend selectors
 export fmGeV, GevInvTofm  # Physical constants
-export tau_n_main3, build_tau_n_spline, eval_tau_n_spline
+export tau_n_main3, build_tau_n_spline, eval_tau_n_spline, effective_DsT
 end # module LangevInMedium

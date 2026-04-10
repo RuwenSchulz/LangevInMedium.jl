@@ -3,7 +3,7 @@ module Transport
 using ..Constants: fmGeV
 using Bessels
 
-export tau_n_main3, build_tau_n_spline, eval_tau_n_spline
+export tau_n_main3, build_tau_n_spline, eval_tau_n_spline, effective_DsT
 
 const _TINY = 1e-300
 
@@ -58,6 +58,14 @@ Inputs:
     return τ_GeVinv / fmGeV
 end
 
+@inline function effective_DsT(T::Real, DsT::Real; DsT_linear::Bool=false, DsT_slope::Real=1.765, DsT_offset::Real=-0.159, Tfo::Real=0.156)::Float64
+    if !DsT_linear
+        return Float64(DsT)
+    end
+    Tf = max(Float64(T), Float64(Tfo))
+    return Float64(DsT_slope) * Tf + Float64(DsT_offset)
+end
+
 """
     build_tau_n_spline(m, DsT; Tmin, Tmax, nT) -> (Tmin, invdT, tau_vals)
 
@@ -77,6 +85,10 @@ function build_tau_n_spline(
     Tmin::Real,
     Tmax::Real,
     nT::Integer = 400,
+    DsT_linear::Bool=false,
+    DsT_slope::Real=1.765,
+    DsT_offset::Real=-0.159,
+    Tfo::Real=0.156,
 )
     Tmin_f = Float64(Tmin)
     Tmax_f = Float64(Tmax)
@@ -91,7 +103,8 @@ function build_tau_n_spline(
     tau_vals = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
         Ti = Tmin_f + (i - 1) * dT
-        tau_vals[i] = tau_n_main3(Ti, m, DsT)
+        DsT_eff = effective_DsT(Ti, DsT; DsT_linear=DsT_linear, DsT_slope=DsT_slope, DsT_offset=DsT_offset, Tfo=Tfo)
+        tau_vals[i] = tau_n_main3(Ti, m, DsT_eff)
     end
     return Tmin_f, invdT, tau_vals
 end

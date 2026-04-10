@@ -313,10 +313,12 @@ end
     dimensions::Int,
     radial_mode::Bool,
     position_diffusion::Bool,
+    reflecting_boundary::Bool,
     random_normals  # pre-generated random numbers for diffusion
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
+        r_max = length(xgrid) >= 1 ? xgrid[end] : 0.0
         # Compute energy
         E2 = m * m
         for d in 1:dimensions
@@ -353,6 +355,15 @@ end
                 @inbounds momenta[1, idx] = -momenta[1, idx]
             end
 
+            if reflecting_boundary && r_max > 0.0 && r_new > r_max
+                r_new = 2.0 * r_max - r_new
+                @inbounds momenta[1, idx] = -momenta[1, idx]
+                if r_new < 0.0
+                    r_new = -r_new
+                    @inbounds momenta[1, idx] = -momenta[1, idx]
+                end
+            end
+
             @inbounds positions[1, idx] = r_new
 
         else
@@ -376,6 +387,30 @@ end
                     σ = CUDA.sqrt(2.0 * D * Δt)
                     for d in 1:dimensions
                         @inbounds positions[d, idx] += σ * random_normals[d, idx]
+                    end
+                end
+            end
+
+            if reflecting_boundary && r_max > 0.0
+                r2 = 0.0
+                for d in 1:dimensions
+                    r2 += positions[d, idx]^2
+                end
+                r_now = CUDA.sqrt(r2)
+                if r_now > r_max
+                    invr = 1.0 / CUDA.max(r_now, r_axis_eps)
+
+                    ppar = 0.0
+                    for d in 1:dimensions
+                        ppar += momenta[d, idx] * (positions[d, idx] * invr)
+                    end
+                    for d in 1:dimensions
+                        @inbounds momenta[d, idx] -= 2.0 * ppar * (positions[d, idx] * invr)
+                    end
+
+                    scale = (2.0 * r_max - r_now) * invr
+                    for d in 1:dimensions
+                        @inbounds positions[d, idx] *= scale
                     end
                 end
             end
