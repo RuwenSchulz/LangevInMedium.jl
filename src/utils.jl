@@ -1,0 +1,466 @@
+module Utils
+
+# === Imports ===
+using StaticArrays
+using Plots
+using Bessels
+using Interpolations
+using Statistics
+using LinearAlgebra
+using Distributions
+using DataStructures
+using LaTeXStrings
+using StatsBase: Histogram, fit
+using Statistics: mean, std
+using Printf
+using QuadGK
+
+using ..Constants
+
+# === Exports ===
+export sample_initial_particles_from_pdf!
+export sample_initial_particles_milne!
+export sample_initial_particles_at_origin!
+export sample_initial_particles_at_origin_no_position!
+export compute_MIS_distribution
+export sample_particles_from_density
+export sample_particles_from_FONLL
+
+using Interpolations, QuadGK, Random
+
+
+function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples::Int;
+                                     n_cdf_points=500,
+                                     cartesian_spatial_sampling::Bool=false)
+
+    # 1. Normalize full PDF: P(r,p) ∝ r * p * f(r,p)
+    # Expect f_HQ_init_FONLL to be indexed as f[p_index, r_index] (Np × Nr).
+    # If user passes Nr × Np, transpose it for robustness.
+    Nr = length(r_grid)
+    Np = length(p_grid)
+    f = f_HQ_init_FONLL
+    if !(size(f, 1) == Np && size(f, 2) == Nr)
+        if size(f, 1) == Nr && size(f, 2) == Np
+            f = permutedims(f)
+        else
+            error("sample_particles_from_FONLL: f_HQ_init_FONLL has size $(size(f)), expected ($Np, $Nr) (p×r) or ($Nr, $Np) (r×p).")
+        end
+    end
+
+    dr = mean(diff(collect(r_grid)))
+    dp = mean(diff(collect(p_grid)))
+
+    # --- Precompute conditional CDFs for p|r (needed by both sampling modes) ---
+    # Build P(p|r) ∝ p * f(r,p) for each r
+    P_p_given_r = @. p_grid .* f  # shape (Np, Nr), unnormalized
+    inverse_cdf_p_given_r = Vector{Any}(undef, Nr)
+    for i in 1:Nr
+        p_pdf = P_p_given_r[:, i]
+        if sum(p_pdf) > 0
+            cdf_p = cumsum(p_pdf) * dp
+            cdf_p[1] = 0.0
+            for k in 2:length(cdf_p)
+                cdf_p[k] = max(cdf_p[k], cdf_p[k-1] + eps(Float64))
+            end
+            cdf_p ./= cdf_p[end]
+            cdf_p[end] = 1.0
+            inverse_cdf_p_given_r[i] = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Flat())
+        else
+            inverse_cdf_p_given_r[i] = _ -> 0.0
+        end
+    end
+
+    x_matrix = zeros(2, N_samples)
+    p_matrix = zeros(2, N_samples)
+
+    if cartesian_spatial_sampling
+        # =====================================================================
+        # Cartesian (x,y) rejection sampling — no grid artifacts at r→0
+        # =====================================================================
+        # P(x,y) ∝ n_spatial(√(x²+y²))  (no geometric r factor in Cartesian)
+
+        rmax = Float64(last(r_grid))
+
+        # Marginal spatial density on radial grid: n_spatial(r) = ∫ p f(r,p) dp
+        f_spatial = vec(sum(P_p_given_r, dims=1)) * dp   # length Nr
+
+        # Interpolate onto arbitrary r
+        r_grid_vec = collect(Float64, r_grid)
+        f_spatial_interp = LinearInterpolation(r_grid_vec, f_spatial, extrapolation_bc=0.0)
+
+        # Envelope for rejection: maximum of n_spatial(r) over the grid
+        f_max = maximum(f_spatial) + eps()
+
+        n_accepted = 0
+        n_trials   = 0
+        @info "Cartesian rejection sampling: rmax=$(rmax) fm, f_max=$(f_max)"
+
+        while n_accepted < N_samples
+            n_trials += 1
+            # Uniform proposal in the square [-rmax, rmax]²
+            x = rmax * (2*rand() - 1)
+            y = rmax * (2*rand() - 1)
+            r = sqrt(x^2 + y^2)
+
+            # Reject points outside the disk or by density ratio
+            if r > rmax
+                continue
+            end
+            if rand() * f_max > f_spatial_interp(r)
+                continue
+            end
+
+            n_accepted += 1
+            x_matrix[:, n_accepted] .= (x, y)
+
+            # --- Sample p|r using the conditional CDF ---
+            r = clamp(r, first(r_grid), last(r_grid))
+            j = searchsortedlast(r_grid_vec, r)
+            j = clamp(j, 1, Nr)
+            p_mag = inverse_cdf_p_given_r[j](rand())
+            φp = 2π * rand()
+            p_matrix[:, n_accepted] .= (p_mag * cos(φp), p_mag * sin(φp))
+        end
+
+        @info "Rejection sampling done: $(n_accepted) accepted / $(n_trials) trials " *
+              "(efficiency = $(round(100*n_accepted/n_trials; digits=1))%)"
+
+    else
+        # =====================================================================
+        # Original polar (r,φ) spatial sampling
+        # =====================================================================
+        P_rp = @. r_grid' .* p_grid .* f  # shape (Np, Nr)
+
+        # total normalization
+        Z = sum(P_rp) * dr * dp
+        if Z == 0
+            error("Distribution normalization is zero.")
+        end
+        P_rp ./= Z
+
+        # Marginal PDF for r
+        P_r = sum(P_rp, dims=1)[:] * dp  # integrate over p
+        cdf_r = cumsum(P_r) * dr
+        if !isempty(cdf_r)
+            cdf_r[1] = 0.0
+            for i in 2:length(cdf_r)
+                cdf_r[i] = max(cdf_r[i], cdf_r[i-1] + eps(Float64))
+            end
+            cdf_r ./= cdf_r[end]
+            cdf_r[end] = 1.0
+        end
+        inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Flat())
+
+        for i in 1:N_samples
+            # Sample r, φ
+            r = inverse_cdf_r(rand())
+            r = clamp(r, first(r_grid), last(r_grid))
+            φ = 2π * rand()
+            x_matrix[:, i] .= (r * cos(φ), r * sin(φ))
+
+            # Sample p|r, φ_p
+            j = searchsortedlast(r_grid, r)
+            j = clamp(j, 1, length(r_grid))
+            p_mag = inverse_cdf_p_given_r[j](rand())
+            φp = 2π * rand()
+            p_matrix[:, i] .= (p_mag * cos(φp), p_mag * sin(φp))
+        end
+    end
+
+    return x_matrix, p_matrix
+end
+
+
+function sample_particles_from_density(r_values, n_rt, N_samples::Int, T_interp,nur_interp, fugacity_interp;
+                                       n_cdf_points=1000, rmax=10.0, t0=0.0,
+                                       mode::Symbol = :density, m=1.5)
+
+    # helper: sample |p| from relativistic 2D MB at local T
+    sample_p_mag = function (T_local)
+        # simple robust cutoff (same as your MB2D branch)
+        pmax = 15 * max(T_local, eps())
+        p_grid = range(0, pmax, length=800)
+        dp = step(p_grid)
+        # f(p) ∝ p * exp(-sqrt(p^2 + m^2)/T)
+        f_p = @. p_grid * exp(-sqrt(p_grid^2 + m^2)/max(T_local, eps()))
+        Z = sum(f_p) * dp
+        if Z == 0.0
+            return 0.0
+        end
+        f_p ./= Z
+        cdf_p = cumsum(f_p) * dp
+        cdf_p[end] = 1.0
+        inverse_cdf_p = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Line())
+        return inverse_cdf_p(rand())
+    end
+
+    if mode == :density
+        # ------------------------------
+        # 1) Spatial sampling from user-supplied n_rt(r)
+        # ------------------------------
+        interp = LinearInterpolation(r_values, n_rt, extrapolation_bc=0.0)
+        norm, _ = quadgk(r -> r * interp(r), 0, rmax)
+
+        # Precompute CDF for r
+        r_cdf = range(0, rmax, length=n_cdf_points)
+        cdf_values = zeros(n_cdf_points)
+        for i in 2:n_cdf_points
+            result, _ = quadgk(r′ -> r′ * interp(r′) / norm, 0, r_cdf[i])
+            cdf_values[i] = result
+        end
+
+        # Enforce monotonicity
+        for i in 2:n_cdf_points
+            if cdf_values[i] <= cdf_values[i-1]
+                cdf_values[i] = cdf_values[i-1] + 1e-9
+            end
+        end
+        cdf_values[end] = 1.0
+        inverse_cdf = LinearInterpolation(cdf_values, collect(r_cdf), extrapolation_bc=Line())
+
+     
+
+        # ------------------------------
+        # 2) Sample positions and relativistic MB momenta
+        # ------------------------------
+        x_matrix = zeros(2, N_samples)
+        p_matrix = zeros(2, N_samples)
+
+        for i in 1:N_samples
+            # position from n_rt
+            r = inverse_cdf(rand())
+            φ = 2π * rand()
+            x_matrix[1,i] = r * cos(φ)
+            x_matrix[2,i] = r * sin(φ)
+
+            # momentum from SAME relativistic MB as MB2D
+            T_local = T_interp(r, t0)
+            p_mag = sample_p_mag(T_local)
+            φp = 2π * rand()
+            p_matrix[1,i] = p_mag * cos(φp)
+            p_matrix[2,i] = p_mag * sin(φp)
+        end
+
+    elseif mode == :MB2D
+        # ------------------------------
+        # 1) Spatial sampling from thermal MB radial density
+        #     n_MB(r) ∝ r * ∫ p exp(-sqrt(p^2+m^2)/T(r)) dp
+        # ------------------------------
+        n_MB = zeros(length(r_values))
+        for (j, r) in enumerate(r_values)
+            T_local = T_interp(r, t0)
+            pmax = 15 * max(T_local, eps())
+            p_grid = range(0, pmax, length=800)
+            dp = step(p_grid)
+            f_p = @. p_grid * exp(-sqrt(p_grid^2 + m^2)/max(T_local, eps()))
+            n_MB[j] = sum(f_p) * dp * r  # include 2D Jacobian r
+        end
+
+        # Normalize and build CDF over r_values
+        total = sum(n_MB)
+        if total == 0.0
+            error("Thermal radial weights are zero; check T_interp and parameters.")
+        end
+        n_MB ./= total
+        cdf_values = cumsum(n_MB)
+        cdf_values ./= cdf_values[end]
+        inverse_cdf = LinearInterpolation(cdf_values, collect(r_values), extrapolation_bc=Line())
+
+        # ------------------------------
+        # 2) Sample positions and SAME relativistic MB momenta
+        # ------------------------------
+        x_matrix = zeros(2, N_samples)
+        p_matrix = zeros(2, N_samples)
+
+        for i in 1:N_samples
+            # position from thermal n_MB(r)
+            r = inverse_cdf(rand())
+            φ = 2π * rand()
+            x_matrix[1,i] = r * cos(φ)
+            x_matrix[2,i] = r * sin(φ)
+
+            # momentum from SAME relativistic MB
+            T_local = T_interp(r, t0)
+            p_mag = sample_p_mag(T_local)
+            φp = 2π * rand()
+            p_matrix[1,i] = p_mag * cos(φp)
+            p_matrix[2,i] = p_mag * sin(φp)
+        end
+
+    else
+        error("Invalid mode. Use :density or :MB2D")
+    end
+
+    return x_matrix, p_matrix
+end
+
+
+
+function sample_initial_particles_from_pdf!(
+    m, dim, N_particles,
+    t, T_profile, ur_profile, mu_profile,
+    x_range::Tuple{Float64, Float64}, nbins::Int    
+    )
+    positions = zeros(dim, N_particles)
+    momenta = zeros(dim, N_particles)
+
+    # Discretize radial domain
+    x_edges = range(x_range[1], x_range[2], length=nbins + 1)
+    dx = step(x_edges)
+    x_centers = (x_edges[1:end-1] .+ x_edges[2:end]) ./ 2
+
+    # Compute normalized PDF over radial positions
+    T_vals  = T_profile.(x_centers, t)
+    ur_vals = ur_profile.(x_centers, t)
+    mu_vals = mu_profile.(x_centers, t)
+    γ_vals  = sqrt.(1 .+ ur_vals .^ 2)
+
+    n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
+    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  
+    # Compute unnormalized PDF
+    #pdf_vals = n_boltz .* x_centers         # Include 2D volume element (r * dr)
+    max_pdf = maximum(pdf_vals)             # For rejection threshold
+
+    # Rejection sampling
+    range_sampler = Uniform(x_range[1], x_range[2])
+    sampled_r = Float64[]
+
+    while length(sampled_r) < N_particles
+        r_try = rand(range_sampler)
+        idx = searchsortedfirst(x_centers, r_try)
+        p = idx <= length(pdf_vals) ? pdf_vals[idx] : 0.0
+        if rand() < p / max_pdf
+            push!(sampled_r, r_try)
+        end
+    end
+
+    # Assign positions and thermal momenta
+    for i in 1:N_particles
+        r = sampled_r[i]
+        T = T_profile(r, t)
+        σ = sqrt(m * T)
+        positions[:, i] .= r                  # Uniform radial position
+        momenta[:, i] .= abs.(σ .* randn(dim))      # Gaussian-distributed thermal momentum
+    end
+
+    return positions, momenta
+end
+
+function sample_initial_particles_milne!(
+    m, dim::Int, N_particles::Int,
+    τ::Float64, T_profile, ur_profile, mu_profile, x_range::Tuple{Float64, Float64}, nbins::Int
+    )
+    @assert dim == 2 "Milne sampling requires dim = 2 (τ, r)"
+    positions = zeros(dim, N_particles)
+    momenta = zeros(dim, N_particles)
+
+    # Discretize radial domain
+    x_edges = range(x_range[1], x_range[2], length=nbins + 1)
+    dx = step(x_edges)
+    x_centers = (x_edges[1:end-1] .+ x_edges[2:end]) ./ 2
+
+    # Compute normalized PDF over radial positions
+    T_vals  = T_profile.(x_centers, τ)
+    ur_vals = ur_profile.(x_centers, τ)
+    mu_vals = mu_profile.(x_centers, τ)
+    γ_vals  = sqrt.(1 .+ ur_vals .^ 2)
+
+    n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
+    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  
+    # Compute unnormalized PDF
+    #pdf_vals = n_boltz .* x_centers         # Include 2D volume element (r * dr)
+    max_pdf = maximum(pdf_vals)             # For rejection threshold
+
+    # Rejection sampling
+    range_sampler = Uniform(x_range[1], x_range[2])
+    sampled_r = Float64[]
+
+    while length(sampled_r) < N_particles
+        r_try = rand(range_sampler)
+        idx = searchsortedfirst(x_centers, r_try)
+        p = idx <= length(pdf_vals) ? pdf_vals[idx] : 0.0
+        if rand() < p / max_pdf
+            push!(sampled_r, r_try)
+        end
+    end
+
+    # Sampling loop
+    for i in 1:N_particles
+        r = sampled_r[i]
+        T = T_profile(r, τ)
+        σ = sqrt(m * T)
+        pr = σ * randn(dim-1) 
+        pτ = sqrt(m^2 + dot(pr, pr))
+        positions[:, i] .= (τ, r)
+        momenta[:, i]   .= (pτ, abs.(pr[1]))
+    end
+
+    return positions, momenta
+end 
+
+function sample_initial_particles_at_origin!(
+    m, dim, N_particles,
+    t, T_profile)
+    positions = zeros(dim, N_particles)
+    momenta = zeros(dim, N_particles)
+
+    T = T_profile(0.0, t)
+    σ = sqrt(m * T)
+
+    for i in 1:N_particles
+        positions[:, i] .= 0.0
+        momenta[:, i] .= σ .* randn(dim)
+    end
+
+    return positions, momenta
+end
+
+function sample_initial_particles_at_origin_no_position!(initial_condition,
+    p0, dimensions, N_particles)
+
+
+    function sample_bimodal_p_vectors(dimensions, N_particles;
+        μ1=1.0, μ2=2.0, σ=0.2,
+        weight1=0.5, pmin=0.1, pmax=5.0)
+
+        # Bimodal magnitude distribution
+        d1 = Truncated(Normal(μ1, σ), pmin, pmax)
+        d2 = Truncated(Normal(μ2, σ), pmin, pmax)
+        mix = MixtureModel([d1, d2], [weight1, 1 - weight1])
+        p_mags = rand(mix, N_particles)
+
+        # Sample random directions
+        momenta = zeros(Float64, dimensions, N_particles)
+        for i in 1:N_particles
+        dir = randn(dimensions)
+        dir ./= norm(dir)  # normalize to unit vector
+        momenta[:, i] .= p_mags[i] * dir
+        end
+
+        return momenta
+    end
+
+
+
+    if initial_condition == "delta"
+        rand_dirs = randn(Float64, dimensions, N_particles)
+        # Normalize columns (L2 norm across each particle's vector)
+        norms = sqrt.(sum(rand_dirs .^ 2, dims=1))
+        rand_dirs ./= norms  # Broadcasted division to normalize
+        momenta = zeros(Float64, dimensions, N_particles)
+        momenta .= p0 .* rand_dirs
+    elseif initial_condition == "bimodal"
+        momenta = sample_bimodal_p_vectors(dimensions, N_particles)
+  
+    else 
+        error("Unknown initial condition: $initial_condition")
+    end
+
+
+
+
+
+    return momenta
+end
+
+end # module Utils
