@@ -28,12 +28,14 @@ function simulate_ensemble_bulk_cpu(
     antithetic_momenta::Bool = false,
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
-    reflecting_boundary::Bool = false)
+    reflecting_boundary::Bool = false,
+    x_init::Union{Nothing, AbstractMatrix} = nothing,
+    p_init::Union{Nothing, AbstractMatrix} = nothing)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
     steps = floor(Int, total_time / Δt)
-    save_every = Int(save_interval / Δt)
+    save_every = round(Int, save_interval / Δt)
     num_saves = div(steps, save_every)
 
     xgrid, tgrid = SpaceTimeGrid
@@ -44,11 +46,13 @@ function simulate_ensemble_bulk_cpu(
     # collapse to r = √(x²+y²) and p_r = p·ê_r.
     do_cartesian_sampling = cartesian_spatial_sampling === nothing ? (dimensions == 1 || dimensions >= 2) : cartesian_spatial_sampling
 
-    # Initial sampling: optionally use antithetic momentum pairs (p and -p) at
-    # the same position in the local rest frame. This is a pure variance-reduction
-    # technique: it preserves n and J^τ exactly (depends only on counts/|p|) and
-    # strongly reduces noise in signed currents like J^r.
-    if antithetic_momenta
+    # Initial sampling: use pre-sampled particles when x_init/p_init are provided
+    # (e.g., anisotropic ICs with a radial momentum boost). Otherwise sample from
+    # the density matrix, optionally with antithetic pairs for variance reduction.
+    if x_init !== nothing && p_init !== nothing
+        x_matrix = Matrix{Float64}(x_init)
+        p_matrix = Matrix{Float64}(p_init)
+    elseif antithetic_momenta
         N_half = N_particles ÷ 2
         N_rem  = N_particles - 2 * N_half
 
@@ -267,7 +271,7 @@ function simulate_ensemble_bulk_cpu(
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
     steps = floor(Int, total_time / Δt)
-    save_every = Int(save_interval / Δt)
+    save_every = round(Int, save_interval / Δt)
     num_saves = div(steps, save_every)
 
 

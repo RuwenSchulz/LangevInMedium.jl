@@ -237,11 +237,15 @@ function kernel_compute_all_forces_cpu!(
                                               momenta[d, i] / p
             end
 
-            for d in 1:dimensions
-                # Deterministic drag
-                det_term = -ηD * momenta[d, i] * Δt
+            # Relativistic drag: multiply ηD by m/E_LRF so the FP equation
+            # ∂f/∂t = ∂/∂p[(κ/2T)(p/E)f + (κ/2)∂f/∂p] gives Jüttner equilibrium.
+            # κ = 2mT ηD is unchanged; only the attenuation factor changes.
+            E_LRF_r = sqrt(p^2 + M^2)   # p = p_mags[i] is already computed above
+            η_eff_r = ηD * M / E_LRF_r
 
-                # Stochastic force with projection
+            for d in 1:dimensions
+                det_term = -η_eff_r * momenta[d, i] * Δt
+
                 sto_term = 0.0
                 for j in 1:dimensions
                     sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
@@ -256,15 +260,20 @@ function kernel_compute_all_forces_cpu!(
             # ==========================================
             # 🟢 Cartesian mode: independent px, py
             # ==========================================
-            # Numerically stable discretization (exact OU for constant coefficients):
-            #   dp = -ηD p dt + kT dW
-            # Exact: p_{n+1} = a p_n + kT * sqrt((1-a^2)/(2ηD)) * ξ
-            # where a = exp(-ηD dt). We encode this into the existing
-            # (deterministic_terms + sqrt(dt)*stochastic_terms) update.
+            # Exact OU propagator with relativistic drag η_eff = ηD * m/E_LRF.
+            # κ = 2mT ηD is unchanged; only the attenuation a = exp(-η_eff dt) changes.
+            # This gives Jüttner ∝ exp(-E/T) as the equilibrium (vs Maxwell-Boltzmann
+            # for the plain ηD version).
             if ηD > 0
-                a = exp(-ηD * Δt)
-                # Noise prefactor to be multiplied by sqrt(Δt) in the updater.
-                noise_pref = (Δt > 0) ? (kT * sqrt((1 - a * a) / (2 * ηD * Δt))) : 0.0
+                p2_lrf = 0.0
+                for d in 1:dimensions
+                    p2_lrf += momenta[d, i]^2
+                end
+                E_LRF   = sqrt(p2_lrf + M^2)
+                η_eff   = ηD * M / E_LRF
+                a       = exp(-η_eff * Δt)
+                noise_pref = (Δt > 0 && η_eff > 0) ?
+                                 (kT * sqrt((1 - a * a) / (2 * η_eff * Δt))) : 0.0
                 for d in 1:dimensions
                     deterministic_terms[d, i] = (a - 1) * momenta[d, i]
                     stochastic_terms[d, i]    = noise_pref * ξ[d, i]

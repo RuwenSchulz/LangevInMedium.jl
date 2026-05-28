@@ -314,14 +314,17 @@ end
             end
             geo_term *= Δt
 
-            # Langevin deterministic + geometric terms
-            det_term = -ηD * momenta[d, i] * Δt + geo_term
-
-            # Langevin stochastic term
-            sto_term = 0.0
-            for j in 2:dimensions
-                sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
-                            kT * (d == j ? 1.0 : 0.0) * ξ[j, i]
+            # Exact OU propagator for dp = -ηD p dt + kT dW (kL == kT always):
+            #   p_{n+1} = exp(-ηD Δt) p_n + kT sqrt((1-exp(-2ηD Δt))/(2ηD)) ξ
+            # Encoded as det_term + sqrt(Δt)*sto_term to match the updater kernel.
+            if ηD > 0.0 && Δt > 0.0
+                a = exp(-ηD * Δt)
+                noise_pref = kT * sqrt((1.0 - a * a) / (2.0 * ηD * Δt))
+                det_term = (a - 1.0) * momenta[d, i] + geo_term
+                sto_term = noise_pref * ξ[d, i]
+            else
+                det_term = geo_term
+                sto_term = kT * ξ[d, i]
             end
 
             # Store computed forces

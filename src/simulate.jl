@@ -43,6 +43,8 @@ function simulate_ensemble_bulk(
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
     reflecting_boundary::Bool = false,
+    x_init::Union{Nothing, AbstractMatrix} = nothing,
+    p_init::Union{Nothing, AbstractMatrix} = nothing,
 )
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
@@ -55,7 +57,9 @@ function simulate_ensemble_bulk(
         antithetic_momenta = antithetic_momenta,
         position_diffusion = position_diffusion,
         momentum_langevin = momentum_langevin,
-        reflecting_boundary = reflecting_boundary
+        reflecting_boundary = reflecting_boundary,
+        x_init = x_init,
+        p_init = p_init,
     )
 end
 

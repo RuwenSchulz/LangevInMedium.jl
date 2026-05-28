@@ -256,11 +256,13 @@ end
                                                               momenta[d, i] / p
             end
 
-            for d in 1:dimensions
-                # Deterministic drag
-                det_term = -ηD * momenta[d, i] * Δt
+            # Relativistic drag: η_eff = ηD * m/E_LRF for Jüttner equilibrium.
+            E_LRF_r = sqrt(p_sq + M^2)
+            η_eff_r = ηD * M / E_LRF_r
 
-                # Stochastic force with projection
+            for d in 1:dimensions
+                det_term = -η_eff_r * momenta[d, i] * Δt
+
                 sto_term = 0.0
                 for j in 1:dimensions
                     sto_term += (kL - kT) * p_units[d, i] * p_units[j, i] * ξ[j, i] +
@@ -273,11 +275,28 @@ end
 
         else
             # ==========================================
-            # 🟢 Cartesian mode: independent px, py
+            # 🟢 Cartesian mode: exact OU propagator
             # ==========================================
-            for d in 1:dimensions
-                @inbounds deterministic_terms[d, i] = -ηD * momenta[d, i] * Δt
-                @inbounds stochastic_terms[d, i]    = kT * ξ[d, i]
+            # Relativistic: η_eff = ηD * m/E_LRF so equilibrium is Jüttner ∝ exp(-E/T).
+            # κ = 2mT ηD unchanged; only the attenuation a = exp(-η_eff Δt) changes.
+            if ηD > 0.0 && Δt > 0.0
+                p2_lrf = 0.0
+                for d in 1:dimensions
+                    p2_lrf += momenta[d, i]^2
+                end
+                E_LRF   = sqrt(p2_lrf + M^2)
+                η_eff   = ηD * M / E_LRF
+                a       = exp(-η_eff * Δt)
+                noise_pref = kT * sqrt((1.0 - a * a) / (2.0 * η_eff * Δt))
+                for d in 1:dimensions
+                    @inbounds deterministic_terms[d, i] = (a - 1.0) * momenta[d, i]
+                    @inbounds stochastic_terms[d, i]    = noise_pref * ξ[d, i]
+                end
+            else
+                for d in 1:dimensions
+                    @inbounds deterministic_terms[d, i] = 0.0
+                    @inbounds stochastic_terms[d, i]    = kT * ξ[d, i]
+                end
             end
         end
     end
@@ -319,6 +338,8 @@ end
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
         r_max = length(xgrid) >= 1 ? xgrid[end] : 0.0
+        dr0 = (length(xgrid) >= 2) ? CUDA.abs(xgrid[2] - xgrid[1]) : 0.0
+        r_axis_eps = CUDA.max(1e-12, 0.5 * dr0)
         # Compute energy
         E2 = m * m
         for d in 1:dimensions
@@ -331,8 +352,6 @@ end
             pr = momenta[1, idx]
 
             r_abs  = CUDA.abs(r)
-            dr0 = (length(xgrid) >= 2) ? CUDA.abs(xgrid[2] - xgrid[1]) : 0.0
-            r_axis_eps = CUDA.max(1e-12, 0.5 * dr0)
             r_safe = (r_abs < r_axis_eps) ? r_axis_eps : r_abs
 
             # deterministic motion
@@ -420,7 +439,7 @@ end
 end
 
 @inline function kernel_save_momenta_gpu!(
-    momenta_history::CuDeviceArray{Float64, 3},
+    momenta_history::CuDeviceMatrix{Float64},
     current_momentum,
     save_idx::Int,
     N_particles::Int,
@@ -428,15 +447,16 @@ end
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
+        col_offset = (save_idx - 1) * N_particles
         for d in 1:dimensions
-            @inbounds momenta_history[d, idx, save_idx] = current_momentum[d, idx]
+            @inbounds momenta_history[d, col_offset + idx] = current_momentum[d, idx]
         end
     end
     return
 end
 
 @inline function kernel_save_positions_gpu!(
-    position_history::CuDeviceArray{Float64, 3},
+    position_history::CuDeviceMatrix{Float64},
     current_positions,
     save_idx::Int,
     N_particles::Int,
@@ -444,8 +464,9 @@ end
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
+        col_offset = (save_idx - 1) * N_particles
         for d in 1:dimensions
-            @inbounds position_history[d, idx, save_idx] = current_positions[d, idx]
+            @inbounds position_history[d, col_offset + idx] = current_positions[d, idx]
         end
     end
     return

@@ -42,6 +42,8 @@ function simulate_ensemble_bulk_gpu(
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
     reflecting_boundary::Bool = false,
+    x_init::Union{Nothing, AbstractMatrix} = nothing,
+    p_init::Union{Nothing, AbstractMatrix} = nothing,
 )
     CUDA.reclaim()  # Free any unused GPU memory
     print_cuda_status()
@@ -78,10 +80,14 @@ function simulate_ensemble_bulk_gpu(
                 Tfo = Tfo)
         end
         tau_vals_d = CuArray(tau_vals)
-        
+
         do_cartesian_sampling = cartesian_spatial_sampling === nothing ? (dimensions == 1 || dimensions >= 2) : cartesian_spatial_sampling
 
-        x_matrix, p_matrix = if antithetic_momenta
+        # Use pre-sampled particles when provided (e.g., anisotropic radial-boost ICs),
+        # otherwise sample from the density matrix with optional antithetic pairs.
+        x_matrix, p_matrix = if x_init !== nothing && p_init !== nothing
+            Matrix{Float64}(x_init), Matrix{Float64}(p_init)
+        elseif antithetic_momenta
             N_half = N_particles ÷ 2
             N_rem = N_particles - 2 * N_half
 
@@ -173,12 +179,13 @@ function simulate_ensemble_bulk_gpu(
             momenta, positions, xgrid, tgrid,
             VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode)
 
-        # === Allocate history arrays ===
-        momenta_history_gpu = CUDA.zeros(Float64, dimensions, N_particles, num_saves + 1)
-        momenta_history_gpu[:,:, 1] .= momenta
+        # === Allocate history arrays as 2D to avoid CuDeviceArray{3} in kernels ===
+        # Layout: (dimensions, N_particles * (num_saves+1)), stride = N_particles per snapshot
+        momenta_history_gpu  = CUDA.zeros(Float64, dimensions, N_particles * (num_saves + 1))
+        momenta_history_gpu[:, 1:N_particles] .= momenta
 
-        position_history_gpu = CUDA.zeros(Float64, dimensions, N_particles, num_saves + 1)
-        position_history_gpu[:, :, 1] .= positions
+        position_history_gpu = CUDA.zeros(Float64, dimensions, N_particles * (num_saves + 1))
+        position_history_gpu[:, 1:N_particles] .= positions
 
         # === Allocate working buffers ===
         p_mags              = CUDA.zeros(Float64, N_particles)
@@ -251,9 +258,12 @@ function simulate_ensemble_bulk_gpu(
         end
 
         # === Transfer saved histories back to CPU ===
+        # 2D layout: (dimensions, N_particles * (num_saves+1)) — single cudaMemcpy, slice on CPU.
         time_points = range(initial_time, final_time, length=num_saves + 1)
-        momenta_history_vec  = [Array(momenta_history_gpu[:, :, step]) for step in 1:num_saves+1]
-        position_history_vec = [Array(position_history_gpu[:, :, step]) for step in 1:num_saves+1]
+        full_mom_cpu = Array(momenta_history_gpu)
+        full_pos_cpu = Array(position_history_gpu)
+        momenta_history_vec  = [full_mom_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
+        position_history_vec = [full_pos_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
 
         # Finalize all CuArrays
         finalize(p_mags)
