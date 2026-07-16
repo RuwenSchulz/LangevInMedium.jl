@@ -43,8 +43,13 @@ function simulate_ensemble_bulk(
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
     reflecting_boundary::Bool = false,
+    collision_mode::Symbol = :langevin,
     x_init::Union{Nothing, AbstractMatrix} = nothing,
     p_init::Union{Nothing, AbstractMatrix} = nothing,
+    V2Evolutionn::Union{Nothing, AbstractMatrix} = nothing,
+    psi2::Float64 = 0.0,
+    integrator_mode::Int = 0,   # accepted for signature parity with the GPU path; CPU ignores it (pre-point only)
+    relativistic::Bool = true,  # drag: rel ·m/E (Jüttner) vs non-rel ηD (Maxwell)
 )
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
@@ -58,8 +63,12 @@ function simulate_ensemble_bulk(
         position_diffusion = position_diffusion,
         momentum_langevin = momentum_langevin,
         reflecting_boundary = reflecting_boundary,
+        collision_mode = collision_mode,
         x_init = x_init,
         p_init = p_init,
+        V2Evolutionn = V2Evolutionn,
+        psi2 = psi2,
+        relativistic = relativistic,
     )
 end
 

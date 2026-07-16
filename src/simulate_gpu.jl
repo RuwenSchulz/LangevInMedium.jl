@@ -42,8 +42,15 @@ function simulate_ensemble_bulk_gpu(
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
     reflecting_boundary::Bool = false,
+    collision_mode::Symbol = :langevin,
     x_init::Union{Nothing, AbstractMatrix} = nothing,
     p_init::Union{Nothing, AbstractMatrix} = nothing,
+    V2Evolutionn::Union{Nothing, AbstractMatrix} = nothing,
+    psi2::Float64 = 0.0,
+    freezeout_capture::Bool = false,
+    freezeout_interp::Bool = true,
+    integrator_mode::Int = 0,   # 0 = pre-point exact-OU (legacy), 1 = drift-midpoint O(ε²)
+    relativistic::Bool = true,  # true = drag ·m/E (Jüttner); false = ηD (Maxwell)
 )
     CUDA.reclaim()  # Free any unused GPU memory
     print_cuda_status()
@@ -52,8 +59,15 @@ function simulate_ensemble_bulk_gpu(
         # === Derived parameters ===
         total_time = final_time - initial_time
         steps = floor(Int, total_time / Δt)
-        save_every = Int(save_interval / Δt)
-        num_saves = Int(steps ÷ save_every)
+        save_every = round(Int, save_interval / Δt)   # robust to binary roundoff (matches CPU path)
+        num_saves = steps ÷ save_every
+        # ON-THE-FLY FREEZE-OUT: no trajectory history is needed (memory ∝ N, VRAM-safe at any cadence);
+        # each particle latches its own state the step it first crosses T=Tfo. Keep a trivial 1-snapshot
+        # history so the existing allocation/return plumbing is untouched.
+        if freezeout_capture
+            num_saves = 1
+            save_every = max(steps, 1)
+        end
 
         threads = 256
         blocks = cld(N_particles, threads)
@@ -64,6 +78,9 @@ function simulate_ensemble_bulk_gpu(
         tgrid = CuArray(ttgrid)
         TemperatureEvolution = CuArray(TemperatureEvolutionn)
         VelocityEvolution = CuArray(VelocityEvolutionn)
+        # optional elliptic-flow modulation: upload the v2(r,t) field, or a dummy when off
+        use_v2 = V2Evolutionn !== nothing
+        V2Evolution = use_v2 ? CuArray(V2Evolutionn) : CuArray(zeros(Float64, 1, 1))
 
         # === Precompute τn(T) spline (main3 logic) on CPU and upload to GPU ===
         tau_Tmin::Float64 = 0.0
@@ -80,6 +97,23 @@ function simulate_ensemble_bulk_gpu(
                 Tfo = Tfo)
         end
         tau_vals_d = CuArray(tau_vals)
+
+        # === RTA/BGK: precompute the isotropic Jüttner inverse-CDF table on CPU, upload to GPU ===
+        # Divergence-free `p*` sampler for kernel_rta_collision_gpu! (replaces the CPU rejection loop).
+        rta_mode = collision_mode == :rta
+        invcdf_nU::Int = 2
+        invcdf_nT::Int = 2
+        invcdf_Tmin::Float64 = 0.0
+        invcdf_invdT::Float64 = 1.0
+        invcdf_d = CuArray(Float64[0.0, 0.0, 0.0, 0.0])
+        if rta_mode && momentum_langevin && DsT > 0.0
+            Tmin_ic = max(float(minimum(TemperatureEvolutionn)), 0.0)
+            Tmax_ic = max(float(maximum(TemperatureEvolutionn)), Tmin_ic + eps(Float64))
+            invcdf_vals, invcdf_nU, invcdf_nT, invcdf_Tmin, invcdf_invdT =
+                build_juttner_invcdf(m, dimensions; Tmin = Tmin_ic, Tmax = Tmax_ic,
+                                     nT = 256, nU = 2048, np = 8192)
+            invcdf_d = CuArray(invcdf_vals)
+        end
 
         do_cartesian_sampling = cartesian_spatial_sampling === nothing ? (dimensions == 1 || dimensions >= 2) : cartesian_spatial_sampling
 
@@ -177,7 +211,7 @@ function simulate_ensemble_bulk_gpu(
         # Keep step indexing consistent with the CPU backend (t = t0 at initialization).
         @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
             momenta, positions, xgrid, tgrid,
-            VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode)
+            VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode, use_v2, V2Evolution, psi2)
 
         # === Allocate history arrays as 2D to avoid CuDeviceArray{3} in kernels ===
         # Layout: (dimensions, N_particles * (num_saves+1)), stride = N_particles per snapshot
@@ -186,6 +220,17 @@ function simulate_ensemble_bulk_gpu(
 
         position_history_gpu = CUDA.zeros(Float64, dimensions, N_particles * (num_saves + 1))
         position_history_gpu[:, 1:N_particles] .= positions
+
+        # === On-the-fly freeze-out capture arrays (N-length; the only thing saved) ===
+        fo_pos_gpu  = freezeout_capture ? CUDA.zeros(Float64, dimensions, N_particles) : nothing
+        fo_mom_gpu  = freezeout_capture ? CUDA.zeros(Float64, dimensions, N_particles) : nothing
+        fo_tau_gpu  = freezeout_capture ? CUDA.zeros(Float64, N_particles) : nothing
+        fo_flag_gpu = freezeout_capture ? CUDA.zeros(Float64, N_particles) : nothing
+        # last-above cache for exact-crossing interpolation (last_T init 0 ⇒ any step-1 crossing books raw)
+        last_pos_gpu = freezeout_capture ? CUDA.zeros(Float64, dimensions, N_particles) : nothing
+        last_mom_gpu = freezeout_capture ? CUDA.zeros(Float64, dimensions, N_particles) : nothing
+        last_tau_gpu = freezeout_capture ? CUDA.zeros(Float64, N_particles) : nothing
+        last_T_gpu   = freezeout_capture ? CUDA.zeros(Float64, N_particles) : nothing
 
         # === Allocate working buffers ===
         p_mags              = CUDA.zeros(Float64, N_particles)
@@ -198,27 +243,62 @@ function simulate_ensemble_bulk_gpu(
         ξ_momentum          = CUDA.zeros(Float64, dimensions, N_particles)
         ξ_position          = CUDA.zeros(Float64, dimensions, N_particles)  # NEW: for position diffusion
         random_directions   = CUDA.zeros(Float64, dimensions, N_particles)
+        # RTA/BGK pre-generated uniforms (collision decision + inverse-CDF |p*| draw); dir uses random_directions
+        u_collide           = rta_mode ? CUDA.zeros(Float64, N_particles) : CUDA.zeros(Float64, 1)
+        u_sample            = rta_mode ? CUDA.zeros(Float64, N_particles) : CUDA.zeros(Float64, 1)
 
         # === Langevin dynamics loop ===
         @showprogress 10 "Running Langevin simulation GPU Cartesian..." for step in 1:steps
-            CUDA.randn!(ξ_momentum)  # Sample Gaussian noise at every step
-            CUDA.randn!(ξ_position)  # Sample Gaussian noise at every step
-            CUDA.randn!(random_directions)  # Sample Gaussian noise at every step
-
-            # Normalize random direction vectors
-            random_norms = sqrt.(sum(random_directions .^ 2, dims=1))
-            random_directions ./= random_norms
+            if rta_mode
+                # RTA/BGK noise: two uniforms (collision decision + inverse-CDF |p*| draw) and a RAW
+                # (un-normalized) Gaussian direction — the kernel normalizes it per particle.
+                CUDA.rand!(u_collide)
+                CUDA.rand!(u_sample)
+                CUDA.randn!(random_directions)
+                if position_diffusion
+                    CUDA.randn!(ξ_position)
+                end
+            else
+                CUDA.randn!(ξ_momentum)  # OU momentum noise — always needed
+                # ξ_position is only consumed by the position-diffusion update; random_directions only by the
+                # radial (1D) force kernel as a p≈0 fallback direction. Generating (and normalizing) them every
+                # step when their consumer is off is pure waste — skip it. Behaviour-identical for the real
+                # consumers; only the CURAND stream offset shifts (irrelevant to an ensemble average).
+                if position_diffusion
+                    CUDA.randn!(ξ_position)  # Sample Gaussian noise at every step
+                end
+                if radial_mode
+                    CUDA.randn!(random_directions)  # Sample Gaussian noise at every step
+                    # Normalize random direction vectors
+                    random_norms = sqrt.(sum(random_directions .^ 2, dims=1))
+                    random_directions ./= random_norms
+                end
+            end
 
             # Step 1: Transform momenta to local rest frame (LRF)
             @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
                 momenta, positions, xgrid, tgrid, VelocityEvolution,
-                m, N_particles, step, Δt, initial_time,radial_mode)
+                m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2)
 
             if !momentum_langevin || DsT == 0.0
 
                 @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
                     momenta, positions, xgrid, tgrid,
                     VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode)
+            elseif rta_mode
+                # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn (same τn as OU),
+                # in the LRF, then boost back to lab. Skips the OU force/update kernels entirely.
+                @cuda threads=threads blocks=blocks kernel_rta_collision_gpu!(
+                    momenta, positions, xgrid, tgrid, TemperatureEvolution,
+                    Δt, m, N_particles, step, initial_time, DsT,
+                    tau_Tmin, tau_invdT, tau_vals_d,
+                    invcdf_d, invcdf_nU, invcdf_nT, invcdf_Tmin, invcdf_invdT,
+                    dimensions, radial_mode,
+                    u_collide, u_sample, random_directions)
+
+                @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
+                    momenta, positions, xgrid, tgrid, VelocityEvolution,
+                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2)
             else
                 # Step 2: Compute deterministic and stochastic terms in LRF
                 @cuda threads=threads blocks=blocks kernel_compute_all_forces_gpu!(
@@ -228,7 +308,7 @@ function simulate_ensemble_bulk_gpu(
                     Δt, m, random_directions, dimensions, N_particles,
                     step, initial_time, DsT,
                     tau_Tmin, tau_invdT, tau_vals_d,
-                    radial_mode)
+                    radial_mode, Int32(integrator_mode), relativistic)
 
                 # Step 3: Update momenta in LRF
                 @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
@@ -238,14 +318,22 @@ function simulate_ensemble_bulk_gpu(
                 # Step 4: Boost updated momenta back to lab frame
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
-                    m, N_particles, step, Δt, initial_time,radial_mode)
-            end 
+                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2)
+            end
             # Step 5: Update particle positions based on momenta
             # IMPORTANT: pass the current time-step, not the total number of steps.
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
                 positions, momenta, m, Δt, N_particles, step, initial_time,
                 xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, position_diffusion, reflecting_boundary, ξ_position)
-            
+
+            # Step 5b: on-the-fly freeze-out latch (every step ⇒ crossing resolved to Δt; no history stored)
+            if freezeout_capture
+                @cuda threads=threads blocks=blocks kernel_capture_freezeout_gpu!(
+                    fo_pos_gpu, fo_mom_gpu, fo_tau_gpu, fo_flag_gpu,
+                    last_pos_gpu, last_mom_gpu, last_tau_gpu, last_T_gpu,
+                    positions, momenta, xgrid, tgrid, TemperatureEvolution, Tfo,
+                    N_particles, step, Δt, initial_time, dimensions, radial_mode, freezeout_interp)
+            end
 
             # Step 6: Save state if necessary
             if step % save_every == 0
@@ -257,6 +345,16 @@ function simulate_ensemble_bulk_gpu(
             end
         end
 
+        # === On-the-fly freeze-out: transfer the N-length capture arrays and return (single save) ===
+        if freezeout_capture
+            fo = (pos=Array(fo_pos_gpu), mom=Array(fo_mom_gpu), tau=Array(fo_tau_gpu), flag=Array(fo_flag_gpu))
+            finalize(fo_pos_gpu); finalize(fo_mom_gpu); finalize(fo_tau_gpu); finalize(fo_flag_gpu)
+            finalize(last_pos_gpu); finalize(last_mom_gpu); finalize(last_tau_gpu); finalize(last_T_gpu)
+            finalize(momenta_history_gpu); finalize(position_history_gpu)
+            GC.gc(true); CUDA.reclaim()
+            return fo
+        end
+
         # === Transfer saved histories back to CPU ===
         # 2D layout: (dimensions, N_particles * (num_saves+1)) — single cudaMemcpy, slice on CPU.
         time_points = range(initial_time, final_time, length=num_saves + 1)
@@ -265,7 +363,11 @@ function simulate_ensemble_bulk_gpu(
         momenta_history_vec  = [full_mom_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
         position_history_vec = [full_pos_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
 
-        # Finalize all CuArrays
+        # Finalize all CuArrays (large history + position/momentum arrays must be freed explicitly)
+        finalize(momenta_history_gpu)
+        finalize(position_history_gpu)
+        finalize(positions)
+        finalize(momenta)
         finalize(p_mags)
         finalize(p_units)
         finalize(ηD_vals)
@@ -276,8 +378,16 @@ function simulate_ensemble_bulk_gpu(
         finalize(ξ_momentum)
         finalize(ξ_position)
         finalize(random_directions)
+        finalize(u_collide)
+        finalize(u_sample)
+        finalize(invcdf_d)
+        finalize(tau_vals_d)
 
         # Clear references
+        momenta_history_gpu = nothing
+        position_history_gpu = nothing
+        positions = nothing
+        momenta = nothing
         p_mags = nothing
         p_units = nothing
         ηD_vals = nothing

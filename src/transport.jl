@@ -3,15 +3,24 @@ module Transport
 using ..Constants: fmGeV
 using Bessels
 
-export tau_n_main3, build_tau_n_spline, eval_tau_n_spline, effective_DsT
+export tau_n_main3, build_tau_n_spline, eval_tau_n_spline, effective_DsT, build_juttner_invcdf
 
 const _TINY = 1e-300
 
 """
     tau_n_main3(T, m, DsT) -> Float64
 
-Compute the diffusion relaxation time \\tau_n in **fm** using the same logic as
-`diff_tauN_bg` (generic EOS path) in `FiVoHydro.jl/main3.jl`.
+Compute the diffusion relaxation time \\tau_n in **fm** using the Bessel-moment
+matching \\tau_n = D_s z K_3(z)/K_2(z), with z = m/T and D_s = DsT/T. This is the
+single-species form that FluiduM's `τ_diffusion` evaluates and is used on the
+Langevin/Fokker–Planck side of the comparison.
+
+Note: the AttractorPaper1 blast-wave spine and its analytic derivation
+(`derivations.tex`) use a *different*, also literature-standard matching,
+\\tau_n = D_s/c_n^2 with c_n^2 = (T/m) K_2(z)/K_1(z), i.e. \\tau_n ∝ z K_1(z)/K_2(z)
+(see `AttractorRadialCommon.hq_taun`). By the recurrence K_3(z) − K_1(z) = (4/z)K_2(z)
+the two forms differ by exactly +4 D_s (≈1.5× at T_fo, up to ~2.5× at T=0.4 GeV);
+they are distinct relaxation-time matchings, not the same coefficient.
 
 Inputs:
 - `T` [GeV]
@@ -30,19 +39,27 @@ Inputs:
     z = Mm / Tm
     z <= 0.0 && return 0.0
 
+    # τ_n = D_s z K₃(z)/K₂(z) with D_s = DsT/T (paper Eq. (A.tc-first)).
+    # For z ≲ 50 we evaluate the equivalent rank-integral combination
+    # (2K₁ − 3K₃ + K₅) = (48/z²)K₃, which matches the original matching algebra.
+    # For z ≳ 50 that combination loses all significant digits to catastrophic
+    # cancellation (the besselkx values become nearly equal), so we evaluate the
+    # algebraically identical K₃/K₂ ratio directly — cancellation-free and
+    # continuous with the z<50 branch at z=50.
+    K2x = Bessels.besselkx(2, z)
+    K3x = Bessels.besselkx(3, z)
+    denominator = max(abs(K2x), _TINY)
+
     if z > 50.0
-        τ_GeVinv = (Ds / 48.0) * (Mm^2 / (Tm^2 + 1e-10))
-        τ_fm = τ_GeVinv / fmGeV
-        return min(τ_fm, 1e20)
+        ratio_K3K2 = K3x / denominator * sign(K2x == 0 ? 1.0 : K2x)
+        τ_GeVinv = (Ds / Tm) * z * ratio_K3K2
+        return min(τ_GeVinv / fmGeV, 1e20)
     end
 
     K1x = Bessels.besselkx(1, z)
-    K2x = Bessels.besselkx(2, z)
-    K3x = Bessels.besselkx(3, z)
     K5x = Bessels.besselkx(5, z)
 
     numerator = 2 * K1x - 3 * K3x + K5x
-    denominator = max(abs(K2x), _TINY)
     ratio = numerator / denominator * sign(K2x == 0 ? 1.0 : K2x)
 
     z3_over_Tm = z^3 / Tm
@@ -136,6 +153,118 @@ Evaluate the uniform-grid linear spline produced by `build_tau_n_spline`.
     y0 = Float64(tau_vals[i])
     y1 = Float64(tau_vals[i + 1])
     return (1.0 - t) * y0 + t * y1
+end
+
+"""
+    build_juttner_invcdf(m, dimensions; Tmin, Tmax, nT, nU, np)
+        -> (invCDF::Vector{Float64}, nU::Int, nT::Int, Ttab_min::Float64, Ttab_invdT::Float64)
+
+Precompute a HOST-side inverse-CDF table for the isotropic local-rest-frame Jüttner
+momentum-magnitude distribution
+
+    P(p*) ∝ p*^(d-1) · exp(-(E-m)/T),   E = sqrt(m² + p*²),   d = `dimensions`,
+
+the EXACT same shape sampled by rejection in `_draw_juttner_pstar_lib` (kernels_cpu.jl).
+This lets a GPU thread draw `p*` by a constant-work table lookup instead of a variable-length
+rejection loop (divergence-free).
+
+Layout: flat column-major, `invCDF[(jT-1)*nU + iu]` = p*(u_iu ; T_jT), with
+- u_iu = (iu-1)/(nU-1)            uniform on [0,1],          iu = 1..nU
+- T_jT = Ttab_min + (jT-1)/invdT  uniform on [Tmin,Tmax],    jT = 1..nT
+
+For each T the CDF F(p*) = ∫₀^{p*}P / ∫₀^{∞}P is built by cumulative-trapezoid on a fine p*
+grid capped at `pmax = 16√(mT) + 16T` (same cap as the CPU rejection sampler), then inverted
+onto the uniform u-grid by a monotone two-pointer sweep. Upload the returned vector as a
+CuArray and index it in `kernel_rta_collision_gpu!` with a bilinear interpolation in (u,T).
+"""
+function build_juttner_invcdf(
+    m::Real, dimensions::Integer;
+    Tmin::Real, Tmax::Real,
+    nT::Integer = 256, nU::Integer = 2048, np::Integer = 8192,
+    quantile_cap::Real = 1.0e-6,
+)
+    M  = Float64(m)
+    d  = Int(dimensions)
+    a  = d - 1
+    nTi = Int(nT); nUi = Int(nU); npi = Int(np)
+    nTi >= 2 || error("nT must be >= 2")
+    nUi >= 2 || error("nU must be >= 2")
+    npi >= 2 || error("np must be >= 2")
+
+    # Clamp/pad the temperature range so the table safely brackets every T the medium can hand
+    # the kernel (bilinear lookups clamp to the edges, so a small margin is enough).
+    Tmin_f = max(Float64(Tmin), 1e-4)
+    Tmax_f = max(Float64(Tmax), Tmin_f * (1.0 + 1e-6))
+    span   = Tmax_f - Tmin_f
+    Tmin_f = max(Tmin_f - 0.02 * span, 1e-4)
+    Tmax_f = Tmax_f + 0.02 * span
+
+    dT    = (Tmax_f - Tmin_f) / (nTi - 1)
+    invdT = 1.0 / dT
+
+    invCDF = Vector{Float64}(undef, nUi * nTi)
+
+    pgrid = Vector{Float64}(undef, npi)
+    cdf   = Vector{Float64}(undef, npi)
+
+    @inbounds for jT in 1:nTi
+        T    = Tmin_f + (jT - 1) * dT
+        pmax = 16.0 * sqrt(M * T) + 16.0 * T
+        dp   = pmax / (npi - 1)
+
+        # --- fine p* grid, PDF, and cumulative-trapezoid CDF ---
+        pgrid[1] = 0.0
+        # PDF value w(p) = p^a exp(-(E-m)/T); a==0 ⇒ p^0 = 1 (incl. p=0).
+        wprev = (a == 0) ? 1.0 : 0.0        # p=0: p^a = 0 for a>=1, 1 for a=0
+        cdf[1] = 0.0
+        for k in 2:npi
+            p = (k - 1) * dp
+            pgrid[k] = p
+            E = sqrt(M * M + p * p)
+            w = (a == 0) ? exp(-(E - M) / T) : (p^a) * exp(-(E - M) / T)
+            cdf[k] = cdf[k - 1] + 0.5 * (wprev + w) * dp
+            wprev = w
+        end
+        norm = cdf[npi]
+        invnorm = norm > 0.0 ? 1.0 / norm : 0.0
+        for k in 1:npi
+            cdf[k] *= invnorm
+        end
+        cdf[npi] = 1.0   # guard against roundoff so u=1 maps to pmax
+
+        # High-quantile cap: `pmax` (=16√(mT)+16T) is a *generous* rejection envelope bound whose
+        # far tail carries exp(-(E-m)/T)≈0 weight. The CPU rejection sampler visits it with the
+        # correct (vanishing) probability, but linear inverse-CDF interpolation across the final
+        # u-bin would smear a 1/nU fraction of draws all the way up to pmax, inflating ⟨p²⟩. Clamp
+        # the table to the p where the CDF first reaches 1-quantile_cap (a real ~1e-6 quantile),
+        # matching the CPU sampler's effective support to well within MC noise.
+        p_hi = pgrid[npi]
+        thr = 1.0 - Float64(quantile_cap)
+        for k in 1:npi
+            if cdf[k] >= thr
+                p_hi = pgrid[k]
+                break
+            end
+        end
+
+        # --- invert F(p)=u onto the uniform u-grid by a monotone two-pointer sweep ---
+        base = (jT - 1) * nUi
+        k = 1
+        for iu in 1:nUi
+            u = (iu - 1) / (nUi - 1)
+            while k < npi && cdf[k + 1] < u
+                k += 1
+            end
+            c0 = cdf[k]; c1 = cdf[k + 1]
+            p0 = pgrid[k]; p1 = pgrid[k + 1]
+            frac = (c1 > c0) ? (u - c0) / (c1 - c0) : 0.0
+            frac = frac < 0.0 ? 0.0 : (frac > 1.0 ? 1.0 : frac)
+            pval = p0 + frac * (p1 - p0)
+            invCDF[base + iu] = pval < p_hi ? pval : p_hi
+        end
+    end
+
+    return invCDF, nUi, nTi, Tmin_f, invdT
 end
 
 end # module Transport

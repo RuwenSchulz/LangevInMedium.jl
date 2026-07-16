@@ -15,6 +15,8 @@ export
     kernel_save_snapshot_gpu!,
     kernel_save_momenta_gpu!,
     kernel_save_positions_gpu!,
+    kernel_capture_freezeout_gpu!,
+    kernel_rta_collision_gpu!,
     interpolate_2d_cuda
 
 # ---------------------------------------------------------------------------
@@ -76,6 +78,43 @@ end
     return c0 * (1 - yd) + c1 * yd
 end
 
+# ---------------------------------------------------------------------------
+# Jüttner inverse-CDF table lookup (bilinear in (u, T)) — divergence-free
+# `p*` draw for the GPU RTA collision. `invCDF` is the FLAT column-major table
+# from `Transport.build_juttner_invcdf`: invCDF[(jT-1)*nU + iu] = p*(u_iu; T_jT).
+# u ∈ [0,1] (uniform-index axis), T ∈ [Ttab_min, Ttab_min+(nT-1)/invdT].
+# ---------------------------------------------------------------------------
+@inline function _juttner_invcdf_lookup(
+    invCDF, nU::Int, nT::Int, Ttab_min::Float64, Ttab_invdT::Float64,
+    u::Float64, T::Float64,
+    )
+    # fractional u-index in [0, nU-1]
+    uu = u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u)
+    fu = uu * (nU - 1)
+    iu = Int(floor(fu))
+    iu = iu < 0 ? 0 : (iu > nU - 2 ? nU - 2 : iu)
+    tu = fu - iu
+
+    # fractional T-index in [0, nT-1]
+    fT = (T - Ttab_min) * Ttab_invdT
+    jT = Int(floor(fT))
+    jT = jT < 0 ? 0 : (jT > nT - 2 ? nT - 2 : jT)
+    tT = fT - jT
+    tT = tT < 0.0 ? 0.0 : (tT > 1.0 ? 1.0 : tT)
+
+    # flat indices (1-based); rows = u (nU), cols = T
+    b0 = jT * nU
+    b1 = (jT + 1) * nU
+    @inbounds v00 = invCDF[b0 + iu + 1]
+    @inbounds v10 = invCDF[b0 + iu + 2]
+    @inbounds v01 = invCDF[b1 + iu + 1]
+    @inbounds v11 = invCDF[b1 + iu + 2]
+
+    c0 = v00 * (1.0 - tu) + v10 * tu
+    c1 = v01 * (1.0 - tu) + v11 * tu
+    return c0 * (1.0 - tT) + c1 * tT
+end
+
 # ============================================================================
 # CUDA Kernels for Langevin Evolution
 # ============================================================================
@@ -83,7 +122,7 @@ end
 @inline function kernel_boost_to_rest_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
-    radial_mode::Bool
+    radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -102,6 +141,12 @@ end
 
         # --- local radial fluid velocity ---
         v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
+        # optional m=2 azimuthal modulation → elliptic flow v2 (use_v2=false ⇒ unchanged)
+        if use_v2 && size(positions, 1) >= 2
+            v2m = interpolate_2d_cuda(xgrid, tgrid, V2Evolution, r, t_now)
+            φ = atan(positions[2, i], positions[1, i])
+            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        end
         v2 = v * v
         γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -147,7 +192,7 @@ end
 @inline function kernel_boost_to_lab_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
-    radial_mode::Bool
+    radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -164,6 +209,12 @@ end
         # --- local fluid velocity ---
         t_now = steps * Δt + initial_time
         v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
+        # optional m=2 azimuthal modulation (must match the rest-frame boost for an exact round-trip)
+        if use_v2 && size(positions, 1) >= 2
+            v2m = interpolate_2d_cuda(xgrid, tgrid, V2Evolution, r, t_now)
+            φ = atan(positions[2, i], positions[1, i])
+            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        end
         v2 = v * v
         γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -213,7 +264,8 @@ end
     Δt, m, random_directions,
     dimensions, N_particles, steps, initial_time, DsT,
     tau_Tmin::Float64, tau_invdT::Float64, tau_vals,
-    radial_mode::Bool
+    radial_mode::Bool, integrator_mode::Int32,   # 0 = pre-point exact-OU (legacy), 1 = drift-midpoint O(ε²)
+    relativistic::Bool                            # true = ·m/E (Jüttner); false = ηD (Maxwell)
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -258,7 +310,7 @@ end
 
             # Relativistic drag: η_eff = ηD * m/E_LRF for Jüttner equilibrium.
             E_LRF_r = sqrt(p_sq + M^2)
-            η_eff_r = ηD * M / E_LRF_r
+            η_eff_r = relativistic ? ηD * M / E_LRF_r : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
 
             for d in 1:dimensions
                 det_term = -η_eff_r * momenta[d, i] * Δt
@@ -285,9 +337,23 @@ end
                     p2_lrf += momenta[d, i]^2
                 end
                 E_LRF   = sqrt(p2_lrf + M^2)
-                η_eff   = ηD * M / E_LRF
+                η_eff   = relativistic ? ηD * M / E_LRF : ηD    # pre-point drag (rel: ·m/E ⇒ Jüttner; non-rel: ηD ⇒ Maxwell)
+                if integrator_mode == Int32(1)
+                    # DRIFT-MIDPOINT (O(ε²)): NOISE-FREE deterministic half-step to a midpoint, re-evaluate
+                    # η_eff there, then apply the full exact-OU step with the midpoint coefficients. The
+                    # predictor must NOT include the noise (else η_eff correlates with ξ ⇒ spurious drift);
+                    # noise is additive (κ momentum-independent) so there is no Milstein noise term.
+                    a_half = exp(-η_eff * (0.5 * Δt))
+                    p2_mid = 0.0
+                    for d in 1:dimensions
+                        pm = a_half * momenta[d, i]
+                        p2_mid += pm * pm
+                    end
+                    E_mid = sqrt(p2_mid + M^2)
+                    η_eff = relativistic ? ηD * M / E_mid : ηD   # midpoint drag (overwrites pre-point)
+                end
                 a       = exp(-η_eff * Δt)
-                noise_pref = kT * sqrt((1.0 - a * a) / (2.0 * η_eff * Δt))
+                noise_pref = kT * sqrt((1.0 - a * a) / (2.0 * η_eff * Δt))   # matched FDR a↔variance
                 for d in 1:dimensions
                     @inbounds deterministic_terms[d, i] = (a - 1.0) * momenta[d, i]
                     @inbounds stochastic_terms[d, i]    = noise_pref * ξ[d, i]
@@ -467,6 +533,121 @@ end
         col_offset = (save_idx - 1) * N_particles
         for d in 1:dimensions
             @inbounds position_history[d, col_offset + idx] = current_positions[d, idx]
+        end
+    end
+    return
+end
+
+# On-the-fly freeze-out capture: for each particle NOT yet frozen (fo_flag==0), evaluate the local
+# temperature at the current (r,τ). While above Tfo, cache the state in last_*. The step it first drops
+# below Tfo, INTERPOLATE position/momentum/time linearly in T between the last-above and first-below states
+# to the exact T=Tfo crossing (interp=true; removes the O(Δt) booking lag ⇒ Δτ_save→0), or book the raw
+# first-below snapshot (interp=false). No history stored ⇒ memory ∝ N, VRAM-safe at any cadence / resolution.
+@inline function kernel_capture_freezeout_gpu!(
+    fo_pos, fo_mom, fo_tau, fo_flag, last_pos, last_mom, last_tau, last_T,
+    positions, momenta, xgrid, tgrid, Tfield, Tfo::Float64,
+    N_particles::Int, steps::Int, Δt::Float64, initial_time::Float64,
+    dimensions::Int, radial_mode::Bool, interp::Bool
+    )
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= N_particles
+        @inbounds if fo_flag[idx] == 0.0
+            r = 0.0
+            if radial_mode
+                @inbounds r = CUDA.abs(positions[1, idx])
+            else
+                r2 = 0.0
+                for d in 1:dimensions
+                    @inbounds r2 += positions[d, idx]^2
+                end
+                r = CUDA.sqrt(r2)
+            end
+            τ = steps * Δt + initial_time
+            T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, τ)
+            if T < Tfo
+                Tl = last_T[idx]
+                # frac=1 ⇒ current (raw first-below); frac∈[0,1] ⇒ interpolated to exact T=Tfo
+                frac = (interp && Tl > Tfo && Tl > T) ? (Tl - Tfo) / (Tl - T) : 1.0
+                for d in 1:dimensions
+                    @inbounds fo_pos[d, idx] = last_pos[d, idx] + frac * (positions[d, idx] - last_pos[d, idx])
+                    @inbounds fo_mom[d, idx] = last_mom[d, idx] + frac * (momenta[d, idx] - last_mom[d, idx])
+                end
+                @inbounds fo_tau[idx] = last_tau[idx] + frac * (τ - last_tau[idx])
+                @inbounds fo_flag[idx] = 1.0
+            else
+                # still above Tfo: cache this state as the last-above reference for interpolation
+                for d in 1:dimensions
+                    @inbounds last_pos[d, idx] = positions[d, idx]
+                    @inbounds last_mom[d, idx] = momenta[d, idx]
+                end
+                @inbounds last_tau[idx] = τ
+                @inbounds last_T[idx] = T
+            end
+        end
+    end
+    return
+end
+
+# === Boltzmann RTA / BGK collision (GPU) — divergence-free drop-in for the OU force+update ===
+# For each particle in the LOCAL REST FRAME: with probability Pcol = clamp(Δt/τn(T_local), 0, 1)
+# (τn ≤ 0 ⇒ Pcol=1, the DsT→0 instantaneous-equilibration limit), re-draw the momentum magnitude
+# from the isotropic local Jüttner via a constant-work inverse-CDF table lookup, then assign an
+# isotropic direction; otherwise leave the momentum unchanged. This is the exact GPU analogue of
+# `kernel_rta_collision_cpu!`: same τn spline, same Pcol formula, same P(p*) ∝ p*^(d-1)exp(-(E-m)/T)
+# shape — but every thread does identical work (no rejection loop ⇒ no warp divergence).
+# Uses PRE-GENERATED random arrays (fill with CUDA.rand!/CUDA.randn! in the sim loop):
+#   u_collide[i] ~ U(0,1)   collision decision
+#   u_sample[i] ~ U(0,1)    inverse-CDF draw of |p*|
+#   dir_gauss[d,i] ~ N(0,1) isotropic direction (radial_mode: sign only)
+# Call BETWEEN kernel_boost_to_rest_frame_gpu! and kernel_boost_to_lab_frame_gpu!.
+@inline function kernel_rta_collision_gpu!(
+    momenta, positions, xgrid, tgrid, Tfield,
+    Δt::Float64, m::Float64, N_particles::Int, steps, initial_time::Float64, DsT::Float64,
+    tau_Tmin::Float64, tau_invdT::Float64, tau_vals,
+    invCDF, nU::Int, nT::Int, Ttab_min::Float64, Ttab_invdT::Float64,
+    dimensions::Int, radial_mode::Bool,
+    u_collide, u_sample, dir_gauss,
+    )
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= N_particles
+        M = m
+        # --- local radius and temperature (matches the CPU RTA kernel) ---
+        r = 0.0
+        if radial_mode
+            @inbounds r = CUDA.abs(positions[1, i])
+        else
+            r2 = 0.0
+            for d in 1:dimensions
+                @inbounds r2 += positions[d, i]^2
+            end
+            r = CUDA.sqrt(r2)
+        end
+        T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
+        Tpos = T > 0.0 ? T : 0.0
+
+        τn = (DsT > 0.0 && Tpos > 0.0) ? _eval_tau_n_spline_cuda(Tpos, tau_Tmin, tau_invdT, tau_vals) : 0.0
+        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt / τn, 0.0, 1.0) : 1.0
+
+        @inbounds uc = u_collide[i]
+        if uc < Pcol
+            @inbounds us = u_sample[i]
+            pstar = _juttner_invcdf_lookup(invCDF, nU, nT, Ttab_min, Ttab_invdT, us, Tpos)
+            if radial_mode
+                # signed radial magnitude; fair ± coin from a Gaussian's sign
+                @inbounds g1 = dir_gauss[1, i]
+                s = g1 < 0.0 ? -1.0 : 1.0
+                @inbounds momenta[1, i] = s * pstar
+            else
+                nrm2 = 0.0
+                for d in 1:dimensions
+                    @inbounds g = dir_gauss[d, i]
+                    nrm2 += g * g
+                end
+                inv = pstar / CUDA.sqrt(nrm2 > 1e-300 ? nrm2 : 1e-300)
+                for d in 1:dimensions
+                    @inbounds momenta[d, i] = dir_gauss[d, i] * inv
+                end
+            end
         end
     end
     return
