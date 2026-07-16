@@ -10,6 +10,7 @@ export interpolate_2d_cpu,
        kernel_boost_to_lab_frame_cpu!,
        kernel_compute_all_forces_cpu!,
        kernel_update_momenta_LRF_cpu!,
+       kernel_rta_collision_cpu!,
        kernel_update_positions_cpu!,
        kernel_save_snapshot_cpu!,
        kernel_save_momenta_cpu!,
@@ -51,7 +52,8 @@ end
 function kernel_boost_to_rest_frame_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0;
-    radial_mode::Bool = false
+    radial_mode::Bool = false,
+    V2Evolution = nothing, psi2::Float64 = 0.0
     )
     @inbounds for i in 1:N
         # --- compute current proper time ---
@@ -69,6 +71,13 @@ function kernel_boost_to_rest_frame_cpu!(
 
         # --- local radial fluid velocity ---
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
+        # optional m=2 azimuthal modulation of the radial-flow magnitude (elliptic flow v2):
+        # v→v·(1+2 v2(r,t) cos2(φ−Ψ₂)).  Default (V2Evolution=nothing) ⇒ byte-identical radial flow.
+        if V2Evolution !== nothing && size(positions, 1) >= 2
+            v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
+            φ = atan(positions[2, i], positions[1, i])
+            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        end
         # Guard against superluminal values due to numerical noise.
         vmax = sqrt(1.0 - 1e-12)
         v = clamp(v, -vmax, vmax)
@@ -121,7 +130,8 @@ end
 function kernel_boost_to_lab_frame_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0;
-    radial_mode::Bool = false
+    radial_mode::Bool = false,
+    V2Evolution = nothing, psi2::Float64 = 0.0
     )
     @inbounds for i in 1:N
         # --- compute radius ---
@@ -137,6 +147,13 @@ function kernel_boost_to_lab_frame_cpu!(
         # --- local fluid velocity ---
         t_now = step * Δt + t0
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
+        # optional m=2 azimuthal modulation (elliptic flow); must MATCH the rest-frame boost so the
+        # round-trip is exact when no diffusion.  Default (nothing) ⇒ unchanged radial flow.
+        if V2Evolution !== nothing && size(positions, 1) >= 2
+            v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
+            φ = atan(positions[2, i], positions[1, i])
+            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        end
         vmax = sqrt(1.0 - 1e-12)
         v = clamp(v, -vmax, vmax)
         v2 = v * v
@@ -195,7 +212,8 @@ function kernel_compute_all_forces_cpu!(
     tau_Tmin::Float64,
     tau_invdT::Float64,
     tau_vals::AbstractVector{<:Real},
-    radial_mode::Bool = false
+    radial_mode::Bool = false,
+    relativistic::Bool = true
  )
     M = m  # heavy-quark mass (can be parameterized)
 
@@ -210,7 +228,8 @@ function kernel_compute_all_forces_cpu!(
         DsT_safe = DsT <= 0 ? 0.0 : DsT
 
         # --- transport coefficients ---
-        # We enforce Langevin to use the same τn(T,m,DsT) logic as FiVoHydro.jl/main3.jl.
+        # Langevin uses the matched τn(T,m,DsT) = D_s z K₃/K₂ (see Transport.tau_n_main3),
+        # the same relaxation time as the MIS-hydro side (FluiduM single-species τ_diffusion).
         # τn is provided as a precomputed spline in fm.
         τn = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
 
@@ -241,7 +260,7 @@ function kernel_compute_all_forces_cpu!(
             # ∂f/∂t = ∂/∂p[(κ/2T)(p/E)f + (κ/2)∂f/∂p] gives Jüttner equilibrium.
             # κ = 2mT ηD is unchanged; only the attenuation factor changes.
             E_LRF_r = sqrt(p^2 + M^2)   # p = p_mags[i] is already computed above
-            η_eff_r = ηD * M / E_LRF_r
+            η_eff_r = relativistic ? ηD * M / E_LRF_r : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
 
             for d in 1:dimensions
                 det_term = -η_eff_r * momenta[d, i] * Δt
@@ -270,7 +289,7 @@ function kernel_compute_all_forces_cpu!(
                     p2_lrf += momenta[d, i]^2
                 end
                 E_LRF   = sqrt(p2_lrf + M^2)
-                η_eff   = ηD * M / E_LRF
+                η_eff   = relativistic ? ηD * M / E_LRF : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
                 a       = exp(-η_eff * Δt)
                 noise_pref = (Δt > 0 && η_eff > 0) ?
                                  (kT * sqrt((1 - a * a) / (2 * η_eff * Δt))) : 0.0
@@ -345,6 +364,70 @@ function kernel_update_momenta_LRF_cpu!(
     @inbounds for i in 1:N
         for d in 1:dimensions
             momenta[d, i] += deterministic_terms[d, i] + sqrtΔt * stochastic_terms[d, i]
+        end
+    end
+    return nothing
+end
+
+# === Boltzmann RTA / BGK collision (drop-in replacement for the OU force+update) ===
+# Isotropic local-rest-frame Jüttner magnitude sampler P(p*) ∝ p*^(d-1) exp(-(E-m)/T),
+# by rejection with an exact-mode envelope.  d = number of momentum components
+# (d=1 radial, d=2 the diagnostic's transverse plane, d=3 full).  Mirrors the engine's
+# `_draw_juttner_pstar` (minimal_langevin_from_splines.jl) but generalized in d.
+@inline function _draw_juttner_pstar_lib(m::Float64, T::Float64, d::Int)
+    T <= 0.0 && return 0.0
+    a = d - 1
+    # exact mode of p^a exp(-(E-m)/T): a T E = p² = E²-m² ⇒ E = (aT + √(a²T²+4m²))/2
+    E_peak = (a * T + sqrt(a * a * T * T + 4.0 * m * m)) / 2.0
+    p_peak = sqrt(max(E_peak * E_peak - m * m, 1e-12))
+    gpeak  = (p_peak^a) * exp(-(E_peak - m) / T)          # a==0 ⇒ p_peak=0, gpeak=1 (0^0=1)
+    wmax   = 1.3 * max(gpeak, 1e-300)
+    pmax   = 16.0 * sqrt(m * T) + 16.0 * T
+    @inbounds for _ in 1:100000
+        p = pmax * rand()
+        E = sqrt(m * m + p * p)
+        w = (p^a) * exp(-(E - m) / T)
+        rand() * wmax <= w && return p
+    end
+    return p_peak
+end
+
+# RTA/BGK momentum update in the LRF: with probability Pcol = clamp(Δt/τn(T_local), 0, 1)
+# re-draw the momentum from an isotropic Jüttner at the local T; otherwise leave it unchanged.
+# τn is the SAME relaxation-time spline the OU Langevin uses (build_tau_n_spline), so the RTA
+# and Langevin differ ONLY in the collision operator.  Operates on rest-frame momenta — call it
+# between kernel_boost_to_rest_frame_cpu! and kernel_boost_to_lab_frame_cpu!.
+function kernel_rta_collision_cpu!(
+    Tfield, xgrid, tgrid,
+    momenta, positions,
+    Δt, m, N, step, t0, DsT;
+    tau_Tmin::Float64,
+    tau_invdT::Float64,
+    tau_vals::AbstractVector{<:Real},
+    dimensions::Int = 2,
+    radial_mode::Bool = false,
+ )
+    M = m
+    @inbounds for i in 1:N
+        r = sqrt(sum(positions[:, i].^2))
+        T = max(float(interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)), 0.0)
+        τn = (DsT > 0.0 && T > 0.0) ? eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals) : 0.0
+        # τn ≤ 0 ⇒ infinitely fast relaxation ⇒ always re-draw (DsT→0 local-equilibrium limit)
+        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt / τn, 0.0, 1.0) : 1.0
+        rand() < Pcol || continue
+        pstar = _draw_juttner_pstar_lib(M, T, dimensions)
+        if radial_mode
+            momenta[1, i] = (rand() < 0.5 ? -pstar : pstar)     # signed radial magnitude
+        else
+            # random isotropic direction in `dimensions` components
+            nrm2 = 0.0
+            for d in 1:dimensions
+                g = randn(); momenta[d, i] = g; nrm2 += g * g
+            end
+            inv = pstar / sqrt(max(nrm2, 1e-300))
+            for d in 1:dimensions
+                momenta[d, i] *= inv
+            end
         end
     end
     return nothing

@@ -29,8 +29,12 @@ function simulate_ensemble_bulk_cpu(
     position_diffusion::Bool = false,
     momentum_langevin::Bool = true,
     reflecting_boundary::Bool = false,
+    collision_mode::Symbol = :langevin,
     x_init::Union{Nothing, AbstractMatrix} = nothing,
-    p_init::Union{Nothing, AbstractMatrix} = nothing)
+    p_init::Union{Nothing, AbstractMatrix} = nothing,
+    V2Evolutionn::Union{Nothing, AbstractMatrix} = nothing,
+    psi2::Float64 = 0.0,
+    relativistic::Bool = true)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
@@ -136,7 +140,8 @@ function simulate_ensemble_bulk_cpu(
 
     kernel_boost_to_lab_frame_cpu!(
     momenta, positions, xgrid, tgrid,
-    VelocityEvolutionn, m, N_particles, 0, Δt, initial_time,radial_mode = radial_mode)
+    VelocityEvolutionn, m, N_particles, 0, Δt, initial_time,radial_mode = radial_mode,
+    V2Evolution = V2Evolutionn, psi2 = psi2)
 
     momenta_history[:,:,1] .= momenta
     position_history[:, :, 1] .= positions
@@ -180,12 +185,27 @@ function simulate_ensemble_bulk_cpu(
         # 1. Boost momenta to local rest frame
         kernel_boost_to_rest_frame_cpu!(
             momenta, positions, xgrid, tgrid,
-            VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
+            VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+            V2Evolution = V2Evolutionn, psi2 = psi2)
 
         if !momentum_langevin || DsT == 0.0
             kernel_set_to_fluid_velocity_cpu!(
                 momenta, positions,  xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
+        elseif collision_mode == :rta
+            # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn (same τn as OU).
+            kernel_rta_collision_cpu!(
+                TemperatureEvolutionn, xgrid, tgrid,
+                momenta, positions,
+                Δt, m, N_particles, step, initial_time, DsT;
+                tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = tau_vals,
+                dimensions = dimensions, radial_mode = radial_mode)
+
+            # Boost updated momenta back to lab frame
+            kernel_boost_to_lab_frame_cpu!(
+                momenta, positions, xgrid, tgrid,
+                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                V2Evolution = V2Evolutionn, psi2 = psi2)
         else
 
             # 2. Compute forces in rest frame
@@ -199,7 +219,8 @@ function simulate_ensemble_bulk_cpu(
                 tau_Tmin = tau_Tmin,
                 tau_invdT = tau_invdT,
                 tau_vals = tau_vals,
-                radial_mode = radial_mode)
+                radial_mode = radial_mode,
+                relativistic = relativistic)
     
             # 3. Update momenta
             kernel_update_momenta_LRF_cpu!(
@@ -209,8 +230,9 @@ function simulate_ensemble_bulk_cpu(
             # 4. Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
-                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
-        end 
+                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                V2Evolution = V2Evolutionn, psi2 = psi2)
+        end
         # 5. Update positions
        
         kernel_update_positions_cpu!(

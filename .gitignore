@@ -11,3 +11,6 @@ Manifest.toml
 *.ji
 .julia/
 deps/
+
+# Claude Code agent worktrees (tooling artifacts; contain their own .git)
+.claude/
