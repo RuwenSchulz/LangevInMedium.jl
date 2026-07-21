@@ -4,8 +4,37 @@ using ..Constants: fmGeV
 using Bessels
 
 export tau_n_main3, build_tau_n_spline, eval_tau_n_spline, effective_DsT, build_juttner_invcdf
+export LV_TAUN_SCALE
+
+function __init__()
+    LV_TAUN_SCALE[] = parse(Float64, get(ENV, "LV_TAUN_SCALE", "1.0"))
+    LV_TAUN_SCALE[] == 1.0 ||
+        @warn "LangevInMedium: τ_n scaled by LV_TAUN_SCALE — DIAGNOSTIC MODE (this also rescales η_D, κ and hence D_s)" scale=LV_TAUN_SCALE[]
+end
 
 const _TINY = 1e-300
+
+"""
+    LV_TAUN_SCALE
+
+Diagnostic multiplier on the Langevin diffusion relaxation time τ_n. Default 1.0 = bare
+`tau_n_main3`, i.e. unchanged production behaviour. Set `LV_TAUN_SCALE=0.16666666666666666` (1/6)
+to impose the ÷g_hq convention that Fluidum's `τ_diffusion_hadron` carries, so both descriptions can
+be run under the SAME convention.
+
+⚠️ PHYSICS CAVEAT — this is NOT the same kind of knob as Fluidum's `HQ_TAUN_SCALE`. In hydro, κ and
+τ_n are independent (κ from `diffusion_hadron`, τ_n from `τ_diffusion_hadron`), so scaling τ_n
+changes the relaxation rate at FIXED D_s. In the Langevin they are locked by the
+fluctuation–dissipation relation — `kernels_cpu.jl:236-242` sets η_D = 1/τ_n and κ = 2MT/τ_n from
+the same τ_n — so scaling τ_n here rescales BOTH, and therefore moves D_s and the Navier–Stokes
+limit as well. A "Langevin with the factor" run is a physically different medium, not merely a
+differently-relaxing one. Interpret accordingly.
+
+Implemented as a Ref populated in `__init__` rather than `const X = parse(ENV...)`: the latter is
+evaluated at PRECOMPILE time and baked into the .ji, so the env var would be silently ignored in
+every later process (this exact mistake produced bit-identical "different" runs in Fluidum).
+"""
+const LV_TAUN_SCALE = Ref(1.0)
 
 """
     tau_n_main3(T, m, DsT) -> Float64
@@ -121,7 +150,7 @@ function build_tau_n_spline(
     @inbounds for i in 1:n
         Ti = Tmin_f + (i - 1) * dT
         DsT_eff = effective_DsT(Ti, DsT; DsT_linear=DsT_linear, DsT_slope=DsT_slope, DsT_offset=DsT_offset, Tfo=Tfo)
-        tau_vals[i] = tau_n_main3(Ti, m, DsT_eff)
+        tau_vals[i] = tau_n_main3(Ti, m, DsT_eff) * LV_TAUN_SCALE[]
     end
     return Tmin_f, invdT, tau_vals
 end
