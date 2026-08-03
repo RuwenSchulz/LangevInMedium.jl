@@ -76,7 +76,7 @@ function simulate_ensemble_bulk_general_coords_cpu(
     if DsT > 0.0
         Tmin = max(float(minimum(TemperatureEvolution)), 0.0)
         Tmax = max(float(maximum(TemperatureEvolution)), Tmin + eps(Float64))
-        tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
+        tau_Tmin, tau_invdT, tau_vals = build_tau_drag_spline(m, DsT; Tmin = Tmin, Tmax = Tmax, nT = 1024)
     end
 
     # === Main Time Evolution ===

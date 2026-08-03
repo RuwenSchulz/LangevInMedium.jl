@@ -76,10 +76,37 @@ const DST     = 0.11634
         @test isapprox(effective_DsT(Tfo,  DST; DsT_linear=true), slope*Tfo + offset; rtol=1e-12)
     end
 
+    @testset "tau_drag is the DRAG, tau_n_main3 is the CURRENT time (ratio = K₃/K₂)" begin
+        # 🔴 REGRESSION GUARD for the 2026-08-02 bug. `build_tau_n_spline` fed tau_n_main3 in as
+        # 1/η_D, so the realised D_s was K₃/K₂ (1.26-1.74×) larger than the DsT label. Nothing in
+        # this suite tested the drag, which is why it survived. These are the missing assertions.
+        for T in (0.156, 0.20, 0.30, 0.40), dst in (0.116, 0.371)
+            z  = M_CHARM / T
+            τd = tau_drag(T, M_CHARM, dst)
+            τn = tau_n_main3(T, M_CHARM, dst)
+            # the drag IS the Einstein relation, nothing else
+            @test isapprox(τd, M_CHARM * dst / T^2 / fmGeV; rtol = 1e-12)
+            # a medium built from this drag realises the D_sT it is LABELLED with
+            @test isapprox((T / (M_CHARM * (1/τd))) * T * fmGeV, dst; rtol = 1e-12)
+            # the current time is the derived consequence, larger by exactly K₃/K₂
+            @test isapprox(τn / τd, Kx(3, z) / Kx(2, z); rtol = 1e-12)
+            @test τn > τd
+        end
+        # the two splines must differ by exactly K₃/K₂ pointwise
+        Tmin, Tmax, nT = 0.10, 0.50, 128
+        _,  _, dvals = build_tau_drag_spline(M_CHARM, DST; Tmin=Tmin, Tmax=Tmax, nT=nT)
+        _,  _, nvals = build_taun_current_spline(M_CHARM, DST; Tmin=Tmin, Tmax=Tmax, nT=nT)
+        dT = (Tmax - Tmin) / (nT - 1)
+        for i in 1:nT
+            z = M_CHARM / (Tmin + (i-1)*dT)
+            @test isapprox(nvals[i] / dvals[i], Kx(3, z) / Kx(2, z); rtol = 1e-12)
+        end
+    end
+
     @testset "Einstein / FDR closure: κ = 2MTη_D ⟹ OU variance → MT" begin
-        # The kernel defines η_D = 1/τ_n, κ = 2MT/τ_n, so κ/(2η_D) = MT exactly.
+        # The kernel defines η_D = 1/τ_drag, κ = 2MT/τ_drag, so κ/(2η_D) = MT exactly.
         T  = 0.3
-        τn = tau_n_main3(T, M_CHARM, DST)
+        τn = tau_drag(T, M_CHARM, DST)
         ηD = 1.0 / τn
         κ  = 2 * M_CHARM * T / τn
         @test isapprox(κ / (2ηD), M_CHARM * T; rtol = 1e-12)

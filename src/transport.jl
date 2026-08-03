@@ -3,7 +3,7 @@ module Transport
 using ..Constants: fmGeV
 using Bessels
 
-export tau_n_main3, tau_drag, build_tau_n_spline, eval_tau_n_spline, effective_DsT, build_juttner_invcdf
+export tau_n_main3, tau_drag, build_tau_drag_spline, build_taun_current_spline, eval_tau_n_spline, effective_DsT, build_juttner_invcdf
 export LV_TAUN_SCALE
 
 function __init__()
@@ -17,18 +17,17 @@ const _TINY = 1e-300
 """
     LV_TAUN_SCALE
 
-Diagnostic multiplier on the Langevin diffusion relaxation time τ_n. Default 1.0 = bare
-`tau_n_main3`, i.e. unchanged production behaviour. Set `LV_TAUN_SCALE=0.16666666666666666` (1/6)
-to impose the ÷g_hq convention that Fluidum's `τ_diffusion_hadron` carries, so both descriptions can
-be run under the SAME convention.
+Diagnostic multiplier applied inside `_build_time_spline`, i.e. to BOTH the drag spline and the
+current spline. Default 1.0 = unscaled, unchanged production behaviour. Set
+`LV_TAUN_SCALE=0.16666666666666666` (1/6) to impose the ÷g_hq convention that Fluidum's
+`τ_diffusion_hadron` used to carry, so both descriptions can be run under the SAME convention.
 
 ⚠️ PHYSICS CAVEAT — this is NOT the same kind of knob as Fluidum's `HQ_TAUN_SCALE`. In hydro, κ and
 τ_n are independent (κ from `diffusion_hadron`, τ_n from `τ_diffusion_hadron`), so scaling τ_n
-changes the relaxation rate at FIXED D_s. In the Langevin they are locked by the
-fluctuation–dissipation relation — `kernels_cpu.jl:236-242` sets η_D = 1/τ_n and κ = 2MT/τ_n from
-the same τ_n — so scaling τ_n here rescales BOTH, and therefore moves D_s and the Navier–Stokes
-limit as well. A "Langevin with the factor" run is a physically different medium, not merely a
-differently-relaxing one. Interpret accordingly.
+changes the relaxation rate at FIXED D_s. In the Langevin there is only ONE free coefficient: the
+OU kernel sets η_D = 1/τ_drag and κ = 2MT/τ_drag from the same drag, so scaling here rescales
+both, and therefore moves D_s and the Navier–Stokes limit as well. A "Langevin with the factor"
+run is a physically different medium, not merely a differently-relaxing one. Interpret accordingly.
 
 Implemented as a Ref populated in `__init__` rather than `const X = parse(ENV...)`: the latter is
 evaluated at PRECOMPILE time and baked into the .ji, so the env var would be silently ignored in
@@ -146,19 +145,14 @@ end
 end
 
 """
-    build_tau_n_spline(m, DsT; Tmin, Tmax, nT) -> (Tmin, invdT, tau_vals)
+    _build_time_spline(timefn, m, DsT; Tmin, Tmax, nT, ...) -> (Tmin, invdT, vals)
 
-Build a fast **uniform-grid linear spline** for \\tau_n(T) (in fm):
-
-- `Tmin`, `Tmax` in GeV
-- `nT` number of grid points
-
-Returns:
-- `Tmin::Float64`
-- `invdT::Float64` (where `dT = 1/invdT`)
-- `tau_vals::Vector{Float64}` length `nT`
+Generic uniform-grid linear spline of a transport time `timefn(T, m, DsT_eff)` in fm.
+Callers pick `timefn` = `tau_drag` (the drag) or `tau_n_main3` (the current time).
+Kept private so that every consumer has to name which of the two it wants.
 """
-function build_tau_n_spline(
+function _build_time_spline(
+    timefn,
     m::Real,
     DsT::Real;
     Tmin::Real,
@@ -179,21 +173,47 @@ function build_tau_n_spline(
     dT = (Tmax_f - Tmin_f) / (n - 1)
     invdT = 1.0 / dT
 
-    tau_vals = Vector{Float64}(undef, n)
+    vals = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
         Ti = Tmin_f + (i - 1) * dT
         DsT_eff = effective_DsT(Ti, DsT; DsT_linear=DsT_linear, DsT_slope=DsT_slope, DsT_offset=DsT_offset, Tfo=Tfo)
-        # 🔴 THE DRAG, not the current relaxation time. This line called `tau_n_main3` until
-        # 2026-08-02, which made the realised D_s too large by K₃/K₂ — see `tau_drag`.
-        tau_vals[i] = tau_drag(Ti, m, DsT_eff) * LV_TAUN_SCALE[]
+        vals[i] = timefn(Ti, m, DsT_eff) * LV_TAUN_SCALE[]
     end
-    return Tmin_f, invdT, tau_vals
+    return Tmin_f, invdT, vals
 end
+
+"""
+    build_tau_drag_spline(m, DsT; Tmin, Tmax, nT) -> (Tmin, invdT, tau_drag_vals)
+
+Spline of the **DRAG** time `tau_drag` (in fm) — what the OU/Langevin step needs.
+
+🔴 Renamed from `build_tau_n_spline` on 2026-08-03 and switched from `tau_n_main3` to
+`tau_drag` on 2026-08-02. The old name is the whole reason the bug survived: one name
+meaning two different times, so `η_D = 1/τ` read as correct at every call site. If you
+want the Israel–Stewart current time, call `build_taun_current_spline` and say so.
+"""
+build_tau_drag_spline(m::Real, DsT::Real; kwargs...) =
+    _build_time_spline(tau_drag, m, DsT; kwargs...)
+
+"""
+    build_taun_current_spline(m, DsT; Tmin, Tmax, nT) -> (Tmin, invdT, taun_vals)
+
+Spline of the **DIFFUSION-CURRENT** relaxation time `tau_n_main3` (in fm) — the τ_n of
+Israel–Stewart, equal to `tau_drag · K₃/K₂`.
+
+Used by the RTA/BGK collision kernels: BGK relaxes every non-equilibrium moment at `1/τ`,
+so to make the RTA and the OU Langevin share an ℓ=1 (diffusion-current) decay rate — the
+sector both papers compare — the RTA must be driven by THIS time, not by the drag.
+"""
+build_taun_current_spline(m::Real, DsT::Real; kwargs...) =
+    _build_time_spline(tau_n_main3, m, DsT; kwargs...)
 
 """
     eval_tau_n_spline(T, Tmin, invdT, tau_vals) -> Float64
 
-Evaluate the uniform-grid linear spline produced by `build_tau_n_spline`.
+Evaluate a uniform-grid linear time spline. Generic: it does not know, and cannot check, whether
+it was handed `build_tau_drag_spline` or `build_taun_current_spline` output — the CALLER owns
+that distinction. (Name kept for call-site compatibility; read it as `eval_time_spline`.)
 """
 @inline function eval_tau_n_spline(
     T::Real,
