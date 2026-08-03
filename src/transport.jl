@@ -3,7 +3,7 @@ module Transport
 using ..Constants: fmGeV
 using Bessels
 
-export tau_n_main3, build_tau_n_spline, eval_tau_n_spline, effective_DsT, build_juttner_invcdf
+export tau_n_main3, tau_drag, build_tau_n_spline, eval_tau_n_spline, effective_DsT, build_juttner_invcdf
 export LV_TAUN_SCALE
 
 function __init__()
@@ -104,6 +104,39 @@ Inputs:
     return τ_GeVinv / fmGeV
 end
 
+"""
+    tau_drag(T, m, DsT) -> Float64      [fm]
+
+The **drag** time, 1/η_D, i.e. what the Langevin step actually needs. Fixed by the Einstein
+relation and nothing else:
+
+    D_s = T/(m η_D)   ⇒   1/η_D = m D_s/T = m·DsT/T²        (×ħc for fm)
+
+🔴 **THIS IS NOT `tau_n_main3`, AND CONFUSING THE TWO WAS A REAL BUG (fixed 2026-08-02).**
+`tau_n_main3` = D_s z K₃/K₂ is the **diffusion-current relaxation time** — the τ_n of the
+Israel–Stewart current equation, which is what Fluidum's `τ_diffusion_hadron` evaluates. For a
+Fokker–Planck process with drag η_D the ℓ=1 mode relaxes at
+
+    λ₁ = η_D · ⟨(m/E)p²⟩/⟨p²⟩ = η_D · K₂(z)/K₃(z)     (an identity in 3-D, verified to 4 digits)
+
+so its current time is automatically `(1/η_D)·K₃/K₂`. Substituting `1/η_D = m DsT/T²` returns
+`D_s z K₃/K₂` — Fluidum's τ_n exactly. **So a Langevin built with `tau_drag` reproduces BOTH of
+hydro's coefficients: D_s (the Navier–Stokes limit) and τ_n (the relaxation time).** It has only one
+free coefficient, and this is the value that makes both agree.
+
+Building the drag from `tau_n_main3` instead — which `build_tau_n_spline` did until 2026-08-02 —
+applies K₃/K₂ one time too many. The medium then has **D_s too large by K₃/K₂** (1.27× at z=10,
+1.77× at z=3.75; measured directly from the particles' mean-square displacement in
+`diag_clock_from_diffusion.jl`) **and a current relaxing K₃/K₂ too slowly**, i.e. it matches neither
+hydro quantity while being labelled with D_sT.
+"""
+@inline function tau_drag(T::Real, m::Real, DsT::Real)::Float64
+    Tm = Float64(T); Mm = Float64(m); Ds = Float64(DsT)
+    (!isfinite(Tm) || !isfinite(Mm) || !isfinite(Ds) || Tm <= 0.0 || Mm <= 0.0 || Ds <= 0.0) &&
+        return 0.0
+    return Mm * Ds / (Tm^2) / fmGeV      # (GeV^-1) -> fm
+end
+
 @inline function effective_DsT(T::Real, DsT::Real; DsT_linear::Bool=false, DsT_slope::Real=1.765, DsT_offset::Real=-0.159, Tfo::Real=0.156)::Float64
     if !DsT_linear
         return Float64(DsT)
@@ -150,7 +183,9 @@ function build_tau_n_spline(
     @inbounds for i in 1:n
         Ti = Tmin_f + (i - 1) * dT
         DsT_eff = effective_DsT(Ti, DsT; DsT_linear=DsT_linear, DsT_slope=DsT_slope, DsT_offset=DsT_offset, Tfo=Tfo)
-        tau_vals[i] = tau_n_main3(Ti, m, DsT_eff) * LV_TAUN_SCALE[]
+        # 🔴 THE DRAG, not the current relaxation time. This line called `tau_n_main3` until
+        # 2026-08-02, which made the realised D_s too large by K₃/K₂ — see `tau_drag`.
+        tau_vals[i] = tau_drag(Ti, m, DsT_eff) * LV_TAUN_SCALE[]
     end
     return Tmin_f, invdT, tau_vals
 end
