@@ -228,16 +228,21 @@ function kernel_compute_all_forces_cpu!(
         DsT_safe = DsT <= 0 ? 0.0 : DsT
 
         # --- transport coefficients ---
-        # Langevin uses the matched τn(T,m,DsT) = D_s z K₃/K₂ (see Transport.tau_n_main3),
-        # the same relaxation time as the MIS-hydro side (FluiduM single-species τ_diffusion).
-        # τn is provided as a precomputed spline in fm.
-        τn = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
+        # 🔴 This is the DRAG time τ_drag = M·DsT/T² (Transport.tau_drag), supplied as a
+        # precomputed spline in fm by `build_tau_drag_spline`. It is NOT `tau_n_main3`.
+        # Until 2026-08-02 this comment claimed the spline held the matched τ_n = D_s z K₃/K₂
+        # "the same relaxation time as the MIS-hydro side" — and it did, which is precisely the
+        # bug: τ_n is the diffusion-CURRENT time, and using it as 1/η_D applied K₃/K₂ once too
+        # often, so the realised D_s was K₃/K₂ (1.26-1.74×) larger than the DsT label.
+        # The hydro τ_n is a DERIVED consequence here, not an input: with this drag the ℓ=1
+        # mode decays at η_D·K₂/K₃, i.e. exactly Fluidum's τ_diffusion_hadron. See `tau_drag`.
+        τ_drag = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
 
-        # Define drag/diffusion consistently via τn:
-        #   ηD = 1/τn  [1/fm]
-        #   κ  = 2 m T / τn  [GeV^2/fm]
-        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
-        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * T) / τn) : 0.0
+        # Einstein / fluctuation-dissipation, both from the same drag:
+        #   ηD = 1/τ_drag        [1/fm]      ⇒  D_s = T/(M ηD) = DsT/T
+        #   κ  = 2 M T / τ_drag  [GeV^2/fm]  ⇒  D_s = 2T²/κ    (Eq. 11 of 2205.07692)
+        ηD = (τ_drag > 0.0 && isfinite(τ_drag)) ? (1.0 / τ_drag) : 0.0
+        κ  = (τ_drag > 0.0 && isfinite(τ_drag)) ? ((2.0 * M * T) / τ_drag) : 0.0
         kL = sqrt(κ)
         kT = sqrt(κ)
 
@@ -394,9 +399,18 @@ end
 
 # RTA/BGK momentum update in the LRF: with probability Pcol = clamp(Δt/τn(T_local), 0, 1)
 # re-draw the momentum from an isotropic Jüttner at the local T; otherwise leave it unchanged.
-# τn is the SAME relaxation-time spline the OU Langevin uses (build_tau_n_spline), so the RTA
-# and Langevin differ ONLY in the collision operator.  Operates on rest-frame momenta — call it
-# between kernel_boost_to_rest_frame_cpu! and kernel_boost_to_lab_frame_cpu!.
+#
+# 🔴 `tau_vals` MUST be the CURRENT-time spline (`build_taun_current_spline`, = tau_n_main3),
+# NOT the drag spline the OU kernel takes. BGK relaxes EVERY non-equilibrium moment at 1/τ,
+# whereas the OU's ℓ=1 mode decays at η_D·K₂/K₃ = 1/τ_n. So "RTA and Langevin differ ONLY in
+# the collision operator" — the intent here — holds in the diffusion-current sector iff the RTA
+# is driven by τ_n. Before 2026-08-02 both kernels shared one spline that happened to hold τ_n:
+# the RTA was right and the OU was wrong. Fixing the OU inverted that, so the two splines are
+# now built and passed separately. Feeding the drag here relaxes the RTA K₃/K₂ too fast.
+# (BGK cannot match every moment of the FP operator at once; ℓ=1 is the deliberate choice.)
+#
+# Operates on rest-frame momenta — call it between kernel_boost_to_rest_frame_cpu! and
+# kernel_boost_to_lab_frame_cpu!.
 function kernel_rta_collision_cpu!(
     Tfield, xgrid, tgrid,
     momenta, positions,

@@ -82,21 +82,32 @@ function simulate_ensemble_bulk_gpu(
         use_v2 = V2Evolutionn !== nothing
         V2Evolution = use_v2 ? CuArray(V2Evolutionn) : CuArray(zeros(Float64, 1, 1))
 
-        # === Precompute τn(T) spline (main3 logic) on CPU and upload to GPU ===
+        # === Precompute the DRAG spline τ_drag(T) on CPU and upload to GPU ===
         tau_Tmin::Float64 = 0.0
         tau_invdT::Float64 = 1.0
         tau_vals = Float64[0.0, 0.0]
+        # RTA/BGK needs the CURRENT time instead — see build_taun_current_spline.
+        taun_vals = Float64[0.0, 0.0]
         if momentum_langevin && DsT > 0.0
             Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
             Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
-            tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT;
+            tau_Tmin, tau_invdT, tau_vals = build_tau_drag_spline(m, DsT;
                 Tmin = Tmin, Tmax = Tmax, nT = 1024,
                 DsT_linear = DsT_linear,
                 DsT_slope = DsT_slope,
                 DsT_offset = DsT_offset,
                 Tfo = Tfo)
+            if collision_mode == :rta
+                _, _, taun_vals = build_taun_current_spline(m, DsT;
+                    Tmin = Tmin, Tmax = Tmax, nT = 1024,
+                    DsT_linear = DsT_linear,
+                    DsT_slope = DsT_slope,
+                    DsT_offset = DsT_offset,
+                    Tfo = Tfo)
+            end
         end
         tau_vals_d = CuArray(tau_vals)
+        taun_vals_d = CuArray(taun_vals)
 
         # === RTA/BGK: precompute the isotropic Jüttner inverse-CDF table on CPU, upload to GPU ===
         # Divergence-free `p*` sampler for kernel_rta_collision_gpu! (replaces the CPU rejection loop).
@@ -286,12 +297,15 @@ function simulate_ensemble_bulk_gpu(
                     momenta, positions, xgrid, tgrid,
                     VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode)
             elseif rta_mode
-                # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn (same τn as OU),
-                # in the LRF, then boost back to lab. Skips the OU force/update kernels entirely.
+                # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn in the LRF,
+                # then boost back to lab. Skips the OU force/update kernels entirely.
+                # 🔴 τn here is the CURRENT relaxation time (tau_n_main3), NOT the OU drag: BGK
+                # relaxes every moment at 1/τ, so matching the OU's ℓ=1 (diffusion-current) decay
+                # needs τ_n = τ_drag·K₃/K₂. The drag would relax it 1.26-1.74× too fast.
                 @cuda threads=threads blocks=blocks kernel_rta_collision_gpu!(
                     momenta, positions, xgrid, tgrid, TemperatureEvolution,
                     Δt, m, N_particles, step, initial_time, DsT,
-                    tau_Tmin, tau_invdT, tau_vals_d,
+                    tau_Tmin, tau_invdT, taun_vals_d,
                     invcdf_d, invcdf_nU, invcdf_nT, invcdf_Tmin, invcdf_invdT,
                     dimensions, radial_mode,
                     u_collide, u_sample, random_directions)

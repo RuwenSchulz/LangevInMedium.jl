@@ -595,6 +595,10 @@ end
 # isotropic direction; otherwise leave the momentum unchanged. This is the exact GPU analogue of
 # `kernel_rta_collision_cpu!`: same τn spline, same Pcol formula, same P(p*) ∝ p*^(d-1)exp(-(E-m)/T)
 # shape — but every thread does identical work (no rejection loop ⇒ no warp divergence).
+#
+# 🔴 `tau_vals` MUST be the CURRENT-time spline (`build_taun_current_spline` = tau_n_main3), NOT
+# the drag spline the OU kernels take — BGK relaxes every moment at 1/τ while the OU's ℓ=1 mode
+# decays at 1/τ_n = η_D·K₂/K₃. See the long note on `kernel_rta_collision_cpu!`.
 # Uses PRE-GENERATED random arrays (fill with CUDA.rand!/CUDA.randn! in the sim loop):
 #   u_collide[i] ~ U(0,1)   collision decision
 #   u_sample[i] ~ U(0,1)    inverse-CDF draw of |p*|

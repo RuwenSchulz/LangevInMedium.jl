@@ -166,15 +166,25 @@ function simulate_ensemble_bulk_cpu(
     tau_Tmin::Float64 = 0.0
     tau_invdT::Float64 = 1.0
     tau_vals = Float64[0.0, 0.0]
+    # RTA/BGK needs the CURRENT time, not the drag — see build_taun_current_spline.
+    taun_vals = Float64[0.0, 0.0]
     if momentum_langevin && DsT > 0.0
         Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
         Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
-        tau_Tmin, tau_invdT, tau_vals = build_tau_n_spline(m, DsT;
+        tau_Tmin, tau_invdT, tau_vals = build_tau_drag_spline(m, DsT;
             Tmin = Tmin, Tmax = Tmax, nT = 1024,
             DsT_linear = DsT_linear,
             DsT_slope = DsT_slope,
             DsT_offset = DsT_offset,
             Tfo = Tfo)
+        if collision_mode == :rta
+            _, _, taun_vals = build_taun_current_spline(m, DsT;
+                Tmin = Tmin, Tmax = Tmax, nT = 1024,
+                DsT_linear = DsT_linear,
+                DsT_slope = DsT_slope,
+                DsT_offset = DsT_offset,
+                Tfo = Tfo)
+        end
     end
 
 
@@ -193,12 +203,16 @@ function simulate_ensemble_bulk_cpu(
                 momenta, positions,  xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
         elseif collision_mode == :rta
-            # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn (same τn as OU).
+            # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn.
+            # 🔴 τn here is the CURRENT relaxation time (tau_n_main3), NOT the OU drag.
+            # BGK relaxes every moment at 1/τ, so matching the OU's ℓ=1 decay rate — the
+            # diffusion-current sector the papers compare — requires τ_n = τ_drag·K₃/K₂.
+            # Passing the drag would relax the RTA K₃/K₂ (1.26-1.74×) too fast.
             kernel_rta_collision_cpu!(
                 TemperatureEvolutionn, xgrid, tgrid,
                 momenta, positions,
                 Δt, m, N_particles, step, initial_time, DsT;
-                tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = tau_vals,
+                tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = taun_vals,
                 dimensions = dimensions, radial_mode = radial_mode)
 
             # Boost updated momenta back to lab frame
