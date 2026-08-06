@@ -49,7 +49,13 @@ function simulate_ensemble_bulk(
     V2Evolutionn::Union{Nothing, AbstractMatrix} = nothing,
     psi2::Float64 = 0.0,
     integrator_mode::Int = 0,   # accepted for signature parity with the GPU path; CPU ignores it (pre-point only)
-    relativistic::Bool = true,  # drag: rel ·m/E (Jüttner) vs non-rel ηD (Maxwell)
+    # `relativistic` switches the KINEMATICS, not just the drag:
+    #   drag       η_D = η m/E   (Jüttner equilibrium)   vs   η_D = η        (Maxwell)
+    #   streaming  dx/dt = p/E                           vs   dx/dt = p/m
+    # ⚠ WHAT IT DOES NOT SWITCH: the lab↔local-rest-frame boost stays a Lorentz boost, so a
+    # non-relativistic run on a FLOWING background is still a hybrid, wrong at O(v_flow²).  On a
+    # background with u^r = 0 the boost is the identity and the non-relativistic mode is exact.
+    relativistic::Bool = true,
 )
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
