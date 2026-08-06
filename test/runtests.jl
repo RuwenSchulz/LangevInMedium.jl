@@ -126,3 +126,9 @@ const DST     = 0.11634
         @test isapprox(var(p), M_CHARM * T; rtol = 0.05)
     end
 end
+
+# ── the relativistic switch must actually switch ────────────────────────────────
+# Added after the flag was found to be parsed by the drivers, recorded in the output
+# metadata, and never handed to the solver: two runs differing only in it came out
+# bit-identical.  See the file header for what each assertion guards.
+include(joinpath(@__DIR__, "test_relativistic_switch.jl"))

@@ -454,6 +454,11 @@ function kernel_update_positions_cpu!(
     radial_mode::Bool = false,
     position_diffusion::Bool = false,
     reflecting_boundary::Bool = false,
+    # ⚠ STREAMING IS PART OF THE KINEMATICS, NOT A DETAIL. dx/dt = p/E is the relativistic
+    # velocity; the non-relativistic dynamics streams at p/m. Switching only the DRAG and leaving
+    # this relativistic gives a hybrid that is neither, and the difference is O(p²/m²) — the same
+    # order as the drag correction it is supposed to be switched off with.
+    relativistic::Bool = true,
     )
     # Grid-based axis cutoff for the geometric drift term D/r.
     # Using machine eps() here can create enormous dr near r=0.
@@ -470,7 +475,7 @@ function kernel_update_positions_cpu!(
         for d in 1:dimensions
             E2 += momenta[d, i]^2
         end
-        E = sqrt(E2)
+        E = relativistic ? sqrt(E2) : m       # streaming velocity: p/E (rel) or p/m (non-rel)
 
         if radial_mode
             r = positions[1, i]

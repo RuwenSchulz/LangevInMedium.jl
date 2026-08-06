@@ -399,8 +399,9 @@ end
     radial_mode::Bool,
     position_diffusion::Bool,
     reflecting_boundary::Bool,
-    random_normals  # pre-generated random numbers for diffusion
-    )
+    random_normals,  # pre-generated random numbers for diffusion
+    relativistic::Bool,
+)
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
         r_max = length(xgrid) >= 1 ? xgrid[end] : 0.0
@@ -411,7 +412,7 @@ end
         for d in 1:dimensions
             E2 += momenta[d, idx]^2
         end
-        E = CUDA.sqrt(E2)
+        E = relativistic ? CUDA.sqrt(E2) : m   # p/E (rel) vs p/m (non-rel)
 
         if radial_mode
             r = positions[1, idx]

@@ -255,7 +255,8 @@ function simulate_ensemble_bulk_cpu(
                     dimensions,
                     radial_mode = radial_mode,
                     position_diffusion = position_diffusion,
-                    reflecting_boundary = reflecting_boundary
+                    reflecting_boundary = reflecting_boundary,
+                    relativistic = relativistic
                 )
 
 
