@@ -122,7 +122,8 @@ end
 @inline function kernel_boost_to_rest_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
-    radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64
+    radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64,
+    relativistic::Bool = true      # false ⇒ Galilean p∥ −= m·v; see kernels_cpu.jl for the history
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -147,6 +148,18 @@ end
             φ = atan(positions[2, i], positions[1, i])
             v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
         end
+        if !relativistic
+            # Galilean: subtract the flow momentum m·v along r̂.
+            if radial_mode
+                @inbounds momenta[1, i] -= m * v
+            else
+                x = positions[1, i]; y = positions[2, i]
+                @inbounds momenta[1, i] -= m * v * (x / r)
+                @inbounds momenta[2, i] -= m * v * (y / r)
+            end
+            return
+        end
+
         v2 = v * v
         γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -192,7 +205,8 @@ end
 @inline function kernel_boost_to_lab_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
-    radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64
+    radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64,
+    relativistic::Bool = true      # false ⇒ Galilean p∥ += m·v
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -215,6 +229,17 @@ end
             φ = atan(positions[2, i], positions[1, i])
             v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
         end
+        if !relativistic
+            if radial_mode
+                @inbounds momenta[1, i] += m * v
+            else
+                x = positions[1, i]; y = positions[2, i]
+                @inbounds momenta[1, i] += m * v * (x / r)
+                @inbounds momenta[2, i] += m * v * (y / r)
+            end
+            return
+        end
+
         v2 = v * v
         γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -669,7 +694,8 @@ end
     steps::Int,
     Δt::Float64,
     initial_time::Float64,
-    radial_mode::Bool
+    radial_mode::Bool,
+    relativistic::Bool = true      # false ⇒ imprint m·v, not m·γ·v
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
@@ -691,6 +717,16 @@ end
         # --- Interpolate fluid velocity from (r, τ) field ---
         τ_now = steps * Δt + initial_time
         v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, τ_now)
+
+        if !relativistic
+            if radial_mode
+                @inbounds momenta[1, idx] = m * v
+            else
+                @inbounds momenta[1, idx] = m * v * (x / r)
+                @inbounds momenta[2, idx] = m * v * (y / r)
+            end
+            return
+        end
 
         # --- Lorentz factor ---
         γ = 1.0 / CUDA.sqrt(1.0 - v * v + 1e-10)

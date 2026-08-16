@@ -141,7 +141,7 @@ function simulate_ensemble_bulk_cpu(
     kernel_boost_to_lab_frame_cpu!(
     momenta, positions, xgrid, tgrid,
     VelocityEvolutionn, m, N_particles, 0, Δt, initial_time,radial_mode = radial_mode,
-    V2Evolution = V2Evolutionn, psi2 = psi2)
+    V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
 
     momenta_history[:,:,1] .= momenta
     position_history[:, :, 1] .= positions
@@ -196,12 +196,13 @@ function simulate_ensemble_bulk_cpu(
         kernel_boost_to_rest_frame_cpu!(
             momenta, positions, xgrid, tgrid,
             VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-            V2Evolution = V2Evolutionn, psi2 = psi2)
+            V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
 
         if !momentum_langevin || DsT == 0.0
             kernel_set_to_fluid_velocity_cpu!(
                 momenta, positions,  xgrid, tgrid,
-                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode)
+                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                relativistic = relativistic)
         elseif collision_mode == :rta
             # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn.
             # 🔴 τn here is the CURRENT relaxation time (tau_n_main3), NOT the OU drag.
@@ -219,7 +220,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-                V2Evolution = V2Evolutionn, psi2 = psi2)
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
         else
 
             # 2. Compute forces in rest frame
@@ -245,7 +246,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-                V2Evolution = V2Evolutionn, psi2 = psi2)
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
         end
         # 5. Update positions
        
