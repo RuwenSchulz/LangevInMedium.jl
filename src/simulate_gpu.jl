@@ -222,7 +222,8 @@ function simulate_ensemble_bulk_gpu(
         # Keep step indexing consistent with the CPU backend (t = t0 at initialization).
         @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
             momenta, positions, xgrid, tgrid,
-            VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode, use_v2, V2Evolution, psi2)
+            VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode, use_v2, V2Evolution, psi2,
+            relativistic)
 
         # === Allocate history arrays as 2D to avoid CuDeviceArray{3} in kernels ===
         # Layout: (dimensions, N_particles * (num_saves+1)), stride = N_particles per snapshot
@@ -289,13 +290,15 @@ function simulate_ensemble_bulk_gpu(
             # Step 1: Transform momenta to local rest frame (LRF)
             @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
                 momenta, positions, xgrid, tgrid, VelocityEvolution,
-                m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2)
+                m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                relativistic)
 
             if !momentum_langevin || DsT == 0.0
 
                 @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
                     momenta, positions, xgrid, tgrid,
-                    VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode)
+                    VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode,
+                    relativistic)
             elseif rta_mode
                 # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn in the LRF,
                 # then boost back to lab. Skips the OU force/update kernels entirely.
@@ -312,7 +315,8 @@ function simulate_ensemble_bulk_gpu(
 
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
-                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2)
+                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                    relativistic)
             else
                 # Step 2: Compute deterministic and stochastic terms in LRF
                 @cuda threads=threads blocks=blocks kernel_compute_all_forces_gpu!(
@@ -332,7 +336,8 @@ function simulate_ensemble_bulk_gpu(
                 # Step 4: Boost updated momenta back to lab frame
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
-                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2)
+                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                    relativistic)
             end
             # Step 5: Update particle positions based on momenta
             # IMPORTANT: pass the current time-step, not the total number of steps.

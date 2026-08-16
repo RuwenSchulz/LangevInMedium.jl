@@ -53,7 +53,13 @@ function kernel_boost_to_rest_frame_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0;
     radial_mode::Bool = false,
-    V2Evolution = nothing, psi2::Float64 = 0.0
+    V2Evolution = nothing, psi2::Float64 = 0.0,
+    # ⚠ relativistic = false makes the frame change GALILEAN: p*∥ = p∥ − m·v with v the flow field
+    # read as a VELOCITY (no γ, no E, no clamp — the non-relativistic class puts no bound on H·r).
+    # This is what makes `relativistic = false` the actual exactly solvable process rather than the
+    # O(T/M) hybrid documented above kernel_boost_to_lab_frame_cpu!. Default true is bit-identical
+    # to the old behaviour.
+    relativistic::Bool = true
     )
     @inbounds for i in 1:N
         # --- compute current proper time ---
@@ -78,6 +84,19 @@ function kernel_boost_to_rest_frame_cpu!(
             φ = atan(positions[2, i], positions[1, i])
             v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
         end
+
+        if !relativistic
+            # Galilean: subtract the flow momentum m·v along r̂ and be done.
+            if radial_mode
+                momenta[1, i] -= m * v
+            else
+                x = positions[1, i]; y = positions[2, i]
+                momenta[1, i] -= m * v * (x / r)
+                momenta[2, i] -= m * v * (y / r)
+            end
+            continue
+        end
+
         # Guard against superluminal values due to numerical noise.
         vmax = sqrt(1.0 - 1e-12)
         v = clamp(v, -vmax, vmax)
@@ -127,11 +146,21 @@ function kernel_boost_to_rest_frame_cpu!(
     return nothing
 end
 
+# ⚠ HISTORY: until 2026-08-15 the boosts were LORENTZ BOOSTS FOR EVERY RUN — `relativistic=false`
+# switched only the streaming velocity and the kick, making a "non-relativistic" run a KINEMATIC
+# HYBRID at O(T/M): boosting back after an LRF kick hands the particle a mean momentum
+# gamma*v*<E> ≈ M*v*(1 + T/M), so the cloud was advected ~T/M faster than the flow (measured: its
+# sigma_xx outgrew the exact Galilean covariance solution by 21% by tau = 10 fm/c on the
+# stages4_cf3nr_t6 background, T/M = 0.12), and the recorded plateau landed between the Galilean
+# and boosted readings of the exact class. The `relativistic` kwarg on both boost kernels now fixes
+# this: false ⇒ Galilean p∥ ∓ m·v. Every NR product generated BEFORE this date carries the hybrid
+# and must not be compared to the solvable class at the sub-percent level below z ~ 15.
 function kernel_boost_to_lab_frame_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0;
     radial_mode::Bool = false,
-    V2Evolution = nothing, psi2::Float64 = 0.0
+    V2Evolution = nothing, psi2::Float64 = 0.0,
+    relativistic::Bool = true          # false ⇒ Galilean: p∥ += m·v, see rest-frame kernel
     )
     @inbounds for i in 1:N
         # --- compute radius ---
@@ -154,6 +183,18 @@ function kernel_boost_to_lab_frame_cpu!(
             φ = atan(positions[2, i], positions[1, i])
             v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
         end
+
+        if !relativistic
+            if radial_mode
+                momenta[1, i] += m * v
+            else
+                x = positions[1, i]; y = positions[2, i]
+                momenta[1, i] += m * v * (x / r)
+                momenta[2, i] += m * v * (y / r)
+            end
+            continue
+        end
+
         vmax = sqrt(1.0 - 1e-12)
         v = clamp(v, -vmax, vmax)
         v2 = v * v
@@ -614,7 +655,8 @@ function kernel_set_to_fluid_velocity_cpu!(
     step::Int,
     Δt::Float64,
     t0::Float64;
-    radial_mode::Bool = false
+    radial_mode::Bool = false,
+    relativistic::Bool = true          # false ⇒ imprint m·v, not m·γ·v
     )
     @inbounds for i in 1:N
         # --- Compute position & radius ---
@@ -635,6 +677,17 @@ function kernel_set_to_fluid_velocity_cpu!(
         # --- Interpolate fluid velocity from (r, τ) field ---
         τ_now = step * Δt + t0
         v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, τ_now)
+        if !relativistic
+            if radial_mode
+                momenta[1, i] = m * v
+            else
+                x = positions[1, i]; y = positions[2, i]
+                momenta[1, i] = m * v * (x / r)
+                momenta[2, i] = m * v * (y / r)
+            end
+            continue
+        end
+
         vmax = sqrt(1.0 - 1e-12)
         v = clamp(v, -vmax, vmax)
 
