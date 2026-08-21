@@ -10,6 +10,7 @@ export interpolate_2d_cpu,
        kernel_boost_to_lab_frame_cpu!,
        kernel_compute_all_forces_cpu!,
        kernel_update_momenta_LRF_cpu!,
+       kernel_bjorken_redshift_cpu!,
        kernel_rta_collision_cpu!,
        kernel_update_positions_cpu!,
        kernel_save_snapshot_cpu!,
@@ -415,6 +416,24 @@ function kernel_update_momenta_LRF_cpu!(
     return nothing
 end
 
+# === Bjorken redshift of the longitudinal momentum (boost-invariant background, u^η = 0) ===
+# A particle of rapidity y at space-time rapidity η carries p_z' = m_T sinh(y−η) in the local
+# longitudinally-comoving frame, and dη/dτ = tanh(y−η)/τ along its free path, so
+#     dp_z'/dτ = −m_T cosh(y−η)·tanh(y−η)/τ = −p_z'/τ        (EXACT, no small-angle step)
+# between kicks. The midrapidity ensemble is statistically the ensemble co-moving with one cell,
+# so the rule is applied to every particle's p_z row in the LRF: p_z ← p_z·τ_a/τ_b over the step
+# τ_a = t0+(step−1)Δt → τ_b = τ_a+Δt. This is the longitudinal work term of θ = 1/τ + ∇_⊥·u_⊥
+# that a 2-D momentum run omits. Operator-split from the OU kick at O(Δt²).
+function kernel_bjorken_redshift_cpu!(momenta, pz_row::Int, step, Δt, t0, N)
+    τa = t0 + (step - 1) * Δt
+    τa > 0 || return nothing
+    f = τa / (τa + Δt)
+    @inbounds for i in 1:N
+        momenta[pz_row, i] *= f
+    end
+    return nothing
+end
+
 # === Boltzmann RTA / BGK collision (drop-in replacement for the OU force+update) ===
 # Isotropic local-rest-frame Jüttner magnitude sampler P(p*) ∝ p*^(d-1) exp(-(E-m)/T),
 # by rejection with an exact-mode envelope.  d = number of momentum components
@@ -492,6 +511,9 @@ function kernel_update_positions_cpu!(
     positions, momenta, m, Δt, N,step,t0,
     xgrid,tgrid, Tfield,DsT;
     dimensions::Int = 2,
+    # number of MOMENTUM rows (3 on a 2-D plane carrying p_z); only E = √(m²+Σp²) sees it — the
+    # streaming, the diffusion and the reflection act on the `dimensions` spatial components.
+    momentum_dimensions::Int = dimensions,
     radial_mode::Bool = false,
     position_diffusion::Bool = false,
     reflecting_boundary::Bool = false,
@@ -513,7 +535,7 @@ function kernel_update_positions_cpu!(
     @inbounds for i in 1:N
         # Compute energy
         E2 = m^2
-        for d in 1:dimensions
+        for d in 1:momentum_dimensions
             E2 += momenta[d, i]^2
         end
         E = relativistic ? sqrt(E2) : m       # streaming velocity: p/E (rel) or p/m (non-rel)

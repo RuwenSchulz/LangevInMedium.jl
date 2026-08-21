@@ -48,6 +48,8 @@ function Simulate.simulate_ensemble_bulk(
     freezeout_interp::Bool = true,
     integrator_mode::Int = 0,
     relativistic::Bool = true,  # drag: rel ·m/E (Jüttner) vs non-rel ηD (Maxwell)
+    momentum_dimensions::Int = 0,   # p_z on the transverse plane (3 with dimensions=2); utils.jl note
+    bjorken_redshift::Bool = false,
 )
     (collision_mode == :langevin || collision_mode == :rta) ||
         error("simulate_ensemble_bulk(::GPUBackend): collision_mode=$(collision_mode) is not supported on GPU (only :langevin and :rta).")
@@ -75,6 +77,8 @@ function Simulate.simulate_ensemble_bulk(
         freezeout_interp = freezeout_interp,
         integrator_mode = integrator_mode,
         relativistic = relativistic,
+        momentum_dimensions = momentum_dimensions,
+        bjorken_redshift = bjorken_redshift,
     )
 end
 
