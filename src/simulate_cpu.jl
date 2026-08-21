@@ -36,7 +36,12 @@ function simulate_ensemble_bulk_cpu(
     p_init::Union{Nothing, AbstractMatrix} = nothing,
     V2Evolutionn::Union{Nothing, AbstractMatrix} = nothing,
     psi2::Float64 = 0.0,
-    relativistic::Bool = true)
+    relativistic::Bool = true,
+    # 0 ⇒ momentum rows = `dimensions` (the coupled, bit-identical default). 3 with dimensions=2 adds
+    # a longitudinal p_z to the transverse-plane run — see the note above append_thermal_pz in utils.jl.
+    momentum_dimensions::Int = 0,
+    # dp_z/dτ = −p_z/τ between kicks (Bjorken longitudinal free-streaming); needs momentum_dimensions=3.
+    bjorken_redshift::Bool = false)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
@@ -136,7 +141,19 @@ function simulate_ensemble_bulk_cpu(
         momenta   = copy(p_matrix)
     end
 
-    momenta_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
+    # --- momentum dimensionality (p_z on the transverse plane) ---
+    pdim = momentum_dimensions <= 0 ? dimensions : momentum_dimensions
+    check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time)
+    if size(momenta, 1) < pdim
+        # sampled momenta are LRF momenta at this point (the lab boost follows below), so the
+        # thermal conditional at the local T(r, τ0) is the right completion.
+        momenta = append_thermal_pz(momenta, positions, m,
+            r -> interpolate_2d_cpu(xgrid, tgrid, TemperatureEvolutionn, r, initial_time);
+            antithetic = antithetic_momenta && x_init === nothing)
+    end
+    size(momenta, 1) == pdim || error("momentum rows $(size(momenta, 1)) ≠ momentum_dimensions $pdim")
+
+    momenta_history = zeros(Float64, pdim, N_particles, num_saves + 1)
     position_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
 
 
@@ -150,14 +167,14 @@ function simulate_ensemble_bulk_cpu(
 
     # Working buffers
     p_mags              = zeros(N_particles)
-    p_units             = zeros(dimensions, N_particles)
+    p_units             = zeros(pdim, N_particles)
     ηD_vals             = zeros(N_particles)
     kL_vals             = zeros(N_particles)
     kT_vals             = zeros(N_particles)
-    deterministic_terms = zeros(dimensions, N_particles)
-    stochastic_terms    = zeros(dimensions, N_particles)
-    ξ                   = randn(dimensions, N_particles)
-    random_directions   = randn(dimensions, N_particles)
+    deterministic_terms = zeros(pdim, N_particles)
+    stochastic_terms    = zeros(pdim, N_particles)
+    ξ                   = randn(pdim, N_particles)
+    random_directions   = randn(pdim, N_particles)
 
     # Normalize random directions
     norm_factors = sqrt.(sum(random_directions .^ 2, dims=1))
@@ -196,13 +213,18 @@ function simulate_ensemble_bulk_cpu(
 
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
-        ξ .= randn(dimensions, N_particles)
+        ξ .= randn(pdim, N_particles)
 
         # 1. Boost momenta to local rest frame
         kernel_boost_to_rest_frame_cpu!(
             momenta, positions, xgrid, tgrid,
             VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
             V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+
+        # 1b. Longitudinal redshift of p_z in the LRF (p_z is invariant under the transverse boost)
+        if bjorken_redshift
+            kernel_bjorken_redshift_cpu!(momenta, 3, step, Δt, initial_time, N_particles)
+        end
 
         if !momentum_langevin || DsT == 0.0
             kernel_set_to_fluid_velocity_cpu!(
@@ -220,7 +242,7 @@ function simulate_ensemble_bulk_cpu(
                 momenta, positions,
                 Δt, m, N_particles, step, initial_time, DsT;
                 tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = taun_vals,
-                dimensions = dimensions, radial_mode = radial_mode)
+                dimensions = pdim, radial_mode = radial_mode)
 
             # Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(
@@ -236,7 +258,7 @@ function simulate_ensemble_bulk_cpu(
                 ηD_vals, kL_vals, kT_vals,
                 ξ, deterministic_terms, stochastic_terms,
                 Δt, m, random_directions,
-                dimensions, N_particles, step, initial_time,DsT,
+                pdim, N_particles, step, initial_time,DsT,
                 tau_Tmin = tau_Tmin,
                 tau_invdT = tau_invdT,
                 tau_vals = tau_vals,
@@ -246,7 +268,7 @@ function simulate_ensemble_bulk_cpu(
             # 3. Update momenta
             kernel_update_momenta_LRF_cpu!(
                 momenta, deterministic_terms, stochastic_terms,
-                Δt, dimensions, N_particles)
+                Δt, pdim, N_particles)
 
             # 4. Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(
@@ -260,6 +282,7 @@ function simulate_ensemble_bulk_cpu(
                     positions, momenta, m, Δt, N_particles,step,initial_time,
                     xgrid,tgrid, TemperatureEvolutionn,DsT;
                     dimensions,
+                    momentum_dimensions = pdim,
                     radial_mode = radial_mode,
                     position_diffusion = position_diffusion,
                     reflecting_boundary = reflecting_boundary,

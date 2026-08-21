@@ -132,3 +132,4 @@ end
 # metadata, and never handed to the solver: two runs differing only in it came out
 # bit-identical.  See the file header for what each assertion guards.
 include(joinpath(@__DIR__, "test_relativistic_switch.jl"))
+include(joinpath(@__DIR__, "test_momentum_dims3.jl"))

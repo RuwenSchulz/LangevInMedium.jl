@@ -10,6 +10,7 @@ export
     kernel_boost_to_lab_frame_gpu!,
     kernel_compute_all_forces_gpu!,
     kernel_update_momenta_LRF_gpu!,
+    kernel_bjorken_redshift_gpu!,
     kernel_update_positions_gpu!,
     kernel_set_to_fluid_velocity_gpu!,
     kernel_save_snapshot_gpu!,
@@ -296,9 +297,10 @@ end
     if i <= N_particles
         M = m  # heavy-quark mass (can be parameterized)
 
-        # --- local temperature ---
+        # --- local temperature ---  (radius from the POSITION rows; `dimensions` here is the
+        # number of MOMENTUM rows, 3 when a 2-D plane carries p_z)
         r2 = 0.0
-        for d in 1:dimensions
+        for d in 1:size(positions, 1)
             r2 += positions[d, i]^2
         end
         r = sqrt(r2)
@@ -408,6 +410,19 @@ end
     return
 end
 
+# Bjorken redshift p_z ← p_z·τ_a/τ_b in the LRF — the GPU twin of kernel_bjorken_redshift_cpu!
+# (exact longitudinal free-streaming of a boost-invariant system; see the CPU note).
+@inline function kernel_bjorken_redshift_gpu!(momenta, pz_row::Int, steps, Δt::Float64, initial_time::Float64, N_particles::Int)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= N_particles
+        τa = initial_time + (steps - 1) * Δt
+        if τa > 0.0
+            @inbounds momenta[pz_row, i] *= τa / (τa + Δt)
+        end
+    end
+    return
+end
+
 @inline function kernel_update_positions_gpu!(
     positions, 
     momenta, 
@@ -426,6 +441,7 @@ end
     reflecting_boundary::Bool,
     random_normals,  # pre-generated random numbers for diffusion
     relativistic::Bool,
+    momentum_dimensions::Int = dimensions,   # momentum rows; only E sees the longitudinal one
 )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
@@ -434,7 +450,7 @@ end
         r_axis_eps = CUDA.max(1e-12, 0.5 * dr0)
         # Compute energy
         E2 = m * m
-        for d in 1:dimensions
+        for d in 1:momentum_dimensions
             E2 += momenta[d, idx]^2
         end
         E = relativistic ? CUDA.sqrt(E2) : m   # p/E (rel) vs p/m (non-rel)
@@ -596,6 +612,8 @@ end
                 frac = (interp && Tl > Tfo && Tl > T) ? (Tl - Tfo) / (Tl - T) : 1.0
                 for d in 1:dimensions
                     @inbounds fo_pos[d, idx] = last_pos[d, idx] + frac * (positions[d, idx] - last_pos[d, idx])
+                end
+                for d in 1:size(momenta, 1)
                     @inbounds fo_mom[d, idx] = last_mom[d, idx] + frac * (momenta[d, idx] - last_mom[d, idx])
                 end
                 @inbounds fo_tau[idx] = last_tau[idx] + frac * (τ - last_tau[idx])
@@ -604,6 +622,8 @@ end
                 # still above Tfo: cache this state as the last-above reference for interpolation
                 for d in 1:dimensions
                     @inbounds last_pos[d, idx] = positions[d, idx]
+                end
+                for d in 1:size(momenta, 1)
                     @inbounds last_mom[d, idx] = momenta[d, idx]
                 end
                 @inbounds last_tau[idx] = τ
@@ -647,7 +667,7 @@ end
             @inbounds r = CUDA.abs(positions[1, i])
         else
             r2 = 0.0
-            for d in 1:dimensions
+            for d in 1:size(positions, 1)       # `dimensions` = momentum rows below
                 @inbounds r2 += positions[d, i]^2
             end
             r = CUDA.sqrt(r2)

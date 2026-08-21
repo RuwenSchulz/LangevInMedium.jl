@@ -58,7 +58,9 @@ function simulate_ensemble_bulk(
     # (The boost switch landed 2026-08-15 — see the HISTORY note above kernel_boost_to_lab_frame_cpu!
     # in kernels_cpu.jl; before that, `false` was a kinematic hybrid at O(T/M) on a flowing
     # background. Post-fix, `false` is the exactly solvable Galilean process.)
-    relativistic::Bool = true,
+    relativistic::Bool = true,    # p_z on the transverse plane (3 with dimensions=2) and its Bjorken redshift — utils.jl note.
+    momentum_dimensions::Int = 0,
+    bjorken_redshift::Bool = false,
 )
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
@@ -79,6 +81,8 @@ function simulate_ensemble_bulk(
         V2Evolutionn = V2Evolutionn,
         psi2 = psi2,
         relativistic = relativistic,
+        momentum_dimensions = momentum_dimensions,
+        bjorken_redshift = bjorken_redshift,
     )
 end
 

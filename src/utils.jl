@@ -25,6 +25,7 @@ export sample_initial_particles_at_origin_no_position!
 export compute_MIS_distribution
 export sample_particles_from_density
 export sample_particles_from_FONLL
+export append_thermal_pz, sample_pz_conditional_juttner, check_momentum_dims
 
 using Interpolations, QuadGK, Random
 
@@ -461,6 +462,114 @@ function sample_initial_particles_at_origin_no_position!(initial_condition,
 
 
     return momenta
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# THREE MOMENTUM COMPONENTS ON A TWO-DIMENSIONAL TRANSVERSE PLANE  (2026-08-21)
+#
+# WHY. The engine's `dimensions` couples the spatial and the momentum dimensionality, so every
+# midrapidity run (positions in the transverse plane) evolved a TWO-component momentum. Drag and
+# noise are isotropic, so the equilibrium such a run relaxes to is the 2-D Jüttner on the measure
+# p dp dφ — a different kinetic theory from the 3-D one in which the hydrodynamic coefficients
+# (τ_n = D_s z K₃/K₂, κ) are matched. The drag η_D = T/(M D_s) is dimension-independent and was
+# always right; the DERIVED current-relaxation rate is λ₁ η_D with
+#     λ₁ = ⟨(M/E) p²⟩/⟨p²⟩  =  K₂/K₃        in 3-D (exact identity)
+#                            ≠  K₂/K₃        in 2-D (5–12 % larger over z = 3.5–10),
+# so a 2-D ensemble compared against a 3-D τ_n carried a convention offset of that size
+# (AttractorHydro §setup, "5–9 % over this background"). `momentum_dimensions = 3` removes it:
+# a third momentum component lives on every particle, invariant under the transverse flow boost,
+# entering E* (drag, streaming, Cooper–Frye) and the isotropic kicks. Positions stay 2-D.
+#
+# INITIAL p_z. Given a sampled transverse momentum p_T, the thermal conditional at the local
+# temperature is  f(p_z | p_T) ∝ exp(−√(m_T² + p_z²)/T),  m_T = √(m² + p_T²)  — exact for a
+# Jüttner initial state, and the natural completion of a FONLL/boosted transverse IC (midrapidity).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+"""
+    sample_pz_conditional_juttner(mT, T; rng) -> p_z
+
+One exact draw from f(p_z) ∝ exp(−√(m_T²+p_z²)/T). In the rapidity variable p_z = m_T sinh y the
+density is cosh(y)·exp(−a cosh y), a = m_T/T, and a Gaussian N(0, c/a) is a valid rejection
+envelope with acceptance probability cosh(y)·exp(−a(cosh y − 1) + a y²/(2c)) ≤ 1 whenever
+2a(1 − 1/c) ≥ 2, i.e. c ≥ a/(a−1): the log-derivative tanh y − a(1−1/c) y is then ≤ 0 for y ≥ 0,
+so the ratio peaks at y=0 where it equals one. Acceptance is ≈ 1/√c ≈ 70 % at c = 2.
+For a ≤ 1.05 (a bath hotter than the mass, not a heavy-quark regime) a wide Laplace envelope in
+p_z is used instead, valid since √(m_T²+p_z²) ≥ (m_T+|p_z|)/√2.
+"""
+function sample_pz_conditional_juttner(mT::Float64, T::Float64; rng::AbstractRNG = Random.default_rng())
+    (T > 0.0 && mT > 0.0) || return 0.0
+    a = mT / T
+    if a > 1.05
+        c = max(2.0, a / (a - 1.0))
+        σ = sqrt(c / a)
+        @inbounds for _ in 1:100_000
+            y = σ * randn(rng)
+            ch = cosh(y)
+            acc = ch * exp(-a * (ch - 1.0) + a * y * y / (2.0 * c))
+            rand(rng) <= acc && return mT * sinh(y)
+        end
+        return 0.0
+    else
+        # Laplace envelope g ∝ exp(−|p_z|/(√2 T)) ≥ exp(−√(m_T²+p_z²)/T)·exp(m_T/(√2T)) — loose but safe.
+        b = sqrt(2.0) * T
+        @inbounds for _ in 1:1_000_000
+            pz = -b * log(rand(rng)) * (rand(rng) < 0.5 ? -1.0 : 1.0)
+            acc = exp(-(sqrt(mT * mT + pz * pz) - (mT + abs(pz)) / sqrt(2.0)) / T)
+            rand(rng) <= acc && return pz
+        end
+        return 0.0
+    end
+end
+
+"""
+    append_thermal_pz(momenta, positions, m, T_of_r; antithetic=false, rng) -> momenta3
+
+Return a (3, N) copy of the (2, N) transverse `momenta` with a third row p_z drawn from the
+thermal conditional at the particle's local temperature `T_of_r(r)`, r = |x_⊥|. The input
+momenta must be LOCAL-REST-FRAME momenta (this is called before the initial lab boost).
+`antithetic = true` mirrors p_z across the (2i−1, 2i) pairs the samplers build, keeping the
+pairs exact reflections in all three components.
+"""
+function append_thermal_pz(momenta::AbstractMatrix, positions::AbstractMatrix, m::Real, T_of_r;
+                           antithetic::Bool = false, rng::AbstractRNG = Random.default_rng())
+    size(momenta, 1) == 2 || error("append_thermal_pz: expected 2 transverse momentum rows, got $(size(momenta, 1))")
+    N = size(momenta, 2)
+    out = zeros(Float64, 3, N)
+    @inbounds out[1:2, :] .= momenta
+    @inbounds for i in 1:N
+        if antithetic && iseven(i) && i > 1
+            out[3, i] = -out[3, i - 1]
+            continue
+        end
+        r2 = 0.0
+        for d in 1:size(positions, 1); r2 += Float64(positions[d, i])^2; end
+        T  = max(Float64(T_of_r(sqrt(r2))), 0.0)
+        mT = sqrt(Float64(m)^2 + Float64(momenta[1, i])^2 + Float64(momenta[2, i])^2)
+        out[3, i] = sample_pz_conditional_juttner(mT, T; rng = rng)
+    end
+    return out
+end
+
+"""
+    check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time)
+
+The contract: `pdim == dimensions` is the historical (bit-identical) engine; the only other
+supported combination is a 2-D transverse plane carrying 3 momentum components. The Bjorken
+redshift dp_z/dτ = −p_z/τ is the longitudinal free-streaming of a boost-invariant system and is
+only meaningful for that combination, with a positive initial Milne time.
+"""
+function check_momentum_dims(dimensions::Int, pdim::Int, radial_mode::Bool, bjorken_redshift::Bool, initial_time::Real)
+    if pdim != dimensions
+        (dimensions == 2 && pdim == 3 && !radial_mode) ||
+            error("momentum_dimensions=$pdim with dimensions=$dimensions is not supported: " *
+                  "only (dimensions=2, momentum_dimensions=3) differs from the coupled default.")
+    end
+    if bjorken_redshift
+        (dimensions == 2 && pdim == 3) ||
+            error("bjorken_redshift requires dimensions=2 and momentum_dimensions=3 (p_z is row 3).")
+        initial_time > 0 || error("bjorken_redshift needs initial_time > 0 (Milne τ; dp_z/dτ = −p_z/τ).")
+    end
+    return nothing
 end
 
 end # module Utils
