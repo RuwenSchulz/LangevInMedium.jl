@@ -136,7 +136,18 @@ hydro quantity while being labelled with D_sT.
     return Mm * Ds / (Tm^2) / fmGeV      # (GeV^-1) -> fm
 end
 
-@inline function effective_DsT(T::Real, DsT::Real; DsT_linear::Bool=false, DsT_slope::Real=1.765, DsT_offset::Real=-0.159, Tfo::Real=0.156)::Float64
+@inline function effective_DsT(T::Real, DsT::Real; DsT_linear::Bool=false, DsT_slope::Real=1.765, DsT_offset::Real=-0.159, Tfo::Real=0.156, DsT_quad::Bool=false, DsT_Tref::Real=0.0)::Float64
+    if DsT_quad
+        # DsT(T) = DsT·(T/T_ref)² ⇒ tau_drag = m·DsT_eff/T² = m·DsT/T_ref², CONSTANT in T:
+        # the spatially and temporally uniform-drag member of the family — the prescription under
+        # which the non-relativistic solvable class on an inhomogeneous T(r) closes exactly
+        # (any T-dependent drag couples ⟨η(x)·quadratic⟩ to fourth moments). No Tfo clamp on
+        # purpose: a clamp would reintroduce drag inhomogeneity below the freeze-out floor.
+        DsT_linear && error("effective_DsT: DsT_quad and DsT_linear are mutually exclusive")
+        DsT_Tref > 0.0 || error("effective_DsT: DsT_quad requires DsT_Tref > 0")
+        x = Float64(T) / Float64(DsT_Tref)
+        return Float64(DsT) * x * x
+    end
     if !DsT_linear
         return Float64(DsT)
     end
@@ -162,6 +173,8 @@ function _build_time_spline(
     DsT_slope::Real=1.765,
     DsT_offset::Real=-0.159,
     Tfo::Real=0.156,
+    DsT_quad::Bool=false,
+    DsT_Tref::Real=0.0,
 )
     Tmin_f = Float64(Tmin)
     Tmax_f = Float64(Tmax)
@@ -176,7 +189,7 @@ function _build_time_spline(
     vals = Vector{Float64}(undef, n)
     @inbounds for i in 1:n
         Ti = Tmin_f + (i - 1) * dT
-        DsT_eff = effective_DsT(Ti, DsT; DsT_linear=DsT_linear, DsT_slope=DsT_slope, DsT_offset=DsT_offset, Tfo=Tfo)
+        DsT_eff = effective_DsT(Ti, DsT; DsT_linear=DsT_linear, DsT_slope=DsT_slope, DsT_offset=DsT_offset, Tfo=Tfo, DsT_quad=DsT_quad, DsT_Tref=DsT_Tref)
         vals[i] = timefn(Ti, m, DsT_eff) * LV_TAUN_SCALE[]
     end
     return Tmin_f, invdT, vals
