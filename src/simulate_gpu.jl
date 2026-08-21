@@ -36,6 +36,8 @@ function simulate_ensemble_bulk_gpu(
     DsT_slope::Float64=1.765,
     DsT_offset::Float64=-0.159,
     Tfo::Float64=0.156,
+    DsT_quad::Bool=false,
+    DsT_Tref::Float64=0.0,
     dimensions::Int64=3,
     cartesian_spatial_sampling::Union{Nothing,Bool}=nothing,
     antithetic_momenta::Bool=false,
@@ -96,14 +98,18 @@ function simulate_ensemble_bulk_gpu(
                 DsT_linear = DsT_linear,
                 DsT_slope = DsT_slope,
                 DsT_offset = DsT_offset,
-                Tfo = Tfo)
+                Tfo = Tfo,
+                DsT_quad = DsT_quad,
+                DsT_Tref = DsT_Tref)
             if collision_mode == :rta
                 _, _, taun_vals = build_taun_current_spline(m, DsT;
                     Tmin = Tmin, Tmax = Tmax, nT = 1024,
                     DsT_linear = DsT_linear,
                     DsT_slope = DsT_slope,
                     DsT_offset = DsT_offset,
-                    Tfo = Tfo)
+                    Tfo = Tfo,
+                    DsT_quad = DsT_quad,
+                    DsT_Tref = DsT_Tref)
             end
         end
         tau_vals_d = CuArray(tau_vals)

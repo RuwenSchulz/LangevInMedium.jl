@@ -37,6 +37,8 @@ function simulate_ensemble_bulk(
     DsT_slope::Float64 = 1.765,
     DsT_offset::Float64 = -0.159,
     Tfo::Float64 = 0.156,
+    DsT_quad::Bool = false,
+    DsT_Tref::Float64 = 0.0,
     dimensions::Int = 3,
     cartesian_spatial_sampling::Union{Nothing,Bool} = nothing,
     antithetic_momenta::Bool = false,
@@ -52,9 +54,10 @@ function simulate_ensemble_bulk(
     # `relativistic` switches the KINEMATICS, not just the drag:
     #   drag       η_D = η m/E   (Jüttner equilibrium)   vs   η_D = η        (Maxwell)
     #   streaming  dx/dt = p/E                           vs   dx/dt = p/m
-    # ⚠ WHAT IT DOES NOT SWITCH: the lab↔local-rest-frame boost stays a Lorentz boost, so a
-    # non-relativistic run on a FLOWING background is still a hybrid, wrong at O(v_flow²).  On a
-    # background with u^r = 0 the boost is the identity and the non-relativistic mode is exact.
+    #   boost      Lorentz                               vs   Galilean p∥ ∓ m·v
+    # (The boost switch landed 2026-08-15 — see the HISTORY note above kernel_boost_to_lab_frame_cpu!
+    # in kernels_cpu.jl; before that, `false` was a kinematic hybrid at O(T/M) on a flowing
+    # background. Post-fix, `false` is the exactly solvable Galilean process.)
     relativistic::Bool = true,
 )
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
@@ -63,6 +66,7 @@ function simulate_ensemble_bulk(
         initial_time = initial_time, final_time = final_time,
         save_interval = save_interval, m = m, DsT = DsT,
         DsT_linear = DsT_linear, DsT_slope = DsT_slope, DsT_offset = DsT_offset, Tfo = Tfo,
+        DsT_quad = DsT_quad, DsT_Tref = DsT_Tref,
         dimensions = dimensions,
         cartesian_spatial_sampling = cartesian_spatial_sampling,
         antithetic_momenta = antithetic_momenta,
