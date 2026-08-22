@@ -7,7 +7,24 @@ using ..Utils
 using ..Transport
 
 # === Exported Symbols ===
-export simulate_ensemble_bulk_cpu
+export simulate_ensemble_bulk_cpu, _snapshot_times
+
+"""
+    _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
+
+Times of the `num_saves + 1` stored snapshots. Snapshot k (k = 0…num_saves) is taken after step
+k·save_every, i.e. at t0 + k·save_every·Δt. Returns the historical `range(t0, tf, length)` when
+that is exact (steps divisible by save_every) so existing outputs are unchanged; otherwise the
+true times, with a warning that the last `steps − num_saves·save_every` steps are not in the history.
+"""
+function _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
+    if steps % save_every == 0
+        return range(t0, tf, length = num_saves + 1)
+    end
+    dropped = steps - num_saves * save_every
+    @warn "save_interval does not divide the evolution: the last $dropped step(s) ($(dropped * Δt) fm) are not in the returned history; time_points reflect the snapshots actually taken" maxlog = 1
+    return range(t0, t0 + num_saves * save_every * Δt, length = num_saves + 1)
+end
 
 function simulate_ensemble_bulk_cpu(
     r_grid_Langevin,p_grid_Langevin, heavy_quark_density,
@@ -46,7 +63,11 @@ function simulate_ensemble_bulk_cpu(
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
     steps = floor(Int, total_time / Δt)
-    save_every = round(Int, save_interval / Δt)
+    steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
+    # save_interval == total time can give round(save/Δt) = floor(total/Δt) + 1 ⇒ num_saves = 0 and a
+    # crash in `range(..., length = 1)`; clamp so that the last snapshot is always taken.
+    save_every = min(round(Int, save_interval / Δt), steps)
+    save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
     num_saves = div(steps, save_every)
 
     xgrid, tgrid = SpaceTimeGrid
@@ -316,7 +337,11 @@ function simulate_ensemble_bulk_cpu(
     end
 
     # === Final Data Packaging ===
-    time_points = range(initial_time, final_time, length = num_saves + 1)
+    # The saved snapshots sit at t0 + k·save_every·Δt. When `steps` is not a multiple of `save_every`
+    # the trailing partial interval is never saved, and claiming `final_time` for the last snapshot
+    # stretches the whole axis (a 13 % error in an MSD slope was traced to exactly this, 2026-08-21).
+    # Bit-identical to the old `range(t0, final_time, ...)` whenever the old axis was right.
+    time_points = _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves)
     position_history_vec = [position_history[:, :, i] for i in 1:size(position_history, 3)]
     momenta_history_vec  = [momenta_history[:, :, i] for i in 1:size(momenta_history, 3)]
     return time_points, momenta_history_vec, position_history_vec
@@ -397,8 +422,7 @@ function simulate_ensemble_bulk_cpu(
     end
 
     # === Final Data Packaging ===
-    time_points = range(initial_time, final_time, length = num_saves + 1)
-
+    time_points = _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves)
 
     return time_points, momenta_history
 end

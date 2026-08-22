@@ -5,6 +5,7 @@ using ProgressMeter
 using ..KernelsGPU
 using ...Utils
 using ...KernelsCPU: interpolate_2d_cpu     # host-side T(r, τ0) lookup for the initial p_z draw
+using ...SimulateCPU: _snapshot_times
 using CUDA
 using ...Transport
 
@@ -56,15 +57,18 @@ function simulate_ensemble_bulk_gpu(
     relativistic::Bool = true,  # true = drag ·m/E (Jüttner); false = ηD (Maxwell)
     momentum_dimensions::Int = 0,   # 0 ⇒ = dimensions; 3 with dimensions=2 adds p_z (utils.jl note)
     bjorken_redshift::Bool = false, # dp_z/dτ = −p_z/τ between kicks; needs momentum_dimensions=3
+    verbose::Bool = false,          # print device name + memory status at entry
 )
     CUDA.reclaim()  # Free any unused GPU memory
-    print_cuda_status()
+    verbose && print_cuda_status()
 
     try
         # === Derived parameters ===
         total_time = final_time - initial_time
         steps = floor(Int, total_time / Δt)
-        save_every = round(Int, save_interval / Δt)   # robust to binary roundoff (matches CPU path)
+        steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
+        save_every = min(round(Int, save_interval / Δt), steps)   # robust to binary roundoff; clamped as on the CPU path
+        save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
         num_saves = steps ÷ save_every
         # ON-THE-FLY FREEZE-OUT: no trajectory history is needed (memory ∝ N, VRAM-safe at any cadence);
         # each particle latches its own state the step it first crosses T=Tfo. Keep a trivial 1-snapshot
@@ -403,7 +407,7 @@ function simulate_ensemble_bulk_gpu(
 
         # === Transfer saved histories back to CPU ===
         # 2D layout: (dimensions, N_particles * (num_saves+1)) — single cudaMemcpy, slice on CPU.
-        time_points = range(initial_time, final_time, length=num_saves + 1)
+        time_points = _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves)   # see simulate_cpu.jl
         full_mom_cpu = Array(momenta_history_gpu)
         full_pos_cpu = Array(position_history_gpu)
         momenta_history_vec  = [full_mom_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
@@ -428,6 +432,7 @@ function simulate_ensemble_bulk_gpu(
         finalize(u_sample)
         finalize(invcdf_d)
         finalize(tau_vals_d)
+        finalize(taun_vals_d)
 
         # Clear references
         momenta_history_gpu = nothing

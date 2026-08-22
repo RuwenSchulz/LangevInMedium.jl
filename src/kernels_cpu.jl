@@ -19,6 +19,11 @@ export interpolate_2d_cpu,
        kernel_set_to_fluid_velocity_cpu!
 
 
+"""
+    interpolate_2d_cpu
+
+Bilinear lookup of a tabulated field `values[i, j]` on `(x[i], y[j])` at `(xi, yi)`. The query point is CLAMPED to the table (edge value outside it) — extrapolating gave `T < 0` and `|v| > 1` once particles left the grid. Degenerate cells (`x1 == x0`) return the node value.
+"""
 function interpolate_2d_cpu(x, y, values, xi, yi)
     # Clamp query points to the tabulated domain.
     # The old code clamped *indices* but still extrapolated when xi/yi were
@@ -50,6 +55,11 @@ function interpolate_2d_cpu(x, y, values, xi, yi)
     return c0 * (1 - yd) + c1 * yd
 end
 
+"""
+    kernel_boost_to_rest_frame_cpu!
+
+Boost every particle's momentum from the lab into the local fluid rest frame at its own `(r, t_now = step·Δt + t0)`: a Lorentz boost along r̂ by the interpolated radial flow `v` (clamped below 1), or, with `relativistic = false`, the Galilean `p∥ −= m·v`. `radial_mode`: `momenta` holds `p_r` only. `V2Evolution`/`psi2` modulate `v` azimuthally. Particles at `r < eps` are left alone (r̂ undefined).
+"""
 function kernel_boost_to_rest_frame_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0;
@@ -156,6 +166,11 @@ end
 # and boosted readings of the exact class. The `relativistic` kwarg on both boost kernels now fixes
 # this: false ⇒ Galilean p∥ ∓ m·v. Every NR product generated BEFORE this date carries the hybrid
 # and must not be compared to the solvable class at the sub-percent level below z ~ 15.
+"""
+    kernel_boost_to_lab_frame_cpu!
+
+Inverse of `kernel_boost_to_rest_frame_cpu!` at the same `(r, t_now)`: rest-frame momenta back to the lab. Called once at t0 on the sampled (rest-frame) initial momenta and after every momentum update. Same switches (`relativistic`, `radial_mode`, `V2Evolution`).
+"""
 function kernel_boost_to_lab_frame_cpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m, N, step, Δt, t0;
@@ -243,6 +258,11 @@ function kernel_boost_to_lab_frame_cpu!(
     return nothing
 end
 
+"""
+    kernel_compute_all_forces_cpu!
+
+Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that `kernel_update_momenta_LRF_cpu!` realises the stationary variance `MT` at any Δt. `radial_mode` uses the Euler form with noise projected along p̂.
+"""
 function kernel_compute_all_forces_cpu!(
     Tfield, xgrid, tgrid,
     momenta, positions,
@@ -403,6 +423,11 @@ function kernel_compute_all_forces_cpu!(
     end
 end
 
+"""
+    kernel_update_momenta_LRF_cpu!
+
+`p += deterministic + √Δt·stochastic` for the `dimensions` momentum rows — the second half of the OU step prepared by `kernel_compute_all_forces_cpu!`.
+"""
 function kernel_update_momenta_LRF_cpu!(
     momenta, deterministic_terms, stochastic_terms,
     Δt, dimensions, N
@@ -424,6 +449,11 @@ end
 # so the rule is applied to every particle's p_z row in the LRF: p_z ← p_z·τ_a/τ_b over the step
 # τ_a = t0+(step−1)Δt → τ_b = τ_a+Δt. This is the longitudinal work term of θ = 1/τ + ∇_⊥·u_⊥
 # that a 2-D momentum run omits. Operator-split from the OU kick at O(Δt²).
+"""
+    kernel_bjorken_redshift_cpu!
+
+Longitudinal free-streaming of a boost-invariant system between kicks: `p_z ← p_z·τ_a/(τ_a + Δt)` on row `pz_row`, with `τ_a = t0 + (step−1)Δt`. Exact telescoping `⟨p_z²⟩ ∝ 1/τ²` (tested).
+"""
 function kernel_bjorken_redshift_cpu!(momenta, pz_row::Int, step, Δt, t0, N)
     τa = t0 + (step - 1) * Δt
     τa > 0 || return nothing
@@ -471,6 +501,11 @@ end
 #
 # Operates on rest-frame momenta — call it between kernel_boost_to_rest_frame_cpu! and
 # kernel_boost_to_lab_frame_cpu!.
+"""
+    kernel_rta_collision_cpu!
+
+Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-draw the momentum from the local isotropic Jüttner (`|p*| ∝ p^{d−1} e^{−(E−m)/T}` by rejection, random direction), else leave it. `tau_vals` MUST be the CURRENT-time spline from `build_taun_current_spline` (BGK relaxes every moment at 1/τ; the OU's ℓ=1 mode decays at `η_D K₂/K₃`, so matching the current sector needs τ_n = τ_drag·K₃/K₂). `dimensions` must equal the momentum rows (checked).
+"""
 function kernel_rta_collision_cpu!(
     Tfield, xgrid, tgrid,
     momenta, positions,
@@ -482,6 +517,10 @@ function kernel_rta_collision_cpu!(
     radial_mode::Bool = false,
  )
     M = m
+    # the loop below is @inbounds on momenta[d, i] for d ≤ dimensions — make that true by contract
+    dimensions == size(momenta, 1) || throw(DimensionMismatch(
+        "kernel_rta_collision_cpu!: dimensions=$dimensions but momenta has $(size(momenta, 1)) rows"))
+    N <= size(momenta, 2) || throw(DimensionMismatch("kernel_rta_collision_cpu!: N=$N > $(size(momenta, 2)) particles"))
     @inbounds for i in 1:N
         r = sqrt(sum(positions[:, i].^2))
         T = max(float(interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)), 0.0)
@@ -507,6 +546,11 @@ function kernel_rta_collision_cpu!(
     return nothing
 end
 
+"""
+    kernel_update_positions_cpu!
+
+Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `momentum_dimensions` rows (`relativistic`) or `p/m`. Optional overdamped diffusion `√(2D_sΔt)·ξ` with `D_s = DsT/T(r, t)` (`position_diffusion`; double-counts against the underdamped dynamics) and reflection at `r = xgrid[end]` (`reflecting_boundary`). `radial_mode` reflects at `r = 0` and adds the `D/r` drift.
+"""
 function kernel_update_positions_cpu!(
     positions, momenta, m, Δt, N,step,t0,
     xgrid,tgrid, Tfield,DsT;
@@ -636,6 +680,11 @@ function kernel_update_positions_cpu!(
     end
 end
 
+"""
+    kernel_save_snapshot_cpu!
+
+Copy a per-particle scalar snapshot (used by the homogeneous-box path for |p|).
+"""
 function kernel_save_snapshot_cpu!(
     history_col, snapshot::Vector{Float64}, N::Int
     )
@@ -644,6 +693,11 @@ function kernel_save_snapshot_cpu!(
     end
 end
 
+"""
+    kernel_save_momenta_cpu!
+
+Store `momenta` into `momenta_history[:, :, save_idx]`.
+"""
 function kernel_save_momenta_cpu!(
     momenta_history, current_momentum, save_idx::Int, N::Int
     )
@@ -656,6 +710,11 @@ function kernel_save_momenta_cpu!(
     return nothing
 end
 
+"""
+    kernel_save_positions_cpu!
+
+Store `positions` into `position_history[:, :, save_idx]`.
+"""
 function kernel_save_positions_cpu!(
     position_history, current_positions, save_idx::Int, N::Int
     )
@@ -668,6 +727,11 @@ function kernel_save_positions_cpu!(
     return nothing
 end
 
+"""
+    kernel_set_to_fluid_velocity_cpu!
+
+Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ·v·r̂` (`relativistic`) or `m·v·r̂`. Used when `momentum_langevin = false` or `DsT = 0` (instantaneous equilibration limit).
+"""
 function kernel_set_to_fluid_velocity_cpu!(
     momenta::Array{Float64,2},
     positions::Array{Float64,2},

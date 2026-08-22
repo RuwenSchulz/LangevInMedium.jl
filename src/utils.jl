@@ -1,35 +1,29 @@
 module Utils
 
-# === Imports ===
-using StaticArrays
-using Plots
-using Bessels
-using Interpolations
-using Statistics
-using LinearAlgebra
-using Distributions
-using DataStructures
-using LaTeXStrings
-using StatsBase: Histogram, fit
-using Statistics: mean, std
-using Printf
-using QuadGK
-
+using Interpolations, QuadGK, Random, Statistics, LinearAlgebra
+using Distributions: Uniform, Normal, Truncated, MixtureModel
 using ..Constants
 
-# === Exports ===
 export sample_initial_particles_from_pdf!
-export sample_initial_particles_milne!
 export sample_initial_particles_at_origin!
 export sample_initial_particles_at_origin_no_position!
-export compute_MIS_distribution
 export sample_particles_from_density
 export sample_particles_from_FONLL
 export append_thermal_pz, sample_pz_conditional_juttner, check_momentum_dims
 
-using Interpolations, QuadGK, Random
+"""
+    sample_particles_from_FONLL(r_grid, p_grid, f, N; cartesian_spatial_sampling=false) -> (x, p)
 
+Draw `N` particles from a tabulated initial phase-space density `f[p_index, r_index]` (an
+`(Nr, Np)` table is transposed automatically). Returns lab positions `x` `(2, N)` and
+transverse momenta `p` `(2, N)` with isotropic azimuth; |p| is drawn from the conditional
+`P(p | r) ∝ p·f(r, p)` by inverse CDF on the nearest tabulated `r`.
 
+Spatial sampling: `cartesian_spatial_sampling = true` rejection-samples `(x, y)` uniformly in the
+disc `r ≤ r_grid[end]` against `n(r) = ∫p f dp` — no `r → 0` grid artefacts, but the acceptance is
+the fireball's area fraction of the disc (a few % for a Pb+Pb profile in a 20 fm disc); `false`
+inverse-CDF samples `P(r) ∝ r·n(r)` on the grid. Uses the global RNG (`Random.seed!`).
+"""
 function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples::Int;
                                      n_cdf_points=500,
                                      cartesian_spatial_sampling::Bool=false)
@@ -346,58 +340,6 @@ function sample_initial_particles_from_pdf!(
 
     return positions, momenta
 end
-
-function sample_initial_particles_milne!(
-    m, dim::Int, N_particles::Int,
-    τ::Float64, T_profile, ur_profile, mu_profile, x_range::Tuple{Float64, Float64}, nbins::Int
-    )
-    @assert dim == 2 "Milne sampling requires dim = 2 (τ, r)"
-    positions = zeros(dim, N_particles)
-    momenta = zeros(dim, N_particles)
-
-    # Discretize radial domain
-    x_edges = range(x_range[1], x_range[2], length=nbins + 1)
-    dx = step(x_edges)
-    x_centers = (x_edges[1:end-1] .+ x_edges[2:end]) ./ 2
-
-    # Compute normalized PDF over radial positions
-    T_vals  = T_profile.(x_centers, τ)
-    ur_vals = ur_profile.(x_centers, τ)
-    mu_vals = mu_profile.(x_centers, τ)
-    γ_vals  = sqrt.(1 .+ ur_vals .^ 2)
-
-    n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
-    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  
-    # Compute unnormalized PDF
-    #pdf_vals = n_boltz .* x_centers         # Include 2D volume element (r * dr)
-    max_pdf = maximum(pdf_vals)             # For rejection threshold
-
-    # Rejection sampling
-    range_sampler = Uniform(x_range[1], x_range[2])
-    sampled_r = Float64[]
-
-    while length(sampled_r) < N_particles
-        r_try = rand(range_sampler)
-        idx = searchsortedfirst(x_centers, r_try)
-        p = idx <= length(pdf_vals) ? pdf_vals[idx] : 0.0
-        if rand() < p / max_pdf
-            push!(sampled_r, r_try)
-        end
-    end
-
-    # Sampling loop
-    for i in 1:N_particles
-        r = sampled_r[i]
-        T = T_profile(r, τ)
-        σ = sqrt(m * T)
-        pr = σ * randn(dim-1) 
-        pτ = sqrt(m^2 + dot(pr, pr))
-        positions[:, i] .= (τ, r)
-        momenta[:, i]   .= (pτ, abs.(pr[1]))
-    end
-
-    return positions, momenta
-end 
 
 function sample_initial_particles_at_origin!(
     m, dim, N_particles,

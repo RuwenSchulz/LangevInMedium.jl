@@ -1,0 +1,32 @@
+── nominal backgrounds ──
+    flow, 2 momentum rows              CPU ⟨p²⟩=1.5668 ⟨x²⟩=18.28  GPU ⟨p²⟩=1.5518 ⟨x²⟩=18.30  non-finite CPU/GPU 0/0
+  PASS flow, 2 momentum rows: CPU result finite
+  PASS flow, 2 momentum rows: GPU result finite
+  PASS flow, 2 momentum rows: GPU moments within 0.02 of CPU
+    flow, p_z + Bjorken redshift       CPU ⟨p²⟩=1.9933 ⟨x²⟩=18.29  GPU ⟨p²⟩=1.9988 ⟨x²⟩=18.29  non-finite CPU/GPU 0/0
+  PASS flow, p_z + Bjorken redshift: CPU result finite
+  PASS flow, p_z + Bjorken redshift: GPU result finite
+  PASS flow, p_z + Bjorken redshift: GPU moments within 0.02 of CPU
+    flow, Galilean                     CPU ⟨p²⟩=1.0238 ⟨x²⟩=18.40  GPU ⟨p²⟩=1.0348 ⟨x²⟩=18.40  non-finite CPU/GPU 0/0
+  PASS flow, Galilean: CPU result finite
+  PASS flow, Galilean: GPU result finite
+  PASS flow, Galilean: GPU moments within 0.02 of CPU
+    flow, RTA                          CPU ⟨p²⟩=1.6489 ⟨x²⟩=18.30  GPU ⟨p²⟩=1.6401 ⟨x²⟩=18.29  non-finite CPU/GPU 0/0
+  PASS flow, RTA: CPU result finite
+  PASS flow, RTA: GPU result finite
+  PASS flow, RTA: GPU moments within 0.02 of CPU
+── adversarial: particles leave the tabulated (r, τ) domain ──
+    outside grid in r and τ            CPU ⟨p²⟩=4.3800 ⟨x²⟩=121.04  GPU ⟨p²⟩=NaN ⟨x²⟩=NaN  non-finite CPU/GPU 0/200000
+  PASS outside grid in r and τ: CPU result finite
+  FAIL outside grid in r and τ: GPU result finite
+  FAIL outside grid in r and τ: GPU moments within 0.02 of CPU
+    outside grid, position_diffusion   CPU ⟨p²⟩=4.2111 ⟨x²⟩=124.57  GPU ⟨p²⟩=NaN ⟨x²⟩=NaN  non-finite CPU/GPU 0/200000
+  PASS outside grid, position_diffusion: CPU result finite
+  FAIL outside grid, position_diffusion: GPU result finite
+  FAIL outside grid, position_diffusion: GPU moments within 0.05 of CPU
+── adversarial: a flow-field cell with |v| > 1 ──
+    |v| = 1.02 cells                   CPU median p²=2.8323  GPU median p²=NaN  non-finite CPU/GPU 0/32448
+  PASS |v| = 1.02 cells: CPU result finite
+  FAIL |v| = 1.02 cells: GPU result finite
+  FAIL |v| = 1.02 cells: GPU median p² within 0.03 of CPU
+[FAIL] bench_gpu_parity: 6 of 21 gates failed
