@@ -1,0 +1,32 @@
+── (a) MSD slope = 2·d·D_s ──
+┌ Warning: save_interval does not divide the evolution: the last 499 step(s) (0.998 fm) are not in the returned history; time_points reflect the snapshots actually taken
+└ @ LangevInMedium.SimulateCPU ~/Desktop/phd-git/Julia/LangevInMedium.jl/src/simulate_cpu.jl:25
+  PASS (a) CPUBackend z=3.33: D_s measured/nominal = 0.9896
+  PASS (a) GPUBackend z=3.33: D_s measured/nominal = 1.0099
+  PASS (a) CPUBackend z=5.00: D_s measured/nominal = 0.9956
+  PASS (a) GPUBackend z=5.00: D_s measured/nominal = 0.9984
+  PASS (a) CPUBackend z=9.62: D_s measured/nominal = 0.9975
+  PASS (a) GPUBackend z=9.62: D_s measured/nominal = 1.0018
+── (b) Jüttner tail ──
+  PASS (b) IC tail fraction p>3.0: 0.00413 vs Jüttner 0.00420 (σ=0.00012)
+  PASS (b) tail after 10 τ_drag: 0.00423 vs 0.00420 — 0.2σ
+── (c) ℓ=1 decay rate ──
+    3 rows: instantaneous rate/η_D over the window 0.6364 → 0.6342 → 0.6313 → 0.6272   fitted 0.6353   λ₁ = 0.6403
+  PASS (c) 3 rows: the ensemble realises λ₁ at t=0 (0.6364 vs 0.6403)
+  PASS (c) 3 rows: instantaneous rate stays within [−3 %, +1 %] of λ₁ over ηt ≤ 0.8
+  PASS (c) 3 rows: fitted rate/η_D = 0.6353 within 6 % of λ₁ (noise floor)
+    2 rows: instantaneous rate/η_D over the window 0.6952 → 0.6918 → 0.6855 → 0.6833   fitted 0.6617   λ₁ = 0.6977
+  PASS (c) 2 rows: the ensemble realises λ₁ at t=0 (0.6952 vs 0.6977)
+  PASS (c) 2 rows: instantaneous rate stays within [−3 %, +1 %] of λ₁ over ηt ≤ 0.8
+  PASS (c) 2 rows: fitted rate/η_D = 0.6617 within 6 % of λ₁ (noise floor)
+── (d) Δt bias of the momentum propagator ──
+    relativistic=false  ⟨p²⟩/ref − 1 at ηΔt = 0.105, 0.052, 0.026 : 0.0021, 0.0022, -0.0039  (SEM 0.0037)
+  PASS (d) Galilean exact-OU: no Δt bias at any step (all within 3 SEM)
+    relativistic=true  ⟨p²⟩/ref − 1 at ηΔt = 0.105, 0.052, 0.026 : -0.0123, -0.0047, -0.0084  (SEM 0.0037)
+  PASS (d) relativistic pre-point drag: |⟨p²⟩ bias| < 1.5 % for ηΔt ≤ 0.10
+── (e) Galilean twin: MSD(t) exact at all t ──
+  PASS (e) MSD(t)/exact − 1 over 12 samples, worst 0.0027  (ballistic→diffusive, ηt ∈ [0.5, 6])
+── (f) DsT_quad makes the drag T-independent ──
+    realised η_D at T=0.2, 0.4: 2.6106, 2.6094 fm⁻¹  (η_D(Tref=0.3) = 2.6136; const-D_sT would give ratio 4)
+  PASS (f) DsT_quad: η_D(0.2) = η_D(0.4) = η_D(Tref) within 3 %
+[PASS] bench_physics_gates: 18 gates

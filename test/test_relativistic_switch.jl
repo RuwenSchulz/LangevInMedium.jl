@@ -32,7 +32,7 @@ Returns (momenta, positions).
 function box_run(; relativistic::Bool, N = 20_000, M = 1.5, T = 0.3, DsT = 0.5,
                    dt = 2e-3, nsteps = 4000, seed = 20260806, d = 2)
     rng = MersenneTwister(seed)
-    hbarc = 0.1973269804
+    hbarc = GevInvTofm                                # the package's ħc
     ηD = (T^2 / (M * DsT)) / hbarc                    # fm^-1
     κ  = 2 * ηD * M * T                               # GeV^2/fm
     p = 0.9 .* randn(rng, d, N)                       # a hot, isotropic start

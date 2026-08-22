@@ -1,7 +1,6 @@
 module KernelsGPU
 
 using CUDA
-using StaticArrays
 using ...Constants: fmGeV
 
 # === Exported Symbols ===
@@ -13,7 +12,6 @@ export
     kernel_bjorken_redshift_gpu!,
     kernel_update_positions_gpu!,
     kernel_set_to_fluid_velocity_gpu!,
-    kernel_save_snapshot_gpu!,
     kernel_save_momenta_gpu!,
     kernel_save_positions_gpu!,
     kernel_capture_freezeout_gpu!,
@@ -42,7 +40,14 @@ end
 # GPU Utility Function: Bilinear Interpolation
 # ============================================================================
 
+# Bilinear lookup on the tabulated (r, τ) background — the device twin of `interpolate_2d_cpu`.
+# The query point is CLAMPED to the tabulated domain (a particle past the rim or a τ beyond the
+# table reads the edge value). Until 0.2.0 this clamped the cell INDEX but still extrapolated,
+# so T went negative (⇒ κ < 0 ⇒ √κ = NaN) and |v| exceeded 1 once particles left the grid; the
+# CPU had been fixed, the GPU had not. Degenerate cells (x1 == x0) are handled like the CPU.
 @inline function interpolate_2d_cuda(x, y, values, xi, yi)
+    xi = xi < x[1] ? x[1] : (xi > x[length(x)] ? x[length(x)] : xi)
+    yi = yi < y[1] ? y[1] : (yi > y[length(y)] ? y[length(y)] : yi)
     i = 1
     for k in 1:length(x) - 1
         if x[k + 1] <= xi
@@ -70,8 +75,10 @@ end
     v00, v10 = values[i, j], values[i+1, j]
     v01, v11 = values[i, j+1], values[i+1, j+1]
 
-    xd = (xi - x0) / (x1 - x0 + 1e-8)
-    yd = (yi - y0) / (y1 - y0 + 1e-8)
+    dx = x1 - x0
+    dy = y1 - y0
+    xd = CUDA.abs(dx) < eps(Float64) ? 0.0 : (xi - x0) / dx
+    yd = CUDA.abs(dy) < eps(Float64) ? 0.0 : (yi - y0) / dy
 
     c0 = v00 * (1 - xd) + v10 * xd
     c1 = v01 * (1 - xd) + v11 * xd
@@ -120,6 +127,11 @@ end
 # CUDA Kernels for Langevin Evolution
 # ============================================================================
 
+"""
+    kernel_boost_to_rest_frame_gpu!
+
+Boost every particle's momentum from the lab into the local fluid rest frame at its own `(r, t_now = step·Δt + t0)`: a Lorentz boost along r̂ by the interpolated radial flow `v` (clamped below 1), or, with `relativistic = false`, the Galilean `p∥ −= m·v`. `radial_mode`: `momenta` holds `p_r` only. `V2Evolution`/`psi2` modulate `v` azimuthally. Particles at `r < eps` are left alone (r̂ undefined). One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_boost_to_rest_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
@@ -161,6 +173,9 @@ end
             return
         end
 
+        # Guard against superluminal values (a glitchy table cell) — same clamp as the CPU kernel.
+        vmax = sqrt(1.0 - 1e-12)
+        v = v < -vmax ? -vmax : (v > vmax ? vmax : v)
         v2 = v * v
         γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -203,6 +218,11 @@ end
     return
 end
 
+"""
+    kernel_boost_to_lab_frame_gpu!
+
+Inverse of `kernel_boost_to_rest_frame_gpu!` at the same `(r, t_now)`: rest-frame momenta back to the lab. Called once at t0 on the sampled (rest-frame) initial momenta and after every momentum update. Same switches (`relativistic`, `radial_mode`, `V2Evolution`). One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_boost_to_lab_frame_gpu!(
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
@@ -241,6 +261,9 @@ end
             return
         end
 
+        # Guard against superluminal values (a glitchy table cell) — same clamp as the CPU kernel.
+        vmax = sqrt(1.0 - 1e-12)
+        v = v < -vmax ? -vmax : (v > vmax ? vmax : v)
         v2 = v * v
         γ = 1.0 / sqrt(1.0 - v2 + 1e-10)
 
@@ -282,6 +305,11 @@ end
     return
 end
 
+"""
+    kernel_compute_all_forces_gpu!
+
+Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that `kernel_update_momenta_LRF_gpu!` realises the stationary variance `MT` at any Δt. `radial_mode` uses the Euler form with noise projected along p̂. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_compute_all_forces_gpu!(
     TemperatureEvolution, xgrid, tgrid,
     momenta, positions, p_mags, p_units,
@@ -305,6 +333,7 @@ end
         end
         r = sqrt(r2)
         T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, r, steps * Δt + initial_time)
+        T = T > 0.0 ? T : 0.0        # non-negative, as the CPU kernel
 
         # --- transport coefficients ---
         # Enforce main3-style τn(T) via a precomputed spline in fm.
@@ -396,6 +425,11 @@ end
     return
 end
 
+"""
+    kernel_update_momenta_LRF_gpu!
+
+`p += deterministic + √Δt·stochastic` for the `dimensions` momentum rows — the second half of the OU step prepared by `kernel_compute_all_forces_gpu!`. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_update_momenta_LRF_gpu!(
     momenta, deterministic_terms, stochastic_terms,
     Δt, dimensions, N_particles
@@ -412,6 +446,11 @@ end
 
 # Bjorken redshift p_z ← p_z·τ_a/τ_b in the LRF — the GPU twin of kernel_bjorken_redshift_cpu!
 # (exact longitudinal free-streaming of a boost-invariant system; see the CPU note).
+"""
+    kernel_bjorken_redshift_gpu!
+
+Longitudinal free-streaming of a boost-invariant system between kicks: `p_z ← p_z·τ_a/(τ_a + Δt)` on row `pz_row`, with `τ_a = t0 + (step−1)Δt`. Exact telescoping `⟨p_z²⟩ ∝ 1/τ²` (tested). One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_bjorken_redshift_gpu!(momenta, pz_row::Int, steps, Δt::Float64, initial_time::Float64, N_particles::Int)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -423,6 +462,11 @@ end
     return
 end
 
+"""
+    kernel_update_positions_gpu!
+
+Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `momentum_dimensions` rows (`relativistic`) or `p/m`. Optional overdamped diffusion `√(2D_sΔt)·ξ` with `D_s = DsT/T(r, t)` (`position_diffusion`; double-counts against the underdamped dynamics) and reflection at `r = xgrid[end]` (`reflecting_boundary`). `radial_mode` reflects at `r = 0` and adds the `D/r` drift. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_update_positions_gpu!(
     positions, 
     momenta, 
@@ -467,8 +511,8 @@ end
 
             if position_diffusion
                 T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r_safe, steps * Δt + initial_time)
-                # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm.
-                D = (DsT / T) / fmGeV
+                # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm. T floored at eps (CPU twin).
+                D = (DsT / (T > eps(Float64) ? T : eps(Float64))) / fmGeV
                 if D > 0.0
                     ξ = random_normals[1, idx]
                     dr += (D / r_safe) * Δt + CUDA.sqrt(2.0 * D * Δt) * ξ
@@ -508,8 +552,8 @@ end
                 end
                 r = CUDA.sqrt(r2)
                 T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
-                # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm.
-                D = (DsT / T) / fmGeV
+                # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm. T floored at eps (CPU twin).
+                D = (DsT / (T > eps(Float64) ? T : eps(Float64))) / fmGeV
                 if D > 0.0
                     σ = CUDA.sqrt(2.0 * D * Δt)
                     for d in 1:dimensions
@@ -546,6 +590,11 @@ end
     return
 end
 
+"""
+    kernel_save_momenta_gpu!
+
+Store `momenta` into `momenta_history[:, :, save_idx]`. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_save_momenta_gpu!(
     momenta_history::CuDeviceMatrix{Float64},
     current_momentum,
@@ -563,6 +612,11 @@ end
     return
 end
 
+"""
+    kernel_save_positions_gpu!
+
+Store `positions` into `position_history[:, :, save_idx]`. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_save_positions_gpu!(
     position_history::CuDeviceMatrix{Float64},
     current_positions,
@@ -585,6 +639,11 @@ end
 # below Tfo, INTERPOLATE position/momentum/time linearly in T between the last-above and first-below states
 # to the exact T=Tfo crossing (interp=true; removes the O(Δt) booking lag ⇒ Δτ_save→0), or book the raw
 # first-below snapshot (interp=false). No history stored ⇒ memory ∝ N, VRAM-safe at any cadence / resolution.
+"""
+    kernel_capture_freezeout_gpu!
+
+On-the-fly freeze-out latch: for each particle not yet frozen, read `T(r, τ)`; while above `Tfo` cache the state as the last-above reference, and on the first step below book position/momentum/τ either interpolated linearly in T to the exact `T = Tfo` crossing (`interp = true`) or raw. Memory ∝ N; the particle keeps propagating afterwards — this records the crossing, it does not stop the run.
+"""
 @inline function kernel_capture_freezeout_gpu!(
     fo_pos, fo_mom, fo_tau, fo_flag, last_pos, last_mom, last_tau, last_T,
     positions, momenta, xgrid, tgrid, Tfield, Tfo::Float64,
@@ -650,6 +709,11 @@ end
 #   u_sample[i] ~ U(0,1)    inverse-CDF draw of |p*|
 #   dir_gauss[d,i] ~ N(0,1) isotropic direction (radial_mode: sign only)
 # Call BETWEEN kernel_boost_to_rest_frame_gpu! and kernel_boost_to_lab_frame_gpu!.
+"""
+    kernel_rta_collision_gpu!
+
+Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-draw the momentum from the local isotropic Jüttner (`|p*| ∝ p^{d−1} e^{−(E−m)/T}` by a constant-work inverse-CDF table lookup from `build_juttner_invcdf`, direction from the pre-drawn Gaussians — no warp divergence), else leave it. `tau_vals` MUST be the CURRENT-time spline from `build_taun_current_spline` (BGK relaxes every moment at 1/τ; the OU's ℓ=1 mode decays at `η_D K₂/K₃`, so matching the current sector needs τ_n = τ_drag·K₃/K₂). `dimensions` is the number of momentum rows (the driver passes `pdim`). Uses the pre-generated `u_collide`, `u_sample`, `dir_gauss` arrays filled in the driver loop.
+"""
 @inline function kernel_rta_collision_gpu!(
     momenta, positions, xgrid, tgrid, Tfield,
     Δt::Float64, m::Float64, N_particles::Int, steps, initial_time::Float64, DsT::Float64,
@@ -703,6 +767,11 @@ end
     return
 end
 
+"""
+    kernel_set_to_fluid_velocity_gpu!
+
+Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ·v·r̂` (`relativistic`) or `m·v·r̂`. Used when `momentum_langevin = false` or `DsT = 0` (instantaneous equilibration limit). One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+"""
 @inline function kernel_set_to_fluid_velocity_gpu!(
     momenta,
     positions,
@@ -748,7 +817,9 @@ end
             return
         end
 
-        # --- Lorentz factor ---
+        # --- Lorentz factor (|v| clamped below 1 as in the CPU kernel) ---
+        vmax = CUDA.sqrt(1.0 - 1e-12)
+        v = v < -vmax ? -vmax : (v > vmax ? vmax : v)
         γ = 1.0 / CUDA.sqrt(1.0 - v * v + 1e-10)
 
         if radial_mode

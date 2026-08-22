@@ -20,7 +20,7 @@
 # ==============================================================================================
 using Test, Random, Statistics, LinearAlgebra, QuadGK, Bessels, LangevInMedium
 const U = LangevInMedium.Utils
-const HBARC = 0.1973269804
+const HBARC = GevInvTofm            # the package's ħc — the engine and the reference must agree on it
 
 # ── reference quantities by quadrature ───────────────────────────────────────────────────────────
 "⟨g(p)⟩ in the d-dimensional Jüttner at (M,T): measure p^(d-1) e^{-E/T}."

@@ -13,7 +13,9 @@
 # These were previously proven only inside LangevinPaper1's harness; they belong
 # with the library so `Pkg.test()` on LangevInMedium exercises them directly.
 #
-#   julia --project=Julia/LangevInMedium.jl -e 'using Pkg; Pkg.test()'
+#   julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl              # everything (≈ 10 min CPU, + GPU gate if CUDA works)
+#   LIM_FAST=1 julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl   # transport/unit tests only (seconds)
+#   julia --project=Julia Julia/LangevInMedium.jl/test/regression_corpus.jl     # bit-identity corpus (separate; see its header)
 # ==============================================================================
 
 using Test
@@ -63,6 +65,30 @@ const DST     = 0.11634
         @test ratio(0.05) > 1.0
         @test ratio(0.05) < ratio(0.20)
         @test isapprox(ratio(0.02), 1.0; atol = 0.05)   # z = 75: within 5% of NR limit
+    end
+
+    @testset "effective_DsT prescription (quadratic ⇒ T-independent drag)" begin
+        Tref = 0.30
+        for T in (0.12, 0.2, 0.3, 0.45)
+            @test isapprox(effective_DsT(T, DST; DsT_quad = true, DsT_Tref = Tref), DST * (T / Tref)^2; rtol = 1e-12)
+            # the drag time built from it is constant in T: m·DsT_eff/T² = m·DsT/Tref²
+            @test isapprox(tau_drag(T, M_CHARM, effective_DsT(T, DST; DsT_quad = true, DsT_Tref = Tref)),
+                           tau_drag(Tref, M_CHARM, DST); rtol = 1e-12)
+        end
+        @test_throws ErrorException effective_DsT(0.3, DST; DsT_quad = true, DsT_Tref = 0.0)
+        @test_throws ErrorException effective_DsT(0.3, DST; DsT_quad = true, DsT_Tref = 0.3, DsT_linear = true)
+        # and through the spline builder: flat to the grid's linear-interpolation floor
+        _, _, vals = build_tau_drag_spline(M_CHARM, DST; Tmin = 0.12, Tmax = 0.5, nT = 64, DsT_quad = true, DsT_Tref = Tref)
+        @test maximum(vals) / minimum(vals) < 1 + 1e-9
+    end
+
+    @testset "snapshot time axis matches the snapshots taken" begin
+        ST = LangevInMedium.SimulateCPU._snapshot_times
+        # divisible: the historical range, bit for bit
+        @test ST(0.0, 8.0, 2e-3, 4000, 250, 16) === range(0.0, 8.0, length = 17)
+        # not divisible: 5295 steps, save every 662 ⇒ 7 saves at k·1.324, NOT k·10.59/7
+        tp = @test_logs (:warn, r"does not divide") ST(0.0, 10.59, 2e-3, 5295, 662, 7)
+        @test length(tp) == 8 && isapprox(step(tp), 662 * 2e-3; rtol = 1e-12) && tp[1] == 0.0
     end
 
     @testset "effective_DsT prescription (const / linear)" begin
@@ -127,9 +153,39 @@ const DST     = 0.11634
     end
 end
 
-# ── the relativistic switch must actually switch ────────────────────────────────
-# Added after the flag was found to be parsed by the drivers, recorded in the output
-# metadata, and never handed to the solver: two runs differing only in it came out
-# bit-identical.  See the file header for what each assertion guards.
-include(joinpath(@__DIR__, "test_relativistic_switch.jl"))
-include(joinpath(@__DIR__, "test_momentum_dims3.jl"))
+# ── engine smoke tests through the public entry point (seconds) ────────────────────────────────
+@testset "entry-point contract" begin
+    xg = collect(0.0:0.5:60.0); tg = collect(0.0:0.5:3.0)
+    Tf = fill(0.3, length(xg), length(tg)); Vf = zeros(length(xg), length(tg))
+    rg = collect(0.0:0.5:20.0); pg = collect(0.05:0.1:8.0); dens = ones(length(pg), length(rg))
+    N = 2_000; Random.seed!(1); x0 = randn(2, N); p0 = 0.8 .* randn(2, N)
+    run(; kw...) = simulate_ensemble_bulk(CPUBackend(), rg, pg, dens, Tf, Vf, (xg, tg); x_init = x0, p_init = p0,
+        N_particles = N, Δt = 1e-2, final_time = 0.2, save_interval = 0.1, m = 1.5, DsT = 0.2, dimensions = 2, Tfo = 0.0, kw...)
+    t, mom, pos = run()
+    @test length(t) == 3 && size(mom[end]) == (2, N) && size(pos[end]) == (2, N)
+    t, mom, _ = run(collision_mode = :rta)                      # the BGK path runs and relaxes
+    @test size(mom[end]) == (2, N) && all(isfinite, mom[end])
+    t, mom, _ = run(momentum_dimensions = 3)
+    @test size(mom[end]) == (3, N)
+    @test_throws ErrorException run(collision_mode = :bogus)
+    @test_throws ErrorException run(integrator_mode = 1)        # GPU-only scheme, refused on the CPU
+    @test_throws DimensionMismatch LangevInMedium.KernelsCPU.kernel_rta_collision_cpu!(Tf, xg, tg, zeros(2, 4), zeros(2, 4),
+        1e-2, 1.5, 4, 1, 0.0, 0.2; tau_Tmin = 0.1, tau_invdT = 1.0, tau_vals = [1.0, 1.0], dimensions = 3)
+    # the sampler path (no x_init): both spatial modes, antithetic pairs are exact mirrors
+    Random.seed!(2)
+    _, mom, pos = simulate_ensemble_bulk(CPUBackend(), rg, pg, dens, Tf, Vf, (xg, tg); N_particles = N, Δt = 1e-2,
+        final_time = 0.1, save_interval = 0.1, m = 1.5, DsT = 0.2, dimensions = 2, Tfo = 0.0, antithetic_momenta = true)
+    @test all(mom[1][:, 2:2:end] .== -mom[1][:, 1:2:end-1])
+    @test all(sqrt.(sum(abs2, pos[1]; dims = 1)) .<= rg[end] + 1e-12)
+end
+
+if get(ENV, "LIM_FAST", "0") == "1"
+    @info "LIM_FAST=1: skipping the engine gates (test_relativistic_switch.jl, test_momentum_dims3.jl)"
+else
+    # ── the relativistic switch must actually switch ────────────────────────────────
+    # Added after the flag was found to be parsed by the drivers, recorded in the output
+    # metadata, and never handed to the solver: two runs differing only in it came out
+    # bit-identical.  See the file header for what each assertion guards.
+    include(joinpath(@__DIR__, "test_relativistic_switch.jl"))
+    include(joinpath(@__DIR__, "test_momentum_dims3.jl"))
+end

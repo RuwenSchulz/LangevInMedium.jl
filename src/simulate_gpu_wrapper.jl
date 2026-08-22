@@ -1,17 +1,19 @@
 # === simulate_gpu_wrapper.jl ===
+# Included into `Simulate` by the Requires hook once CUDA is loaded: defines the GPU kernels, the
+# GPU driver and the `simulate_ensemble_bulk(::GPUBackend, …)` method.
 
-# Load required CUDA functionality and modules
-#using CUDA
-
-# Include GPU-specific source files
 include("kernels_gpu.jl")
-include("kernels_gpu_GC.jl")
 include("simulate_gpu.jl")
-include("simulate_gpu_general_coords.jl")
-# Import the GPUBackend type from the backends module
-using ..Backends: GPUBackend, GPU_GCBackend
+using ..Backends: GPUBackend
 
+"""
+    simulate_ensemble_bulk(::GPUBackend, r_grid, p_grid, density, T_field, v_field, (xgrid, tgrid); kwargs...)
 
+CUDA twin of the CPU method (same keywords, same algorithm, same return shape) with the GPU-only
+extras `freezeout_capture`, `freezeout_interp`, `integrator_mode` and `verbose`. Sampling and the
+p_z completion run on the host; the per-step kernels and the snapshot history live on the device
+and are downloaded once at the end. Only `:langevin` and `:rta` collision modes.
+"""
 function Simulate.simulate_ensemble_bulk(
     backend::GPUBackend,
     r_grid_Langevin,
@@ -50,6 +52,7 @@ function Simulate.simulate_ensemble_bulk(
     relativistic::Bool = true,  # drag: rel ·m/E (Jüttner) vs non-rel ηD (Maxwell)
     momentum_dimensions::Int = 0,   # p_z on the transverse plane (3 with dimensions=2); utils.jl note
     bjorken_redshift::Bool = false,
+    verbose::Bool = false,
 )
     (collision_mode == :langevin || collision_mode == :rta) ||
         error("simulate_ensemble_bulk(::GPUBackend): collision_mode=$(collision_mode) is not supported on GPU (only :langevin and :rta).")
@@ -79,32 +82,6 @@ function Simulate.simulate_ensemble_bulk(
         relativistic = relativistic,
         momentum_dimensions = momentum_dimensions,
         bjorken_redshift = bjorken_redshift,
+        verbose = verbose,
     )
 end
-
-function Simulate.simulate_ensemble_bulk(
-    backend::GPU_GCBackend,
-    T_profile_MIS,
-    ur_profile_MIS,
-    mu_profile_MIS,
-    TemperatureEvolutionn,
-    VelocityEvolutionn,
-    SpaceTimeGrid;
-    N_particles::Int = 10_000,
-    Δt::Float64 = 0.001,
-    initial_time::Float64 = 0.0,
-    final_time::Float64 = 1.0,
-    save_interval::Float64 = 0.1,
-    m::Float64 = 1.0,
-    dimensions::Int = 3,
-)
-    return SimulateGPUGeneralCoords.simulate_ensemble_bulk_gpu_general_coords(
-        T_profile_MIS, ur_profile_MIS, mu_profile_MIS,
-        TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
-        N_particles = N_particles, Δt = Δt,
-        initial_time = initial_time, final_time = final_time,
-        save_interval = save_interval, m = m, dimensions = dimensions
-    )
-end
-
-@info "GPU support loaded. Use `simulate_ensemble_bulk(GPUBackend(), ...)` to run GPU-accelerated Langevin dynamics."

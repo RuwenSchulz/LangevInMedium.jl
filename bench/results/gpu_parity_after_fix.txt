@@ -1,0 +1,40 @@
+── nominal backgrounds ──
+┌ Warning: save_interval does not divide the evolution: the last 124 step(s) (0.248 fm) are not in the returned history; time_points reflect the snapshots actually taken
+└ @ LangevInMedium.SimulateCPU ~/Desktop/phd-git/Julia/LangevInMedium.jl/src/simulate_cpu.jl:25
+  PASS flow, 2 momentum rows: CPU and GPU report the same snapshot times
+    flow, 2 momentum rows              CPU ⟨p²⟩=1.4193 ⟨x²⟩=18.50  GPU ⟨p²⟩=1.4139 ⟨x²⟩=18.51  non-finite CPU/GPU 0/0
+  PASS flow, 2 momentum rows: CPU result finite
+  PASS flow, 2 momentum rows: GPU result finite
+  PASS flow, 2 momentum rows: GPU moments within 0.03 of CPU
+  PASS flow, p_z + Bjorken redshift: CPU and GPU report the same snapshot times
+    flow, p_z + Bjorken redshift       CPU ⟨p²⟩=1.8036 ⟨x²⟩=18.50  GPU ⟨p²⟩=1.8284 ⟨x²⟩=18.50  non-finite CPU/GPU 0/0
+  PASS flow, p_z + Bjorken redshift: CPU result finite
+  PASS flow, p_z + Bjorken redshift: GPU result finite
+  PASS flow, p_z + Bjorken redshift: GPU moments within 0.03 of CPU
+  PASS flow, Galilean: CPU and GPU report the same snapshot times
+    flow, Galilean                     CPU ⟨p²⟩=0.9243 ⟨x²⟩=18.69  GPU ⟨p²⟩=0.9367 ⟨x²⟩=18.69  non-finite CPU/GPU 0/0
+  PASS flow, Galilean: CPU result finite
+  PASS flow, Galilean: GPU result finite
+  PASS flow, Galilean: GPU moments within 0.03 of CPU
+  PASS flow, RTA: CPU and GPU report the same snapshot times
+    flow, RTA                          CPU ⟨p²⟩=1.5252 ⟨x²⟩=18.53  GPU ⟨p²⟩=1.5141 ⟨x²⟩=18.51  non-finite CPU/GPU 0/0
+  PASS flow, RTA: CPU result finite
+  PASS flow, RTA: GPU result finite
+  PASS flow, RTA: GPU moments within 0.03 of CPU
+── adversarial: particles leave the tabulated (r, τ) domain ──
+  PASS outside grid in r and τ: CPU and GPU report the same snapshot times
+    outside grid in r and τ            CPU ⟨p²⟩=4.3800 ⟨x²⟩=121.04  GPU ⟨p²⟩=4.3880 ⟨x²⟩=121.06  non-finite CPU/GPU 0/0
+  PASS outside grid in r and τ: CPU result finite
+  PASS outside grid in r and τ: GPU result finite
+  PASS outside grid in r and τ: GPU moments within 0.03 of CPU
+  PASS outside grid, position_diffusion: CPU and GPU report the same snapshot times
+    outside grid, position_diffusion   CPU ⟨p²⟩=4.2111 ⟨x²⟩=124.57  GPU ⟨p²⟩=4.2001 ⟨x²⟩=124.55  non-finite CPU/GPU 0/0
+  PASS outside grid, position_diffusion: CPU result finite
+  PASS outside grid, position_diffusion: GPU result finite
+  PASS outside grid, position_diffusion: GPU moments within 0.06 of CPU
+── adversarial: a flow-field cell with |v| > 1 ──
+    |v| = 1.02 cells                   CPU median p²=2.8323  GPU median p²=2.8581  non-finite CPU/GPU 0/0
+  PASS |v| = 1.02 cells: CPU result finite
+  PASS |v| = 1.02 cells: GPU result finite
+  PASS |v| = 1.02 cells: GPU median p² within 0.03 of CPU
+[PASS] bench_gpu_parity: 27 gates

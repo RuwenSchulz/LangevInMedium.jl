@@ -1,46 +1,30 @@
 module Backends
 
-# === Exported Symbols ===
-export GPUBackend, CPUBackend,CPU_GCBackend, GPU_GCBackend
-
-# === Backend Type Hierarchy ===
+export GPUBackend, CPUBackend
 
 """
     AbstractBackend
 
-Abstract supertype for all simulation backends. Used for dispatching different implementations
-(e.g., CPU vs GPU) of the same high-level simulation logic.
+Supertype of the backend singletons that select the implementation of `simulate_ensemble_bulk`.
 """
 abstract type AbstractBackend end
 
 """
     CPUBackend <: AbstractBackend
 
-Represents execution on a CPU. Pass this to simulation dispatch functions to use CPU kernels.
+Run on the CPU (single-threaded loops over particles). Always available; seedable through
+`Random.seed!` — every draw goes through the task-local default RNG.
 """
 struct CPUBackend <: AbstractBackend end
 
 """
     GPUBackend <: AbstractBackend
 
-Represents execution on a GPU. Pass this to simulation dispatch functions to use CUDA kernels.
+Run on a CUDA device. The methods exist only after `using CUDA` (they are attached by a
+Requires.jl hook); the device RNG (CURAND) is not seedable, so GPU runs are reproducible in
+their ensemble moments, not bit for bit. Extras over the CPU path: on-the-fly freeze-out capture
+(`freezeout_capture`) and the drift-midpoint momentum step (`integrator_mode = 1`).
 """
 struct GPUBackend <: AbstractBackend end
-
-"""
-    CPU_GCBackend <: AbstractBackend
-
-Represents execution on a CPU using general coordinates (e.g., Milne coordinates).
-Pass this to simulation dispatch functions to use general-coordinate CPU kernels.
-"""
-struct CPU_GCBackend <: AbstractBackend end
-
-"""
-    GPU_GCBackend <: AbstractBackend
-
-Represents execution on a GPU using general coordinates (e.g., Milne coordinates).
-Pass this to simulation dispatch functions to use general-coordinate GPU kernels.
-"""
-struct GPU_GCBackend <: AbstractBackend end
 
 end # module Backends

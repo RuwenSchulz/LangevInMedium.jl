@@ -1,49 +1,42 @@
+"""
+    LangevInMedium
+
+Relativistic Langevin dynamics of heavy quarks in an evolving medium. An ensemble of particles
+is propagated on a tabulated background `T(r, τ)`, `v_r(r, τ)` (typically a hydro output): each
+step boosts the momenta into the local fluid rest frame, applies the exact Ornstein–Uhlenbeck
+propagator for the drag `η_D = T²/(M·D_sT)·(M/E)` with the matching Einstein noise `κ = 2MTη_D`,
+boosts back and streams the positions with `dx/dt = p/E`. CPU and CUDA backends run the same
+algorithm; the GPU path is attached at runtime by `using CUDA` (Requires.jl).
+
+One public entry point, dispatched on the backend singleton:
+
+    simulate_ensemble_bulk(CPUBackend() | GPUBackend(), r_grid, p_grid, density, T_field, v_field, (xgrid, tgrid); kwargs...)
+    simulate_ensemble_bulk(CPUBackend(), T; kwargs...)          # homogeneous box, momenta only
+
+returning `(time_points, momenta_snapshots, position_snapshots)`. See `README.md` for the keyword
+table, the drag-vs-current distinction (`tau_drag` vs `tau_n_main3`), the `relativistic`,
+`momentum_dimensions` and `DsT_*` switches, and the regression/benchmark suites.
+"""
 module LangevInMedium
 
-using StaticArrays, LinearAlgebra, JLD2, Dierckx
+include("constants.jl")         # ħc and the GeV⁻¹ ↔ fm conversion
+include("backends.jl")          # CPUBackend / GPUBackend singletons
+include("utils.jl")             # initial-condition samplers, the p_z completion
+include("transport.jl")         # τ_drag, τ_n (current), D_sT prescriptions, Jüttner inverse CDF
+include("kernels_cpu.jl")       # the per-step CPU kernels
+include("simulate_cpu.jl")      # CPU driver
+include("simulate.jl")          # public dispatch + the Requires hook that loads the GPU files
 
-# ─────────────────────────────────────────────────────────────
-# LangevInMedium.jl
-#
-# A framework for simulating Langevin dynamics in arbitrary
-# dimensions, where particles interact with a
-# dynamic medium defined by temperature and flow velocity fields. 
-# Arbitrary coordinate systems are supported by means of providing Christophel symbols as input.  
-#
-# Features:
-# - Arbitrary dimensionality (1D, 2D, 3D, ...)
-# - General coordinate systems (Cartesian, spherical, etc.)
-# - Background temperature and velocity evolution
-# - Ensemble-based simulations
-# - Supports CPU and (optionally) GPU backends
-# - Modular and extensible
-#
-# Entry point: `simulate_ensemble_bulk(::CPUBackend/GPUBackend/CPU_GCBackend/GPU_GCBackend, ...)`
-# ─────────────────────────────────────────────────────────────
-
-# Load internal modules
-include("constants.jl")         # Physical constants and parameters
-include("backends.jl")          # CPU/GPU backend markers
-include("utils.jl")             # Utilities: plotting, interpolation, etc.
-include("transport.jl")         # main3-style τn(T) + spline helper
-include("kernels_cpu.jl")       # CPU-side numerical integration kernels
-include("kernels_cpu_GC.jl")    # CPU-side numerical integration kernels for general coordinates
-include("simulate_cpu.jl")      # High-level CPU simulation loop
-include("simulate_cpu_general_coords.jl")      # High-level CPU simulation loop
-include("simulate.jl")          # Unified frontend with conditional GPU logic
-
-# Load submodules
 using .Constants
 using .Backends
 using .Utils
 using .Transport
 using .Simulate
 
-# Public API
-export simulate_ensemble_bulk          # Main simulation function
-export n_rt                            # Observable extraction (density vs r, t)
-export plot_n_rt_comparison_hydro_langevin  # Plotting helper
-export CPUBackend, GPUBackend, CPU_GCBackend, GPU_GCBackend          # Backend selectors
-export fmGeV, GevInvTofm  # Physical constants
+export simulate_ensemble_bulk
+export CPUBackend, GPUBackend
+export fmGeV, GevInvTofm
 export tau_n_main3, tau_drag, build_tau_drag_spline, build_taun_current_spline, eval_tau_n_spline, effective_DsT
+export sample_particles_from_FONLL
+
 end # module LangevInMedium
