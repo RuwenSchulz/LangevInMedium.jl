@@ -58,7 +58,10 @@ function simulate_ensemble_bulk_cpu(
     # a longitudinal p_z to the transverse-plane run — see the note above append_thermal_pz in utils.jl.
     momentum_dimensions::Int = 0,
     # dp_z/dτ = −p_z/τ between kicks (Bjorken longitudinal free-streaming); needs momentum_dimensions=3.
-    bjorken_redshift::Bool = false)
+    bjorken_redshift::Bool = false,
+    # kick per the particle's proper time (Δt* = Δt·E*/E_lab) — removes the lab-simultaneity
+    # ν^r artifact on flowing backgrounds; default false = production byte-identical.
+    proper_time_kicks::Bool = false)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
@@ -284,8 +287,10 @@ function simulate_ensemble_bulk_cpu(
                 tau_invdT = tau_invdT,
                 tau_vals = tau_vals,
                 radial_mode = radial_mode,
-                relativistic = relativistic)
-    
+                relativistic = relativistic,
+                proper_time_kicks = proper_time_kicks,
+                Vfield = VelocityEvolutionn)
+
             # 3. Update momenta
             kernel_update_momenta_LRF_cpu!(
                 momenta, deterministic_terms, stochastic_terms,

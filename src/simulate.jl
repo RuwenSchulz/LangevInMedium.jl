@@ -95,6 +95,7 @@ function simulate_ensemble_bulk(
     relativistic::Bool = true,    # p_z on the transverse plane (3 with dimensions=2) and its Bjorken redshift — utils.jl note.
     momentum_dimensions::Int = 0,
     bjorken_redshift::Bool = false,
+    proper_time_kicks::Bool = false,  # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl); false = production
     verbose::Bool = false,        # accepted for signature parity with the GPU path (prints nothing on the CPU)
 )
     integrator_mode == 0 ||
@@ -122,6 +123,7 @@ function simulate_ensemble_bulk(
         relativistic = relativistic,
         momentum_dimensions = momentum_dimensions,
         bjorken_redshift = bjorken_redshift,
+        proper_time_kicks = proper_time_kicks,
     )
 end
 

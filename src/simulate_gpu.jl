@@ -57,6 +57,7 @@ function simulate_ensemble_bulk_gpu(
     relativistic::Bool = true,  # true = drag ·m/E (Jüttner); false = ηD (Maxwell)
     momentum_dimensions::Int = 0,   # 0 ⇒ = dimensions; 3 with dimensions=2 adds p_z (utils.jl note)
     bjorken_redshift::Bool = false, # dp_z/dτ = −p_z/τ between kicks; needs momentum_dimensions=3
+    proper_time_kicks::Bool = false, # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl note)
     verbose::Bool = false,          # print device name + memory status at entry
 )
     CUDA.reclaim()  # Free any unused GPU memory
@@ -356,7 +357,8 @@ function simulate_ensemble_bulk_gpu(
                     Δt, m, random_directions, pdim, N_particles,
                     step, initial_time, DsT,
                     tau_Tmin, tau_invdT, tau_vals_d,
-                    radial_mode, Int32(integrator_mode), relativistic)
+                    radial_mode, Int32(integrator_mode), relativistic,
+                    proper_time_kicks, VelocityEvolution)
 
                 # Step 3: Update momenta in LRF
                 @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
