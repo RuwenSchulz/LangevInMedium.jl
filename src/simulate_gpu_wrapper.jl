@@ -52,6 +52,7 @@ function Simulate.simulate_ensemble_bulk(
     relativistic::Bool = true,  # drag: rel ·m/E (Jüttner) vs non-rel ηD (Maxwell)
     momentum_dimensions::Int = 0,   # p_z on the transverse plane (3 with dimensions=2); utils.jl note
     bjorken_redshift::Bool = false,
+    proper_time_kicks::Bool = false,
     verbose::Bool = false,
 )
     (collision_mode == :langevin || collision_mode == :rta) ||
@@ -82,6 +83,7 @@ function Simulate.simulate_ensemble_bulk(
         relativistic = relativistic,
         momentum_dimensions = momentum_dimensions,
         bjorken_redshift = bjorken_redshift,
+        proper_time_kicks = proper_time_kicks,
         verbose = verbose,
     )
 end

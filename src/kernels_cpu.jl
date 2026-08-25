@@ -275,9 +275,21 @@ function kernel_compute_all_forces_cpu!(
     tau_invdT::Float64,
     tau_vals::AbstractVector{<:Real},
     radial_mode::Bool = false,
-    relativistic::Bool = true
+    relativistic::Bool = true,
+    # 2026-08-25: kick per the particle's PROPER time. The undilated lab-Δt kick makes the
+    # stationary state on a flowing background f_J/(γ(1+v v_r)) instead of the boosted Jüttner —
+    # a spurious inward ν^r/n ≈ −γ v ⟨v_r²⟩ (the 08-04 "boost case" −0.071 at u^r = 0.5; see
+    # AttractorMomentum FIGURE_REGISTRY and Tex/MaxEntHydro README §engine simultaneity
+    # convention). With `proper_time_kicks = true` the OU attenuation runs over
+    # Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)) — the exact proper-time step — and the exact-OU
+    # noise keeps the stationary variance MT at any Δt. Streaming and boosts are untouched
+    # (geometry is per lab time). Default false = production byte-identical.
+    proper_time_kicks::Bool = false,
+    Vfield::Union{Nothing,AbstractMatrix} = nothing
  )
     M = m  # heavy-quark mass (can be parameterized)
+    proper_time_kicks && Vfield === nothing &&
+        error("kernel_compute_all_forces_cpu!: proper_time_kicks needs the velocity field")
 
     @inbounds for i in 1:N
         # --- local temperature ---
@@ -310,6 +322,26 @@ function kernel_compute_all_forces_cpu!(
 
         ηD_vals[i], kL_vals[i], kT_vals[i] = ηD, kL, kT
 
+        # proper-time dilation of the kick: Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)).
+        # k_r is the LRF radial momentum (p_z ⊥ the transverse boost), E* the full LRF energy.
+        dil = 1.0
+        if proper_time_kicks
+            v = interpolate_2d_cpu(xgrid, tgrid, Vfield, r, step * Δt + t0)
+            v = clamp(float(v), -0.999999, 0.999999)
+            γv = 1.0 / sqrt(1.0 - v * v)
+            kr = 0.0
+            for d in 1:size(positions, 1)
+                kr += momenta[d, i] * positions[d, i]
+            end
+            kr /= max(r, 1e-12)
+            p2_all = 0.0
+            for d in 1:dimensions
+                p2_all += momenta[d, i]^2
+            end
+            Estar = sqrt(p2_all + M^2)
+            dil = 1.0 / max(γv * (1.0 + v * kr / Estar), 1e-6)
+        end
+
         if radial_mode
             # ==========================================
             # 🟣 Radial / 1D mode: noise projected along p̂
@@ -330,7 +362,7 @@ function kernel_compute_all_forces_cpu!(
             η_eff_r = relativistic ? ηD * M / E_LRF_r : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
 
             for d in 1:dimensions
-                det_term = -η_eff_r * momenta[d, i] * Δt
+                det_term = -η_eff_r * momenta[d, i] * (Δt * dil)
 
                 sto_term = 0.0
                 for j in 1:dimensions
@@ -339,7 +371,9 @@ function kernel_compute_all_forces_cpu!(
                 end
 
                 deterministic_terms[d, i] = det_term
-                stochastic_terms[d, i]    = sto_term
+                # Euler form: noise variance scales with the proper step ⇒ amplitude × √dil
+                # (the update kernel multiplies by √Δt, the LAB step).
+                stochastic_terms[d, i]    = sto_term * sqrt(dil)
             end
 
         else
@@ -357,7 +391,10 @@ function kernel_compute_all_forces_cpu!(
                 end
                 E_LRF   = sqrt(p2_lrf + M^2)
                 η_eff   = relativistic ? ηD * M / E_LRF : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
-                a       = exp(-η_eff * Δt)
+                # attenuation over the PROPER step Δt·dil; the noise prefactor keeps the LAB Δt in
+                # its denominator because the update kernel multiplies by √Δt(lab) — together they
+                # realise the exact-OU stationary variance MT for any Δt and any dil.
+                a       = exp(-η_eff * Δt * dil)
                 noise_pref = (Δt > 0 && η_eff > 0) ?
                                  (kT * sqrt((1 - a * a) / (2 * η_eff * Δt))) : 0.0
                 for d in 1:dimensions

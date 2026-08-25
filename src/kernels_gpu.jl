@@ -319,7 +319,8 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
     dimensions, N_particles, steps, initial_time, DsT,
     tau_Tmin::Float64, tau_invdT::Float64, tau_vals,
     radial_mode::Bool, integrator_mode::Int32,   # 0 = pre-point exact-OU (legacy), 1 = drift-midpoint O(ε²)
-    relativistic::Bool                            # true = ·m/E (Jüttner); false = ηD (Maxwell)
+    relativistic::Bool,                           # true = ·m/E (Jüttner); false = ηD (Maxwell)
+    proper_time_kicks::Bool, Vfield               # 2026-08-25: kick per proper time Δt·E*/E_lab (see CPU kernel note)
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -347,6 +348,26 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
         @inbounds kL_vals[i] = kL
         @inbounds kT_vals[i] = kT
 
+        # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)); mirrors the CPU kernel.
+        dil = 1.0
+        if proper_time_kicks
+            v = interpolate_2d_cuda(xgrid, tgrid, Vfield, r, steps * Δt + initial_time)
+            v = v > 0.999999 ? 0.999999 : (v < -0.999999 ? -0.999999 : Float64(v))
+            γv = 1.0 / sqrt(1.0 - v * v)
+            kr = 0.0
+            for d in 1:size(positions, 1)
+                kr += momenta[d, i] * positions[d, i]
+            end
+            kr /= (r > 1e-12 ? r : 1e-12)
+            p2_all = 0.0
+            for d in 1:dimensions
+                p2_all += momenta[d, i]^2
+            end
+            Estar = sqrt(p2_all + M^2)
+            den = γv * (1.0 + v * kr / Estar)
+            dil = 1.0 / (den > 1e-6 ? den : 1e-6)
+        end
+
         if radial_mode
             # ==========================================
             # 🟣 Radial / 1D mode: noise projected along p̂
@@ -369,7 +390,7 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
             η_eff_r = relativistic ? ηD * M / E_LRF_r : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
 
             for d in 1:dimensions
-                det_term = -η_eff_r * momenta[d, i] * Δt
+                det_term = -η_eff_r * momenta[d, i] * (Δt * dil)
 
                 sto_term = 0.0
                 for j in 1:dimensions
@@ -378,7 +399,7 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
                 end
 
                 @inbounds deterministic_terms[d, i] = det_term
-                @inbounds stochastic_terms[d, i]    = sto_term
+                @inbounds stochastic_terms[d, i]    = sto_term * sqrt(dil)
             end
 
         else
@@ -399,7 +420,7 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
                     # η_eff there, then apply the full exact-OU step with the midpoint coefficients. The
                     # predictor must NOT include the noise (else η_eff correlates with ξ ⇒ spurious drift);
                     # noise is additive (κ momentum-independent) so there is no Milstein noise term.
-                    a_half = exp(-η_eff * (0.5 * Δt))
+                    a_half = exp(-η_eff * (0.5 * Δt * dil))
                     p2_mid = 0.0
                     for d in 1:dimensions
                         pm = a_half * momenta[d, i]
@@ -408,7 +429,9 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
                     E_mid = sqrt(p2_mid + M^2)
                     η_eff = relativistic ? ηD * M / E_mid : ηD   # midpoint drag (overwrites pre-point)
                 end
-                a       = exp(-η_eff * Δt)
+                # attenuation over the PROPER step Δt·dil; noise prefactor keeps the LAB Δt (the
+                # update kernel multiplies by √Δt_lab) ⇒ exact-OU stationary variance MT for any dil.
+                a       = exp(-η_eff * Δt * dil)
                 noise_pref = kT * sqrt((1.0 - a * a) / (2.0 * η_eff * Δt))   # matched FDR a↔variance
                 for d in 1:dimensions
                     @inbounds deterministic_terms[d, i] = (a - 1.0) * momenta[d, i]
