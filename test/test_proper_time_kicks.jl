@@ -35,9 +35,11 @@ function sample_lrf_juttner(rng, N)    # 2-D Jüttner, rejection in |k|
     p
 end
 
-function run_case(; proper::Bool)
+function run_case(; proper::Bool, pdim::Int = 2)
     rng = MersenneTwister(20260825)
-    xgrid = collect(0.0:0.5:30.0); tgrid = collect(0.0:0.1:2.0)
+    # bjorken_redshift (pdim=3, the portrait-recipe configuration) needs initial_time > 0
+    t0 = pdim == 3 ? 0.4 : 0.0
+    xgrid = collect(0.0:0.5:30.0); tgrid = collect(t0:0.1:(t0 + 2.0))
     Tf = fill(T0, length(xgrid), length(tgrid)); Vf = fill(V, length(xgrid), length(tgrid))
     # annulus r ∈ [3, 5], uniform in area
     x = zeros(2, N)
@@ -49,15 +51,20 @@ function run_case(; proper::Bool)
     Random.seed!(4242)
     _, moms, poss = simulate_ensemble_bulk(CPUBackend(), nothing, nothing, nothing,
         Tf, Vf, (xgrid, tgrid);
-        N_particles = N, Δt = 0.002, initial_time = 0.0, final_time = 1.0,
+        N_particles = N, Δt = 0.002, initial_time = t0, final_time = t0 + 1.0,
         save_interval = 0.5, m = M, DsT = DST, dimensions = 2,
+        momentum_dimensions = pdim == 3 ? 3 : 0, bjorken_redshift = (pdim == 3),
         x_init = x, p_init = p, proper_time_kicks = proper)
     pm = moms[end]; xm = poss[end]
     # the production estimator on one global bin: Jτ ∝ Σ1, J^r ∝ Σ (p·r̂)/E_lab
     s_v = 0.0; nn = 0
     for i in 1:N
         r = sqrt(xm[1, i]^2 + xm[2, i]^2); r < 1e-9 && continue
-        E = sqrt(pm[1, i]^2 + pm[2, i]^2 + M^2)
+        p2 = 0.0
+        for d in 1:size(pm, 1)
+            p2 += pm[d, i]^2
+        end
+        E = sqrt(p2 + M^2)
         s_v += (pm[1, i] * xm[1, i] + pm[2, i] * xm[2, i]) / (E * r)
         nn += 1
     end
@@ -90,6 +97,12 @@ function main()
     g("P2 proper-time kick kills it", abs(on.w) < 0.012, @sprintf("ν^r/n = %+.4f", on.w))
     g("P3 widths untouched", abs(off.Teff / on.Teff - 1) < 0.03,
       @sprintf("⟨k²⟩/2M: off %.4f  on %.4f", off.Teff, on.Teff))
+    # the portrait-recipe configuration: momentum_dimensions = 3 + Bjorken redshift
+    off3 = run_case(proper = false, pdim = 3)
+    on3  = run_case(proper = true,  pdim = 3)
+    g("P4 pdim=3+redshift reproduces the artifact OFF", off3.w < -0.05,
+      @sprintf("ν^r/n = %+.4f", off3.w))
+    g("P5 pdim=3+redshift killed ON", abs(on3.w) < 0.012, @sprintf("ν^r/n = %+.4f", on3.w))
     println(ok ? "ALL GATES PASS" : "GATE FAILURE")
     exit(ok ? 0 : 1)
 end
