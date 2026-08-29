@@ -552,6 +552,8 @@ function kernel_rta_collision_cpu!(
     tau_vals::AbstractVector{<:Real},
     dimensions::Int = 2,
     radial_mode::Bool = false,
+    proper_time_kicks::Bool = false,        # 2026-08-29: collide per PROPER time (see the GPU twin)
+    Vfield = nothing,
  )
     M = m
     # the loop below is @inbounds on momenta[d, i] for d ≤ dimensions — make that true by contract
@@ -562,8 +564,20 @@ function kernel_rta_collision_cpu!(
         r = sqrt(sum(positions[:, i].^2))
         T = max(float(interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)), 0.0)
         τn = (DsT > 0.0 && T > 0.0) ? eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals) : 0.0
+        # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)), the SAME factor
+        # kernel_compute_all_forces_cpu! applies to the OU step. DEFAULT OFF ⇒ literal 1.0.
+        dil = 1.0
+        if proper_time_kicks && Vfield !== nothing
+            v = float(interpolate_2d_cpu(xgrid, tgrid, Vfield, r, step * Δt + t0))
+            v = clamp(v, -0.999999, 0.999999)
+            γv = 1.0 / sqrt(1.0 - v * v)
+            kr = (r > 1e-12 ? sum(momenta[d, i] * positions[d, i] for d in 1:size(positions, 1)) / r : 0.0)
+            Estar = sqrt(sum(momenta[d, i]^2 for d in 1:dimensions) + M * M)
+            den = γv * (1.0 + v * kr / Estar)
+            dil = 1.0 / (den > 1e-6 ? den : 1e-6)
+        end
         # τn ≤ 0 ⇒ infinitely fast relaxation ⇒ always re-draw (DsT→0 local-equilibrium limit)
-        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt / τn, 0.0, 1.0) : 1.0
+        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt * dil / τn, 0.0, 1.0) : 1.0
         rand() < Pcol || continue
         pstar = _draw_juttner_pstar_lib(M, T, dimensions)
         if radial_mode

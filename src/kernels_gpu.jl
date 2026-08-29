@@ -744,6 +744,7 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
     invCDF, nU::Int, nT::Int, Ttab_min::Float64, Ttab_invdT::Float64,
     dimensions::Int, radial_mode::Bool,
     u_collide, u_sample, dir_gauss,
+    proper_time_kicks::Bool = false, Vfield = nothing,   # 2026-08-29: collide per PROPER time
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -763,7 +764,31 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
         Tpos = T > 0.0 ? T : 0.0
 
         τn = (DsT > 0.0 && Tpos > 0.0) ? _eval_tau_n_spline_cuda(Tpos, tau_Tmin, tau_invdT, tau_vals) : 0.0
-        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt / τn, 0.0, 1.0) : 1.0
+
+        # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)) — the SAME factor the OU force
+        # kernel applies (see "proper-time dilation" there). BGK relaxes at 1/τ_n per unit time; the
+        # τ_n it is matched to is a comoving quantity, so the elapsed time must be comoving too.
+        # DEFAULT OFF ⇒ dil is the literal constant 1.0 and Pcol is bit-for-bit the old expression.
+        dil = 1.0
+        if proper_time_kicks && Vfield !== nothing
+            v = interpolate_2d_cuda(xgrid, tgrid, Vfield, r, steps * Δt + initial_time)
+            v = v > 0.999999 ? 0.999999 : (v < -0.999999 ? -0.999999 : Float64(v))
+            γv = 1.0 / CUDA.sqrt(1.0 - v * v)
+            kr = 0.0
+            for d in 1:size(positions, 1)
+                @inbounds kr += momenta[d, i] * positions[d, i]
+            end
+            kr /= (r > 1e-12 ? r : 1e-12)
+            p2_all = 0.0
+            for d in 1:dimensions
+                @inbounds p2_all += momenta[d, i]^2
+            end
+            Estar = CUDA.sqrt(p2_all + M * M)
+            den = γv * (1.0 + v * kr / Estar)
+            dil = 1.0 / (den > 1e-6 ? den : 1e-6)
+        end
+
+        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt * dil / τn, 0.0, 1.0) : 1.0
 
         @inbounds uc = u_collide[i]
         if uc < Pcol
