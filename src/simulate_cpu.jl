@@ -266,7 +266,8 @@ function simulate_ensemble_bulk_cpu(
                 momenta, positions,
                 Δt, m, N_particles, step, initial_time, DsT;
                 tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = taun_vals,
-                dimensions = pdim, radial_mode = radial_mode)
+                dimensions = pdim, radial_mode = radial_mode,
+                proper_time_kicks = proper_time_kicks, Vfield = VelocityEvolutionn)
 
             # Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(

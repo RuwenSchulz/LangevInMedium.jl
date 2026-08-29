@@ -342,7 +342,8 @@ function simulate_ensemble_bulk_gpu(
                     tau_Tmin, tau_invdT, taun_vals_d,
                     invcdf_d, invcdf_nU, invcdf_nT, invcdf_Tmin, invcdf_invdT,
                     pdim, radial_mode,
-                    u_collide, u_sample, random_directions)
+                    u_collide, u_sample, random_directions,
+                    proper_time_kicks, VelocityEvolution)
 
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
