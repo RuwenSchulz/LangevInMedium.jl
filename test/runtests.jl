@@ -13,8 +13,8 @@
 # These were previously proven only inside LangevinPaper1's harness; they belong
 # with the library so `Pkg.test()` on LangevInMedium exercises them directly.
 #
-#   julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl              # everything (≈ 10 min CPU, + GPU gate if CUDA works)
-#   LIM_FAST=1 julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl   # transport/unit tests only (seconds)
+#   julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl              # everything (≈ 10 min CPU, + GPU gates if CUDA works)
+#   LIM_FAST=1 julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl   # transport + unit + time-convention (≈ 30 s)
 #   julia --project=Julia Julia/LangevInMedium.jl/test/regression_corpus.jl     # bit-identity corpus (separate; see its header)
 # ==============================================================================
 
@@ -179,8 +179,27 @@ end
     @test all(sqrt.(sum(abs2, pos[1]; dims = 1)) .<= rg[end] + 1e-12)
 end
 
+# Each suite below is evaluated in its OWN module. They are standalone scripts as well as members
+# of this suite, so several of them define top-level constants with the same names (`M`, `NP`, the
+# background grids) and different values; sharing `Main` would be an "invalid redefinition of
+# constant" error the moment two of them met. `Base.include(m, path)` keeps them apart and needs no
+# change to the files themselves.
+function run_suite(f)
+    m = Module(Symbol("LIM_", replace(f, ".jl" => "")))
+    Core.eval(m, :(using Test))
+    Base.include(m, joinpath(@__DIR__, f))
+end
+
+# ── unit coverage of the primitives (seconds; part of the fast set) ─────────────────────────────
+# Every function the older suites never touched: the interpolant, the spline evaluator, both boost
+# kernels, the two Jüttner samplers, the FONLL sampler's fidelity, LV_TAUN_SCALE, the box path.
+run_suite("test_kernel_units.jl")
+# WHEN each kernel reads the background — end-of-step for the lookups, start-of-step for the
+# Bjorken redshift. Two conventions on purpose; pinned so the mixture stays deliberate.
+run_suite("test_time_convention.jl")
+
 if get(ENV, "LIM_FAST", "0") == "1"
-    @info "LIM_FAST=1: skipping the engine gates (test_relativistic_switch.jl, test_momentum_dims3.jl)"
+    @info "LIM_FAST=1: skipping the engine gates (relativistic switch, momentum_dims3, CPU/GPU kernel parity, GPU-only paths)"
 else
     # ── the relativistic switch must actually switch ────────────────────────────────
     # Added after the flag was found to be parsed by the drivers, recorded in the output
@@ -188,4 +207,13 @@ else
     # bit-identical.  See the file header for what each assertion guards.
     include(joinpath(@__DIR__, "test_relativistic_switch.jl"))
     include(joinpath(@__DIR__, "test_momentum_dims3.jl"))
+    # ── CPU ↔ GPU, deterministically ────────────────────────────────────────────────
+    # The ONLY exact comparison of the two backends: same inputs, same injected noise, per particle,
+    # at 1e-12 or tighter. Everything else in the tree compares ensemble moments at 3 %, which is a
+    # far weaker instrument than the 0.2.0 bug history warrants. Skips itself without CUDA.
+    run_suite("test_kernel_parity.jl")
+    # ── the GPU-only features production depends on ─────────────────────────────────
+    # freezeout_capture (48 uses in Projects/) and integrator_mode = 1 (20 uses): both untested
+    # until 2026-08-31, and the second does not do what it says. Skips itself without CUDA.
+    run_suite("test_gpu_only_paths.jl")
 end

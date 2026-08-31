@@ -1,7 +1,7 @@
 name = "LangevInMedium"
 uuid = "13fa1c71-ab1f-4025-80c9-faa0bb3f17dd"
 authors = ["Ruwen Schulz <ruwen-schulz@hotmail.de>"]
-version = "0.2.0"
+version = "0.2.1"
 
 [deps]
 Bessels = "0e736298-9ec6-45e8-9647-e4fc86a2fe38"

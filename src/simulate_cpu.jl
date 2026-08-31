@@ -2,6 +2,7 @@ module SimulateCPU
 
 # === Imports ===
 using ProgressMeter
+using Random: randn!
 using ..KernelsCPU
 using ..Utils
 using ..Transport
@@ -237,7 +238,9 @@ function simulate_ensemble_bulk_cpu(
 
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
-        ξ .= randn(pdim, N_particles)
+        # ⚡ randn!(ξ) in place — `ξ .= randn(pdim, N)` allocated a fresh N×pdim matrix EVERY step.
+        # Same RNG stream, same values, same order ⇒ bit-identical.
+        randn!(ξ)
 
         # 1. Boost momenta to local rest frame
         kernel_boost_to_rest_frame_cpu!(
@@ -401,7 +404,7 @@ function simulate_ensemble_bulk_cpu(
 
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
-        ξ .= randn(dimensions, N_particles)
+        randn!(ξ)          # in place; see the note in the field-driven method above
 
         # 2. Compute forces in rest frame
         kernel_compute_all_forces_cpu!(

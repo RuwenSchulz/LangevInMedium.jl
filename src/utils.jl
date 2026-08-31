@@ -1,13 +1,10 @@
 module Utils
 
-using Interpolations, QuadGK, Random, Statistics, LinearAlgebra
-using Distributions: Uniform, Normal, Truncated, MixtureModel
+using Interpolations, Random, Statistics, LinearAlgebra
+using Distributions: Normal, Truncated, MixtureModel
 using ..Constants
 
-export sample_initial_particles_from_pdf!
-export sample_initial_particles_at_origin!
 export sample_initial_particles_at_origin_no_position!
-export sample_particles_from_density
 export sample_particles_from_FONLL
 export append_thermal_pz, sample_pz_conditional_juttner, check_momentum_dims
 
@@ -166,198 +163,6 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
 end
 
 
-function sample_particles_from_density(r_values, n_rt, N_samples::Int, T_interp,nur_interp, fugacity_interp;
-                                       n_cdf_points=1000, rmax=10.0, t0=0.0,
-                                       mode::Symbol = :density, m=1.5)
-
-    # helper: sample |p| from relativistic 2D MB at local T
-    sample_p_mag = function (T_local)
-        # simple robust cutoff (same as your MB2D branch)
-        pmax = 15 * max(T_local, eps())
-        p_grid = range(0, pmax, length=800)
-        dp = step(p_grid)
-        # f(p) ∝ p * exp(-sqrt(p^2 + m^2)/T)
-        f_p = @. p_grid * exp(-sqrt(p_grid^2 + m^2)/max(T_local, eps()))
-        Z = sum(f_p) * dp
-        if Z == 0.0
-            return 0.0
-        end
-        f_p ./= Z
-        cdf_p = cumsum(f_p) * dp
-        cdf_p[end] = 1.0
-        inverse_cdf_p = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Line())
-        return inverse_cdf_p(rand())
-    end
-
-    if mode == :density
-        # ------------------------------
-        # 1) Spatial sampling from user-supplied n_rt(r)
-        # ------------------------------
-        interp = LinearInterpolation(r_values, n_rt, extrapolation_bc=0.0)
-        norm, _ = quadgk(r -> r * interp(r), 0, rmax)
-
-        # Precompute CDF for r
-        r_cdf = range(0, rmax, length=n_cdf_points)
-        cdf_values = zeros(n_cdf_points)
-        for i in 2:n_cdf_points
-            result, _ = quadgk(r′ -> r′ * interp(r′) / norm, 0, r_cdf[i])
-            cdf_values[i] = result
-        end
-
-        # Enforce monotonicity
-        for i in 2:n_cdf_points
-            if cdf_values[i] <= cdf_values[i-1]
-                cdf_values[i] = cdf_values[i-1] + 1e-9
-            end
-        end
-        cdf_values[end] = 1.0
-        inverse_cdf = LinearInterpolation(cdf_values, collect(r_cdf), extrapolation_bc=Line())
-
-     
-
-        # ------------------------------
-        # 2) Sample positions and relativistic MB momenta
-        # ------------------------------
-        x_matrix = zeros(2, N_samples)
-        p_matrix = zeros(2, N_samples)
-
-        for i in 1:N_samples
-            # position from n_rt
-            r = inverse_cdf(rand())
-            φ = 2π * rand()
-            x_matrix[1,i] = r * cos(φ)
-            x_matrix[2,i] = r * sin(φ)
-
-            # momentum from SAME relativistic MB as MB2D
-            T_local = T_interp(r, t0)
-            p_mag = sample_p_mag(T_local)
-            φp = 2π * rand()
-            p_matrix[1,i] = p_mag * cos(φp)
-            p_matrix[2,i] = p_mag * sin(φp)
-        end
-
-    elseif mode == :MB2D
-        # ------------------------------
-        # 1) Spatial sampling from thermal MB radial density
-        #     n_MB(r) ∝ r * ∫ p exp(-sqrt(p^2+m^2)/T(r)) dp
-        # ------------------------------
-        n_MB = zeros(length(r_values))
-        for (j, r) in enumerate(r_values)
-            T_local = T_interp(r, t0)
-            pmax = 15 * max(T_local, eps())
-            p_grid = range(0, pmax, length=800)
-            dp = step(p_grid)
-            f_p = @. p_grid * exp(-sqrt(p_grid^2 + m^2)/max(T_local, eps()))
-            n_MB[j] = sum(f_p) * dp * r  # include 2D Jacobian r
-        end
-
-        # Normalize and build CDF over r_values
-        total = sum(n_MB)
-        if total == 0.0
-            error("Thermal radial weights are zero; check T_interp and parameters.")
-        end
-        n_MB ./= total
-        cdf_values = cumsum(n_MB)
-        cdf_values ./= cdf_values[end]
-        inverse_cdf = LinearInterpolation(cdf_values, collect(r_values), extrapolation_bc=Line())
-
-        # ------------------------------
-        # 2) Sample positions and SAME relativistic MB momenta
-        # ------------------------------
-        x_matrix = zeros(2, N_samples)
-        p_matrix = zeros(2, N_samples)
-
-        for i in 1:N_samples
-            # position from thermal n_MB(r)
-            r = inverse_cdf(rand())
-            φ = 2π * rand()
-            x_matrix[1,i] = r * cos(φ)
-            x_matrix[2,i] = r * sin(φ)
-
-            # momentum from SAME relativistic MB
-            T_local = T_interp(r, t0)
-            p_mag = sample_p_mag(T_local)
-            φp = 2π * rand()
-            p_matrix[1,i] = p_mag * cos(φp)
-            p_matrix[2,i] = p_mag * sin(φp)
-        end
-
-    else
-        error("Invalid mode. Use :density or :MB2D")
-    end
-
-    return x_matrix, p_matrix
-end
-
-
-
-function sample_initial_particles_from_pdf!(
-    m, dim, N_particles,
-    t, T_profile, ur_profile, mu_profile,
-    x_range::Tuple{Float64, Float64}, nbins::Int    
-    )
-    positions = zeros(dim, N_particles)
-    momenta = zeros(dim, N_particles)
-
-    # Discretize radial domain
-    x_edges = range(x_range[1], x_range[2], length=nbins + 1)
-    dx = step(x_edges)
-    x_centers = (x_edges[1:end-1] .+ x_edges[2:end]) ./ 2
-
-    # Compute normalized PDF over radial positions
-    T_vals  = T_profile.(x_centers, t)
-    ur_vals = ur_profile.(x_centers, t)
-    mu_vals = mu_profile.(x_centers, t)
-    γ_vals  = sqrt.(1 .+ ur_vals .^ 2)
-
-    n_boltz = T_vals .^ (3/2) ./ γ_vals .* exp.((mu_vals .- m .* γ_vals) ./ T_vals)
-    pdf_vals = n_boltz ./ sum(n_boltz) ./ dx  
-    # Compute unnormalized PDF
-    #pdf_vals = n_boltz .* x_centers         # Include 2D volume element (r * dr)
-    max_pdf = maximum(pdf_vals)             # For rejection threshold
-
-    # Rejection sampling
-    range_sampler = Uniform(x_range[1], x_range[2])
-    sampled_r = Float64[]
-
-    while length(sampled_r) < N_particles
-        r_try = rand(range_sampler)
-        idx = searchsortedfirst(x_centers, r_try)
-        p = idx <= length(pdf_vals) ? pdf_vals[idx] : 0.0
-        if rand() < p / max_pdf
-            push!(sampled_r, r_try)
-        end
-    end
-
-    # Assign positions and thermal momenta
-    for i in 1:N_particles
-        r = sampled_r[i]
-        T = T_profile(r, t)
-        σ = sqrt(m * T)
-        positions[:, i] .= r                  # Uniform radial position
-        momenta[:, i] .= abs.(σ .* randn(dim))      # Gaussian-distributed thermal momentum
-    end
-
-    return positions, momenta
-end
-
-function sample_initial_particles_at_origin!(
-    m, dim, N_particles,
-    t, T_profile)
-    positions = zeros(dim, N_particles)
-    momenta = zeros(dim, N_particles)
-
-    T = T_profile(0.0, t)
-    σ = sqrt(m * T)
-
-    for i in 1:N_particles
-        positions[:, i] .= 0.0
-        momenta[:, i] .= σ .* randn(dim)
-    end
-
-    return positions, momenta
-end
-
 function sample_initial_particles_at_origin_no_position!(initial_condition,
     p0, dimensions, N_particles)
 
@@ -384,7 +189,6 @@ function sample_initial_particles_at_origin_no_position!(initial_condition,
     end
 
 
-
     if initial_condition == "delta"
         rand_dirs = randn(Float64, dimensions, N_particles)
         # Normalize columns (L2 norm across each particle's vector)
@@ -398,9 +202,6 @@ function sample_initial_particles_at_origin_no_position!(initial_condition,
     else 
         error("Unknown initial condition: $initial_condition")
     end
-
-
-
 
 
     return momenta

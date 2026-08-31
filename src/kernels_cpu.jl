@@ -261,7 +261,22 @@ end
 """
     kernel_compute_all_forces_cpu!
 
-Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that `kernel_update_momenta_LRF_cpu!` realises the stationary variance `MT` at any Δt. `radial_mode` uses the Euler form with noise projected along p̂.
+Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that a step of `kernel_update_momenta_LRF_cpu!` reproduces the OU stationary variance
+`κ/(2η_eff)` exactly, at any Δt, per component.
+
+⚠ THAT VARIANCE IS `MT` ONLY IN THE GALILEAN BRANCH. With `relativistic = true`, η_eff = η_D·M/E
+carries the particle's own energy, so `κ/(2η_eff) = 2MTη_D/(2η_D M/E) = T·E_LRF` — the relativistic
+equipartition ⟨p_i²⟩ = T⟨E⟩ of the Jüttner, not the Maxwell `MT`. And it is exact only at FROZEN E:
+E is re-read at the START of each step while the true process changes it during the step, which is
+where the pre-point O(ηΔt) bias on ⟨p²⟩ documented in README "Known biases and limits" (≈ −1 % at
+ηΔt = 0.1, measured by `bench_physics_gates.jl` gate (d)) comes from. The Galilean branch has no
+such bias because η_eff is momentum-independent there — the propagator is genuinely exact.
+
+`radial_mode` uses the Euler form with noise projected along p̂. ⚠ That projection is currently a
+NO-OP: `kL == kT == √κ` (isotropic noise, one free coefficient), so
+`(kL−kT)p̂_d p̂_j ξ_j + kT δ_dj ξ_j` collapses to `kT·ξ[d, i]` identically, and `p_mags`, `p_units`
+and `random_directions` are computed for it but cannot change the answer. The structure is kept
+because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go.
 """
 function kernel_compute_all_forces_cpu!(
     Tfield, xgrid, tgrid,
@@ -293,7 +308,15 @@ function kernel_compute_all_forces_cpu!(
 
     @inbounds for i in 1:N
         # --- local temperature ---
-        r = sqrt(sum(positions[:, i].^2))
+        # ⚡ accumulate in a loop, NOT `sqrt(sum(positions[:, i].^2))`: the slice and the
+        # broadcast each allocate, and this runs N times per step (measured 160 B/particle/step,
+        # i.e. 160 MB/step at N = 10⁶; the loop form is 9.8× faster). Bit-identical — a leading
+        # `+0.0` is exact and `sum` on a 2/3-element vector adds in the same order.
+        r2_i = 0.0
+        for d in 1:size(positions, 1)
+            r2_i += positions[d, i]^2
+        end
+        r = sqrt(r2_i)
         T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)
         # Temperature should be non-negative; clamp to avoid NaNs from T<0.
         T = max(float(T), 0.0)
@@ -346,7 +369,11 @@ function kernel_compute_all_forces_cpu!(
             # ==========================================
             # 🟣 Radial / 1D mode: noise projected along p̂
             # ==========================================
-            p = sqrt(sum(momenta[:, i].^2))
+            p2_i = 0.0
+            for d in 1:size(momenta, 1)
+                p2_i += momenta[d, i]^2
+            end
+            p = sqrt(p2_i)                       # loop, not sum(momenta[:, i].^2) — see above
             p_mags[i] = p
 
             # Unit vector along momentum (or random if p≈0)
@@ -561,7 +588,11 @@ function kernel_rta_collision_cpu!(
         "kernel_rta_collision_cpu!: dimensions=$dimensions but momenta has $(size(momenta, 1)) rows"))
     N <= size(momenta, 2) || throw(DimensionMismatch("kernel_rta_collision_cpu!: N=$N > $(size(momenta, 2)) particles"))
     @inbounds for i in 1:N
-        r = sqrt(sum(positions[:, i].^2))
+        r2_i = 0.0                               # loop, not sum(positions[:, i].^2) — see the
+        for d in 1:size(positions, 1)            # note in kernel_compute_all_forces_cpu!
+            r2_i += positions[d, i]^2
+        end
+        r = sqrt(r2_i)
         T = max(float(interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)), 0.0)
         τn = (DsT > 0.0 && T > 0.0) ? eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals) : 0.0
         # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)), the SAME factor
@@ -571,8 +602,16 @@ function kernel_rta_collision_cpu!(
             v = float(interpolate_2d_cpu(xgrid, tgrid, Vfield, r, step * Δt + t0))
             v = clamp(v, -0.999999, 0.999999)
             γv = 1.0 / sqrt(1.0 - v * v)
-            kr = (r > 1e-12 ? sum(momenta[d, i] * positions[d, i] for d in 1:size(positions, 1)) / r : 0.0)
-            Estar = sqrt(sum(momenta[d, i]^2 for d in 1:dimensions) + M * M)
+            kr = 0.0
+            for d in 1:size(positions, 1)
+                kr += momenta[d, i] * positions[d, i]
+            end
+            kr = r > 1e-12 ? kr / r : 0.0
+            p2_all = 0.0
+            for d in 1:dimensions
+                p2_all += momenta[d, i]^2
+            end
+            Estar = sqrt(p2_all + M * M)
             den = γv * (1.0 + v * kr / Estar)
             dil = 1.0 / (den > 1e-6 ? den : 1e-6)
         end

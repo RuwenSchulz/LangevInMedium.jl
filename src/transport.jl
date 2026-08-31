@@ -227,6 +227,44 @@ build_taun_current_spline(m::Real, DsT::Real; kwargs...) =
 Evaluate a uniform-grid linear time spline. Generic: it does not know, and cannot check, whether
 it was handed `build_tau_drag_spline` or `build_taun_current_spline` output — the CALLER owns
 that distinction. (Name kept for call-site compatibility; read it as `eval_time_spline`.)
+
+🔴🔴 KNOWN DEFECT, FOUND 2026-08-31, DELIBERATELY NOT FIXED — read before calling this yourself.
+
+**Outside `[Tmin, Tmax]` this EXTRAPOLATES.** The cell index `i` is clamped to `[1, n-1]`; the
+interpolation weight `t` is not. Both transport times fall like 1/T², so the linear extension of a
+convex falling function crosses zero. Measured on a `[0.12, 0.50]` drag spline (m = 1.5,
+DsT = 0.11634, nT = 1024):
+
+| query | returns | exact `tau_drag` |
+|---|---|---|
+| T = 0.05 (below Tmin) | 5.168 fm | 13.774 fm — drag over-estimated 2.7× |
+| T = 0.90 (above Tmax) | **−0.083 fm** | 0.043 fm |
+
+The negative branch is the dangerous one. Every kernel guards with `τ > 0 ? 1/τ : 0`, so it does
+**not** produce a NaN that anyone would notice — it silently sets `η_D = κ = 0` and the particle
+free-streams with neither drag nor noise for as long as it is out of range.
+
+WHY IT IS STILL HERE. The one-line fix is `t = clamp(u - (i - 1), 0.0, 1.0)`. It is not applied
+because it is not bit-neutral: the background interpolant returns `T` a fraction of an ulp *outside*
+`[min T_table, max T_table]` whenever the field is locally flat (a constant-T box; the `max(0.12, …)`
+floor of a cooling fireball), and the driver builds the spline over exactly that range — so `u` goes
+slightly negative and the old code extrapolates by a tiny weight. Clamping changes the last bits.
+Measured over 300 steps of the `default_box` corpus case (T = 0.30, N = 20 000):
+
+    per-particle max |Δp| = 3.0e-14, max |Δx| = 5.3e-15
+    ⟨p²⟩ and ⟨x²⟩ IDENTICAL to all 17 digits (relative difference exactly 0.0)
+
+i.e. it moves no physics number, but it does move 6 of the 10 SHA-256 hashes in
+`test/regression_corpus_baseline.txt`. Under the audit's standing rule ("bit-identical default,
+nothing regenerates") that made it the user's call, not the auditor's. `test_kernel_units.jl` block
+U2 pins the defect with `@test_broken`, so applying the clamp turns that gate red and sends the
+reader here.
+
+REACHABILITY. The main drivers span the spline over `[minimum(T_field), maximum(T_field)]` and the
+background interpolant clamps every query into the table, so the production path only ever leaves
+the range by that fraction of an ulp — harmless. This function is **exported**, and consumers that
+build their own splines over a narrower range (`Projects/*/minimal_langevin_from_splines.jl`) get no
+such protection. If you call it directly, clamp your own query into `[Tmin, Tmax]` first.
 """
 @inline function eval_tau_n_spline(
     T::Real,
@@ -245,6 +283,9 @@ that distinction. (Name kept for call-site compatibility; read it as `eval_time_
     u = (x - Tmin) * invdT
     i = Int(floor(u)) + 1
     i = clamp(i, 1, n - 1)
+    # ⚠ THE WEIGHT IS DELIBERATELY *NOT* CLAMPED — see the "KNOWN DEFECT" block in the docstring.
+    # `t = clamp(u - (i - 1), 0.0, 1.0)` is the one-line fix and it is NOT applied, because it moves
+    # the last bits of every run whose background sits at the table's temperature extremum.
     t = u - (i - 1)
 
     y0 = Float64(tau_vals[i])
