@@ -2,6 +2,12 @@
 # ==============================================================================================
 # bench_gpu_parity.jl — CPU ↔ GPU agreement, including the inputs that separate the two.
 #
+# ⚠ THIS IS THE STATISTICAL HALF OF THE CPU/GPU COMPARISON. Since 2026-08-31 the DETERMINISTIC
+# half lives in `test/test_kernel_parity.jl`, which drives each kernel pair with the same inputs
+# AND the same injected noise and compares per particle at 1e-12 or tighter. Prefer that file when
+# asking "do the two backends compute the same thing"; this one answers the different and still
+# necessary question "do two full RUNS, with different RNG streams, land in the same place".
+#
 # The GPU kernels were hand-transliterated from the CPU ones and drifted: the CPU interpolant
 # clamps the query point to the tabulated domain, the CPU boosts clamp |v| < 1 and the CPU
 # force/diffusion kernels clamp T ≥ 0 — the GPU versions did none of these (see CHANGELOG
@@ -91,8 +97,40 @@ let
     gate!(isfinite(medg) && isapprox(medc, medg; rtol = 0.03), "|v| = 1.02 cells: GPU median p² within 0.03 of CPU")
 end
 
-# NOTE: a field with T = 0 (or T < 0) cells is rejected by `_build_time_spline` ("Tmin must be > 0")
-# on BOTH backends before any kernel runs, so the T ≥ 0 guards in the kernels can only be reached
-# through extrapolation — which the domain clamp now prevents. There is no reachable T = 0 case.
+println("── GPU-only: freeze-out capture on a flowing background ──")
+let
+    # No CPU twin exists, so this is a self-consistency gate: every particle must latch exactly
+    # once, inside the run, with a finite state. The QUANTITATIVE check (the crossing booked to
+    # 2.7e-15 against a host-computed reference) is `test/test_gpu_only_paths.jl` F1-F4.
+    # the run must outlast the CENTRE's cooling: T(r=0, τ) = 0.45(0.4/τ)^{1/3} reaches Tfo = 0.155
+    # only at τ ≈ 9.8 fm, so a 7.4 fm run leaves ~10 % of the ensemble legitimately unfrozen.
+    xg = collect(0.0:0.25:40.0); tg = collect(0.4:0.1:12.0)
+    Tf = [max(0.10, 0.45*exp(-r^2/60)*(0.4/τ)^(1/3)) for r in xg, τ in tg]
+    Vf = [0.6*r/(r + 4.0)*min(1.0, τ/2.0) for r in xg, τ in tg]
+    rng = MersenneTwister(41)
+    x0 = 3.0 .* randn(rng, 2, N); p0 = juttner_sample(rng, M, 0.4, 2, N)
+    Random.seed!(41)
+    rg = collect(0.0:0.5:20.0); pg = collect(0.05:0.1:8.0); dens = ones(length(pg), length(rg))
+    fo = Base.invokelatest(simulate_ensemble_bulk, GPUBackend(), rg, pg, dens, Tf, Vf, (xg, tg);
+        x_init = x0, p_init = p0, N_particles = N, Δt = 2e-3, initial_time = 0.4,
+        final_time = 11.4, save_interval = 1.0, m = M, DsT = DST, dimensions = 2,
+        Tfo = 0.155, freezeout_capture = true, freezeout_interp = true)
+    frac = count(==(1.0), fo.flag)/N
+    @printf("    %-34s flagged %.3f  τ_fo ∈ [%.3f, %.3f]  non-finite %d\n",
+            "freezeout_capture", frac, minimum(fo.tau[fo.flag .== 1]), maximum(fo.tau[fo.flag .== 1]),
+            nonfinite(fo.pos) + nonfinite(fo.mom) + nonfinite(fo.tau))
+    gate!(frac == 1.0, "freezeout_capture: EVERY particle latches once the run outlasts the centre's cooling ($(fmt(100frac; d=1)) %)")
+    gate!(nonfinite(fo.pos) + nonfinite(fo.mom) + nonfinite(fo.tau) == 0, "freezeout_capture: all booked states finite")
+    gate!(all(0.4 .<= fo.tau[fo.flag .== 1] .<= 11.4), "freezeout_capture: every booked τ lies inside the run")
+    gate!(size(fo.pos) == (2, N) && size(fo.mom) == (2, N), "freezeout_capture: returns (2, N) position and momentum")
+end
+
+# NOTE (corrected 2026-08-31): a field with T = 0 (or T < 0) cells is rejected by
+# `_build_time_spline` ("Tmin must be > 0") on BOTH backends before any kernel runs, so no DRIVER
+# can reach T = 0 — the statement below is right about reachability. It was wrong to conclude that
+# the two backends therefore agree there: driven directly, they do not. At T = 0 the CPU RTA
+# sampler returns |p*| = 0 and ZEROES the momentum, while the GPU inverse-CDF table clamps to its
+# coldest column and returns a finite thermal |p*|. Recorded as a known divergence in
+# `test/test_kernel_parity.jl` @testset "D1a".
 
 finish!("bench_gpu_parity")

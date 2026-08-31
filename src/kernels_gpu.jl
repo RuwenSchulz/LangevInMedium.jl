@@ -19,9 +19,14 @@ export
     interpolate_2d_cuda
 
 # ---------------------------------------------------------------------------
-# τn(T) spline evaluation (uniform-grid linear interpolation)
+# Transport-time spline evaluation (uniform-grid linear interpolation) — the device twin of
+# `Transport.eval_tau_n_spline`. Generic in WHICH time it holds: the OU kernels pass the DRAG
+# spline, the RTA kernel passes the CURRENT spline. Flat outside [Tmin, Tmax] (weight clamped to
+# [0,1]) — it used to extrapolate, and since both times fall like 1/T² the extension crosses zero;
+# a negative time is read by every kernel below as η_D = κ = 0, i.e. SILENT free streaming. See the
+# long note on `Transport.eval_tau_n_spline` (fixed 2026-08-31, in-range values unchanged).
 # ---------------------------------------------------------------------------
-@inline function _eval_tau_n_spline_cuda(T::Float64, Tmin::Float64, invdT::Float64, tau_vals)
+@inline function _eval_time_spline_cuda(T::Float64, Tmin::Float64, invdT::Float64, tau_vals)
     n = length(tau_vals)
     n < 2 && return Float64(tau_vals[1])
     if !isfinite(T)
@@ -30,11 +35,14 @@ export
     u = (T - Tmin) * invdT
     i = Int(floor(u)) + 1
     i = clamp(i, 1, n - 1)
-    t = u - (i - 1)
+    t = u - (i - 1)          # ⚠ NOT clamped — twin of the CPU defect, see below
     y0 = Float64(tau_vals[i])
     y1 = Float64(tau_vals[i + 1])
     return (1.0 - t) * y0 + t * y1
 end
+
+# Name kept so the 0.2.0 call sites and any external transliteration still resolve.
+const _eval_tau_n_spline_cuda = _eval_time_spline_cuda
 
 # ============================================================================
 # GPU Utility Function: Bilinear Interpolation
@@ -48,22 +56,36 @@ end
 @inline function interpolate_2d_cuda(x, y, values, xi, yi)
     xi = xi < x[1] ? x[1] : (xi > x[length(x)] ? x[length(x)] : xi)
     yi = yi < y[1] ? y[1] : (yi > y[length(y)] ? y[length(y)] : yi)
+    # ⚡ BINARY search for the largest index with node <= query (2026-08-31). This used to be a
+    # LINEAR scan over the whole axis, run 4-6× per particle per step: the marginal cost grew
+    # 2.5 → 3.1 → 4.1 ns/particle-step as the radial grid went 41 → 161 → 641 points (production
+    # grids are ≈161). The result is INDEX-IDENTICAL to the scan — and to the CPU's
+    # `searchsortedlast` — for any sorted axis, so this is not an approximation and needs no
+    # uniform-grid assumption; it is the same lookup in O(log n) instead of O(n).
     i = 1
-    for k in 1:length(x) - 1
-        if x[k + 1] <= xi
-            i += 1
-        else
-            break
+    let lo = 1, hi = length(x)
+        while lo < hi
+            mid = (lo + hi + 1) >>> 1
+            if x[mid] <= xi
+                lo = mid
+            else
+                hi = mid - 1
+            end
         end
+        i = lo
     end
 
     j = 1
-    for k in 1:length(y) - 1
-        if y[k + 1] <= yi
-            j += 1
-        else
-            break
+    let lo = 1, hi = length(y)
+        while lo < hi
+            mid = (lo + hi + 1) >>> 1
+            if y[mid] <= yi
+                lo = mid
+            else
+                hi = mid - 1
+            end
         end
+        j = lo
     end
 
     i = clamp(i, 1, length(x) - 1)
@@ -308,7 +330,22 @@ end
 """
     kernel_compute_all_forces_gpu!
 
-Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that `kernel_update_momenta_LRF_gpu!` realises the stationary variance `MT` at any Δt. `radial_mode` uses the Euler form with noise projected along p̂. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
+Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that a step of `kernel_update_momenta_LRF_gpu!` reproduces the OU stationary variance
+`κ/(2η_eff)` exactly, at any Δt, per component.
+
+⚠ THAT VARIANCE IS `MT` ONLY IN THE GALILEAN BRANCH. With `relativistic = true`, η_eff = η_D·M/E
+carries the particle's own energy, so `κ/(2η_eff) = 2MTη_D/(2η_D M/E) = T·E_LRF` — the relativistic
+equipartition ⟨p_i²⟩ = T⟨E⟩ of the Jüttner, not the Maxwell `MT`. And it is exact only at FROZEN E:
+E is re-read at the START of each step while the true process changes it during the step, which is
+where the pre-point O(ηΔt) bias on ⟨p²⟩ documented in README "Known biases and limits" (≈ −1 % at
+ηΔt = 0.1, measured by `bench_physics_gates.jl` gate (d)) comes from. The Galilean branch has no
+such bias because η_eff is momentum-independent there — the propagator is genuinely exact.
+
+`radial_mode` uses the Euler form with noise projected along p̂. ⚠ That projection is currently a
+NO-OP: `kL == kT == √κ` (isotropic noise, one free coefficient), so
+`(kL−kT)p̂_d p̂_j ξ_j + kT δ_dj ξ_j` collapses to `kT·ξ[d, i]` identically, and `p_mags`, `p_units`
+and `random_directions` are computed for it but cannot change the answer. The structure is kept
+because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go. One CUDA thread per particle; positional arguments mirror the CPU keyword arguments.
 """
 @inline function kernel_compute_all_forces_gpu!(
     TemperatureEvolution, xgrid, tgrid,
@@ -337,10 +374,16 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
         T = T > 0.0 ? T : 0.0        # non-negative, as the CPU kernel
 
         # --- transport coefficients ---
-        # Enforce main3-style τn(T) via a precomputed spline in fm.
-        τn = (DsT > 0.0) ? _eval_tau_n_spline_cuda(Float64(T), tau_Tmin, tau_invdT, tau_vals) : 0.0
-        ηD = (τn > 0.0 && isfinite(τn)) ? (1.0 / τn) : 0.0
-        κ  = (τn > 0.0 && isfinite(τn)) ? ((2.0 * M * Float64(T)) / τn) : 0.0
+        # 🔴 This is the DRAG time τ_drag = M·DsT/T² (Transport.tau_drag), supplied as a precomputed
+        # spline in fm by `build_tau_drag_spline`. It is NOT `tau_n_main3`. Until 2026-08-31 the
+        # local was called `τn` and the evaluator `_eval_tau_n_spline_cuda` — the SAME one-name-for-
+        # two-times that let the 2026-08-02 bug survive on the CPU side (using the diffusion-CURRENT
+        # time as 1/η_D applies K₃/K₂ once too often ⇒ realised D_s 1.26–1.74× the DsT label). The
+        # hydro τ_n is a DERIVED consequence of this drag, not an input: the ℓ=1 mode decays at
+        # η_D·K₂/K₃. See `Transport.tau_drag`. The RTA kernel below is the one that wants τ_n.
+        τ_drag = (DsT > 0.0) ? _eval_time_spline_cuda(Float64(T), tau_Tmin, tau_invdT, tau_vals) : 0.0
+        ηD = (τ_drag > 0.0 && isfinite(τ_drag)) ? (1.0 / τ_drag) : 0.0
+        κ  = (τ_drag > 0.0 && isfinite(τ_drag)) ? ((2.0 * M * Float64(T)) / τ_drag) : 0.0
         kL = sqrt(κ)
         kT = sqrt(κ)
 
@@ -763,7 +806,8 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
         T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
         Tpos = T > 0.0 ? T : 0.0
 
-        τn = (DsT > 0.0 && Tpos > 0.0) ? _eval_tau_n_spline_cuda(Tpos, tau_Tmin, tau_invdT, tau_vals) : 0.0
+        # τ_n here IS the diffusion-CURRENT time (build_taun_current_spline) — see the 🔴 note above.
+        τn = (DsT > 0.0 && Tpos > 0.0) ? _eval_time_spline_cuda(Tpos, tau_Tmin, tau_invdT, tau_vals) : 0.0
 
         # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)) — the SAME factor the OU force
         # kernel applies (see "proper-time dilation" there). BGK relaxes at 1/τ_n per unit time; the
