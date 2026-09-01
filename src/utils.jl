@@ -6,7 +6,7 @@ using ..Constants
 
 export sample_initial_particles_at_origin_no_position!
 export sample_particles_from_FONLL
-export append_thermal_pz, sample_pz_conditional_juttner, check_momentum_dims
+export append_thermal_pz, append_comoving_pz, append_pz, sample_pz_conditional_juttner, check_momentum_dims
 
 """
     sample_particles_from_FONLL(r_grid, p_grid, f, N; cartesian_spatial_sampling=false) -> (x, p)
@@ -294,6 +294,60 @@ function append_thermal_pz(momenta::AbstractMatrix, positions::AbstractMatrix, m
 end
 
 """
+    append_comoving_pz(momenta) -> momenta3
+
+Return a (3, N) copy of the (2, N) transverse `momenta` with a third row of EXACT ZEROS.
+
+This is not "neglecting p_z": it is the production kinematics. A quark created in the hard
+scattering at t = z = 0 and free-streaming to the hydro start time arrives at
+
+    t = τ₀ cosh y,   z = τ₀ sinh y   ⇒   η_s = artanh(z/t) = y   (exactly)
+
+so its rapidity relative to the fluid at its own position, y − η_s, is exactly zero, and
+p_z* = m_T sinh(y − η_s) = 0. Two consequences worth knowing:
+
+  * it is independent of τ₀ — a free-streaming quark is comoving at EVERY time, not just at τ₀,
+    because the Bjorken field v = z/t and a free worldline z = v t are the same relation;
+  * the whole production rapidity spectrum then lives in η_s, not in p_z*. dN/dy is recovered as
+    ρ(η_s) ⊛ P(K) with the kernel from `track_eta_s` — see `kernel_accumulate_eta_s_cpu!`.
+
+It is also the internally consistent partner of a non-thermal FONLL p_T: `:thermal` asserts the
+quark is longitudinally equilibrated at τ₀ while transversally it is not, and nothing does that.
+"""
+function append_comoving_pz(momenta::AbstractMatrix)
+    size(momenta, 1) == 2 || error("append_comoving_pz: expected 2 transverse momentum rows, got $(size(momenta, 1))")
+    out = zeros(Float64, 3, size(momenta, 2))
+    @inbounds out[1:2, :] .= momenta
+    return out
+end
+
+"""
+    append_pz(mode, momenta, positions, m, T_of_r; antithetic=false, rng) -> momenta3
+
+The p_z completion, selected by `mode`:
+
+  `:thermal`  — the thermal conditional at the local T(r, τ₀) (`append_thermal_pz`). The SHIPPED
+                DEFAULT, and what every product generated before 2026-09-01 carries.
+  `:comoving` — p_z* = 0 (`append_comoving_pz`), the free-streaming initial condition.
+
+Measured cost of switching (2026-09-01, LP1 `pbpb_const_fonll` config, real Pb+Pb background):
+freeze-out p_T spectrum < 1 %, final dN/dy 2 %, rapidity kernel 6 %. The two become
+indistinguishable by τ ≈ 1 fm — at T = 0.58 the drag time is ≈ 0.10 fm, so the initial p_z is
+forgotten almost immediately. `:comoving` is the defensible choice; the default stays `:thermal`
+so existing products remain bit-identical.
+"""
+function append_pz(mode::Symbol, momenta::AbstractMatrix, positions::AbstractMatrix, m::Real, T_of_r;
+                   antithetic::Bool = false, rng::AbstractRNG = Random.default_rng())
+    if mode === :thermal
+        return append_thermal_pz(momenta, positions, m, T_of_r; antithetic = antithetic, rng = rng)
+    elseif mode === :comoving
+        return append_comoving_pz(momenta)
+    else
+        error("append_pz: pz_init=$(repr(mode)) is not supported (only :thermal and :comoving).")
+    end
+end
+
+"""
     check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time)
 
 The contract: `pdim == dimensions` is the historical (bit-identical) engine; the only other
@@ -301,7 +355,8 @@ supported combination is a 2-D transverse plane carrying 3 momentum components. 
 redshift dp_z/dτ = −p_z/τ is the longitudinal free-streaming of a boost-invariant system and is
 only meaningful for that combination, with a positive initial Milne time.
 """
-function check_momentum_dims(dimensions::Int, pdim::Int, radial_mode::Bool, bjorken_redshift::Bool, initial_time::Real)
+function check_momentum_dims(dimensions::Int, pdim::Int, radial_mode::Bool, bjorken_redshift::Bool, initial_time::Real;
+                             pz_init::Symbol = :thermal, track_eta_s::Bool = false)
     if pdim != dimensions
         (dimensions == 2 && pdim == 3 && !radial_mode) ||
             error("momentum_dimensions=$pdim with dimensions=$dimensions is not supported: " *
@@ -311,6 +366,15 @@ function check_momentum_dims(dimensions::Int, pdim::Int, radial_mode::Bool, bjor
         (dimensions == 2 && pdim == 3) ||
             error("bjorken_redshift requires dimensions=2 and momentum_dimensions=3 (p_z is row 3).")
         initial_time > 0 || error("bjorken_redshift needs initial_time > 0 (Milne τ; dp_z/dτ = −p_z/τ).")
+    end
+    (pz_init === :thermal || pz_init === :comoving) ||
+        error("pz_init=$(repr(pz_init)) is not supported (only :thermal and :comoving).")
+    if pz_init === :comoving && pdim < 3
+        error("pz_init=:comoving is a statement about the p_z row; it needs momentum_dimensions=3.")
+    end
+    if track_eta_s
+        pdim >= 3 || error("track_eta_s needs momentum_dimensions=3 (η_s is driven by row 3).")
+        initial_time > 0 || error("track_eta_s needs initial_time > 0 (dη_s/dτ = (1/τ)(p_z*/E*)).")
     end
     return nothing
 end

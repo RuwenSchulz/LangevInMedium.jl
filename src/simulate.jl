@@ -36,6 +36,14 @@ Keywords (defaults in `simulate_cpu.jl`/`simulate_gpu.jl`):
   `momentum_dimensions = 3` with `dimensions = 2` adds a longitudinal `p_z` row (thermal
   conditional at t0, invariant under the transverse boost); `bjorken_redshift` then applies
   `dp_z/dτ = −p_z/τ` between kicks (needs `initial_time > 0`).
+- `pz_init`: how that p_z row is drawn — `:thermal` (the local Jüttner conditional; the SHIPPED
+  default, what every pre-2026-09-01 product carries) or `:comoving` (`p_z* = 0`, the
+  free-streaming initial condition: a quark produced at t = z = 0 arrives at η_s = y exactly).
+  See `append_pz`; switching moves the freeze-out p_T spectrum by < 1 %.
+- `track_eta_s`: also integrate `dη_s/dτ = (1/τ)(p_z*/E*)` from 0 and return its history as a
+  FOURTH returned element, so that `y_lab = η_s + atanh(p_z*/E*)` becomes available. η_s is a
+  passenger — nothing in the dynamics reads it — so this cannot change any other output. Needs
+  `momentum_dimensions = 3` and `initial_time > 0`.
 - `relativistic`: `true` = Jüttner kinematics (drag `·m/E`, streaming `p/E`, Lorentz boosts);
   `false` = the exactly solvable Galilean process (drag `η_D`, streaming `p/m`, `p∥ ∓ m·v`).
 - `collision_mode`: `:langevin` (exact-OU step) or `:rta` (BGK re-draw from the local Jüttner
@@ -96,6 +104,8 @@ function simulate_ensemble_bulk(
     momentum_dimensions::Int = 0,
     bjorken_redshift::Bool = false,
     proper_time_kicks::Bool = false,  # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl); false = production
+    pz_init::Symbol = :thermal,   # p_z row at t0: :thermal (shipped) | :comoving (p_z* = 0) — see append_pz
+    track_eta_s::Bool = false,    # also return the η_s history (a FOURTH element); see kernel_accumulate_eta_s_cpu!
     verbose::Bool = false,        # accepted for signature parity with the GPU path (prints nothing on the CPU)
 )
     integrator_mode == 0 ||
@@ -124,6 +134,8 @@ function simulate_ensemble_bulk(
         momentum_dimensions = momentum_dimensions,
         bjorken_redshift = bjorken_redshift,
         proper_time_kicks = proper_time_kicks,
+        pz_init = pz_init,
+        track_eta_s = track_eta_s,
     )
 end
 

@@ -62,7 +62,15 @@ function simulate_ensemble_bulk_cpu(
     bjorken_redshift::Bool = false,
     # kick per the particle's proper time (Δt* = Δt·E*/E_lab) — removes the lab-simultaneity
     # ν^r artifact on flowing backgrounds; default false = production byte-identical.
-    proper_time_kicks::Bool = false)
+    proper_time_kicks::Bool = false,
+    # how the p_z row is initialised: :thermal (shipped; the local Jüttner conditional) or
+    # :comoving (p_z* = 0, the free-streaming IC). See `append_pz` in utils.jl. Default keeps
+    # every existing product bit-identical.
+    pz_init::Symbol = :thermal,
+    # accumulate the spacetime rapidity η_s (dη_s/dτ = (1/τ)(p_z*/E*)) and return its history as a
+    # FOURTH element. η_s is a passenger — nothing reads it — so this cannot move any other number;
+    # with it, y_lab = η_s + atanh(p_z*/E*). Needs momentum_dimensions = 3 and initial_time > 0.
+    track_eta_s::Bool = false)
 
     # === Setup and Preallocation ===
     total_time = final_time - initial_time
@@ -168,11 +176,14 @@ function simulate_ensemble_bulk_cpu(
 
     # --- momentum dimensionality (p_z on the transverse plane) ---
     pdim = momentum_dimensions <= 0 ? dimensions : momentum_dimensions
-    check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time)
+    check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time;
+                        pz_init = pz_init, track_eta_s = track_eta_s)
     if size(momenta, 1) < pdim
-        # sampled momenta are LRF momenta at this point (the lab boost follows below), so the
-        # thermal conditional at the local T(r, τ0) is the right completion.
-        momenta = append_thermal_pz(momenta, positions, m,
+        # sampled momenta are LRF momenta at this point (the lab boost follows below), so both
+        # completions are statements in the LOCAL REST FRAME: :thermal draws the local Jüttner
+        # conditional at T(r, τ0), :comoving sets p_z* = 0 (free-streamed from the production
+        # point). See `append_pz`.
+        momenta = append_pz(pz_init, momenta, positions, m,
             r -> interpolate_2d_cpu(xgrid, tgrid, TemperatureEvolutionn, r, initial_time);
             antithetic = antithetic_momenta && x_init === nothing)
     end
@@ -180,6 +191,11 @@ function simulate_ensemble_bulk_cpu(
 
     momenta_history = zeros(Float64, pdim, N_particles, num_saves + 1)
     position_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
+    # η_s starts at 0 for every particle ON PURPOSE: the engine accumulates only the CHANGE, and
+    # the production value η_s(τ0) is applied afterwards by convolution (it cannot enter the
+    # dynamics, so it must not enter the run).
+    eta_s         = track_eta_s ? zeros(Float64, N_particles) : Float64[]
+    eta_s_history = track_eta_s ? zeros(Float64, N_particles, num_saves + 1) : zeros(Float64, 0, 0)
 
 
     kernel_boost_to_lab_frame_cpu!(
@@ -320,6 +336,16 @@ function simulate_ensemble_bulk_cpu(
                 )
 
 
+        # 5b. Spacetime rapidity: the third position row (see kernel_accumulate_eta_s_cpu!).
+        # The 1/τ is integrated exactly across [τ_a, τ_b]; the log is hoisted out of the loop.
+        if track_eta_s
+            τa_eta = initial_time + (step - 1) * Δt
+            if τa_eta > 0
+                kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, log((τa_eta + Δt) / τa_eta),
+                                             N_particles, pdim)
+            end
+        end
+
         # --- NaN / Inf check ---
         if any(!isfinite, momenta) || any(!isfinite, positions)
             @error "Detected NaN or Inf at step=$step" 
@@ -341,6 +367,10 @@ function simulate_ensemble_bulk_cpu(
 
             kernel_save_positions_cpu!(
                 position_history, positions, save_idx, N_particles)
+
+            if track_eta_s
+                @inbounds eta_s_history[:, save_idx] .= eta_s
+            end
         end
 
     end
@@ -353,6 +383,10 @@ function simulate_ensemble_bulk_cpu(
     time_points = _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves)
     position_history_vec = [position_history[:, :, i] for i in 1:size(position_history, 3)]
     momenta_history_vec  = [momenta_history[:, :, i] for i in 1:size(momenta_history, 3)]
+    if track_eta_s
+        eta_s_history_vec = [eta_s_history[:, i] for i in 1:size(eta_s_history, 2)]
+        return time_points, momenta_history_vec, position_history_vec, eta_s_history_vec
+    end
     return time_points, momenta_history_vec, position_history_vec
 end
 

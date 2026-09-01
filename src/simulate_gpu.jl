@@ -58,6 +58,8 @@ function simulate_ensemble_bulk_gpu(
     momentum_dimensions::Int = 0,   # 0 ⇒ = dimensions; 3 with dimensions=2 adds p_z (utils.jl note)
     bjorken_redshift::Bool = false, # dp_z/dτ = −p_z/τ between kicks; needs momentum_dimensions=3
     proper_time_kicks::Bool = false, # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl note)
+    pz_init::Symbol = :thermal,     # :thermal (shipped) | :comoving (p_z* = 0); see append_pz
+    track_eta_s::Bool = false,      # accumulate η_s and return its history as a FOURTH element
     verbose::Bool = false,          # print device name + memory status at entry
 )
     CUDA.reclaim()  # Free any unused GPU memory
@@ -232,9 +234,12 @@ function simulate_ensemble_bulk_gpu(
         end
 
         # --- momentum dimensionality (p_z on the transverse plane), completed on the host ---
-        check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time)
+        check_momentum_dims(dimensions, pdim, radial_mode, bjorken_redshift, initial_time;
+                            pz_init = pz_init, track_eta_s = track_eta_s)
+        track_eta_s && freezeout_capture &&
+            error("simulate_ensemble_bulk_gpu: track_eta_s and freezeout_capture cannot be combined (the capture path returns the crossing state, not histories).")
         if size(moment, 1) < pdim
-            moment = append_thermal_pz(moment, position, m,
+            moment = append_pz(pz_init, moment, position, m,
                 r -> interpolate_2d_cpu(xgridd, ttgrid, TemperatureEvolutionn, r, initial_time);
                 antithetic = antithetic_momenta && x_init === nothing)
         end
@@ -257,6 +262,11 @@ function simulate_ensemble_bulk_gpu(
 
         position_history_gpu = CUDA.zeros(Float64, dimensions, N_particles * (num_saves + 1))
         position_history_gpu[:, 1:N_particles] .= positions
+
+        # η_s starts at 0 for every particle ON PURPOSE — the engine accumulates only the CHANGE;
+        # η_s(τ0) is applied afterwards by convolution (see kernel_accumulate_eta_s_cpu!).
+        eta_s_gpu         = track_eta_s ? CUDA.zeros(Float64, N_particles) : CUDA.zeros(Float64, 1)
+        eta_s_history_gpu = track_eta_s ? CUDA.zeros(Float64, N_particles * (num_saves + 1)) : CUDA.zeros(Float64, 1)
 
         # === On-the-fly freeze-out capture arrays (N-length; the only thing saved) ===
         fo_pos_gpu  = freezeout_capture ? CUDA.zeros(Float64, dimensions, N_particles) : nothing
@@ -379,6 +389,15 @@ function simulate_ensemble_bulk_gpu(
                 xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, position_diffusion, reflecting_boundary, ξ_position,
                 relativistic, pdim)
 
+            # Step 5a2: spacetime rapidity — the third position row (kernels_cpu.jl note).
+            if track_eta_s
+                τa_eta = initial_time + (step - 1) * Δt
+                if τa_eta > 0
+                    @cuda threads=threads blocks=blocks kernel_accumulate_eta_s_gpu!(
+                        eta_s_gpu, momenta, m, log((τa_eta + Δt) / τa_eta), N_particles, pdim)
+                end
+            end
+
             # Step 5b: on-the-fly freeze-out latch (every step ⇒ crossing resolved to Δt; no history stored)
             if freezeout_capture
                 @cuda threads=threads blocks=blocks kernel_capture_freezeout_gpu!(
@@ -395,6 +414,9 @@ function simulate_ensemble_bulk_gpu(
                     momenta_history_gpu, momenta, save_idx, N_particles,pdim)
                 @cuda threads=threads blocks=blocks kernel_save_positions_gpu!(
                     position_history_gpu, positions, save_idx, N_particles,dimensions)
+                if track_eta_s
+                    @inbounds eta_s_history_gpu[(save_idx-1)*N_particles+1 : save_idx*N_particles] .= eta_s_gpu
+                end
             end
         end
 
@@ -415,6 +437,13 @@ function simulate_ensemble_bulk_gpu(
         full_pos_cpu = Array(position_history_gpu)
         momenta_history_vec  = [full_mom_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
         position_history_vec = [full_pos_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
+        eta_s_history_vec = if track_eta_s
+            full_eta_cpu = Array(eta_s_history_gpu)
+            [full_eta_cpu[(s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
+        else
+            nothing
+        end
+        finalize(eta_s_gpu); finalize(eta_s_history_gpu)
 
         # Finalize all CuArrays (large history + position/momentum arrays must be freed explicitly)
         finalize(momenta_history_gpu)
@@ -458,6 +487,9 @@ function simulate_ensemble_bulk_gpu(
         GC.gc(true)
         CUDA.reclaim()
 
+        if track_eta_s
+            return time_points, momenta_history_vec, position_history_vec, eta_s_history_vec
+        end
         return time_points, momenta_history_vec, position_history_vec
 
     finally

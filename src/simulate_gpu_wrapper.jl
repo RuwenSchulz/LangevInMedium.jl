@@ -53,6 +53,8 @@ function Simulate.simulate_ensemble_bulk(
     momentum_dimensions::Int = 0,   # p_z on the transverse plane (3 with dimensions=2); utils.jl note
     bjorken_redshift::Bool = false,
     proper_time_kicks::Bool = false,
+    pz_init::Symbol = :thermal,
+    track_eta_s::Bool = false,
     verbose::Bool = false,
 )
     (collision_mode == :langevin || collision_mode == :rta) ||
@@ -84,6 +86,8 @@ function Simulate.simulate_ensemble_bulk(
         momentum_dimensions = momentum_dimensions,
         bjorken_redshift = bjorken_redshift,
         proper_time_kicks = proper_time_kicks,
+        pz_init = pz_init,
+        track_eta_s = track_eta_s,
         verbose = verbose,
     )
 end
