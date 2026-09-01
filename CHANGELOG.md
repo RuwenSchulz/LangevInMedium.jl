@@ -3,6 +3,51 @@
 Entries marked ⚠ changed the default dynamics or the meaning of a label: outputs produced
 before them are not comparable to outputs produced after.
 
+## 0.2.2 — 2026-09-01  (the p_z frame: a gate that has z, an initialisation switch, and η_s)
+
+**The CPU default dynamics are bit-identical to 0.2.1** — all ten `regression_corpus.jl` hashes
+reproduce. Both new keywords default to the shipped behaviour, so no product changes.
+
+### Context
+`momenta[3, :]` is not a lab `p_z`; it is `p_z* = m_T sinh(y − η_s)`, the longitudinal momentum in
+the frame comoving with the Bjorken fluid at the particle's own `η_s`. The package stores no `z`
+and no `η_s` — legitimately, because `η_s` is a *cyclic* coordinate and never enters the equations
+of motion. Two consequences were addressed here: nothing could test what row 3 *means*, and no lab
+rapidity could be reconstructed from a run.
+
+### Added
+- **`test_pz_lab_rapidity.jl`** — the first gate written in different variables from the code it
+  tests. An independent integrator in plain Cartesian lab coordinates carries `(t, z, p_x, p_y,
+  p_z)`, reads `η_s = artanh(z/t)` off the particle's own position, boosts in and out explicitly,
+  and streams `z += (p_z/E)·dt`; the two `p_z*` distributions are compared by moments, deciles and
+  a two-sample KS test. It also pins the two conventions nothing else touches: the position
+  kernel's `E = √(m² + p_⊥,lab² + p_z*²)` is a *mixed*-frame energy and that mixture is exactly the
+  Milne `dx_⊥/dτ = p_⊥/E*`; and `dτ = cosh(η)dt − sinh(η)dz = dt*` identically, so the Milne step
+  *is* the local-rest-frame time (the reference steps in lab time with `dt* = (E*/E)dt_lab`, the
+  engine in `τ` with no factor, and they agree). Wired into `runtests.jl`. ≈ 20 s.
+- **`pz_init = :thermal | :comoving`** (`append_pz`, both backends). `:thermal` is the shipped
+  local-Jüttner conditional. `:comoving` sets `p_z* = 0`: a quark produced at `t = z = 0` and
+  free-streaming to `τ₀` arrives at `η_s = y` *exactly* (verified to 6.7e-16), so its momentum
+  relative to the local fluid is exactly zero. That is the production-kinematics answer rather
+  than a modelling choice, it is independent of `τ₀`, and it is the internally consistent partner
+  of a non-thermal FONLL `p_T` — `:thermal` asserts the quark is longitudinally equilibrated
+  (`⟨p_z*²⟩/(⟨p_T²⟩/2) = 0.596` at `τ₀`) while transversally it is not. Measured cost of
+  switching on the production Pb+Pb background: freeze-out `p_T` spectrum **< 1 %**, final `dN/dy`
+  **2 %**, rapidity kernel **6 %**; the two ICs are indistinguishable by `τ ≈ 1 fm`.
+  **Default stays `:thermal`** so existing products remain bit-identical.
+- **`track_eta_s`** (both backends) — integrates `dη_s/dτ = (1/τ)(p_z*/E*)` from zero and returns
+  the history as a **fourth** element, making `y_lab = η_s + atanh(p_z*/E*)` available. `η_s` is a
+  *passenger*: written, never read, so it cannot move any other number (gated: momenta and
+  positions are bit-identical with it on and off). It is literally the missing third *position*
+  row — the position kernel already sums all three momentum rows into `E` but streams only two
+  coordinates. The `1/τ` is integrated exactly across each step (`log(τ_b/τ_a)`, hoisted out of
+  the particle loop); the scheme is first order overall and gated as such by demanding that the
+  free-streaming identity "lab rapidity is conserved" converge at that rate.
+  Because `K = Δη_s + y*(freeze-out)` is independent of `η_s(τ₀)` by construction, one
+  boost-invariant run gives a universal kernel and `dN/dy = ρ(η_s) ⊛ P(K)` exactly; `η_s(τ₀)` is
+  therefore deliberately *not* an input — the engine accumulates only the change.
+  Must be accumulated on the fly: it is a path integral, not recoverable from stored histograms.
+
 ## 0.2.1 — 2026-08-31  (full audit: tests for every function, exact CPU/GPU parity, hot-loop pass)
 
 The CPU default dynamics are **bit-identical to 0.2.0** — all ten `regression_corpus.jl` hashes

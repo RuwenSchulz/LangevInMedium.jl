@@ -10,6 +10,7 @@ export
     kernel_compute_all_forces_gpu!,
     kernel_update_momenta_LRF_gpu!,
     kernel_bjorken_redshift_gpu!,
+    kernel_accumulate_eta_s_gpu!,
     kernel_update_positions_gpu!,
     kernel_set_to_fluid_velocity_gpu!,
     kernel_save_momenta_gpu!,
@@ -524,6 +525,27 @@ Longitudinal free-streaming of a boost-invariant system between kicks: `p_z ← 
         if τa > 0.0
             @inbounds momenta[pz_row, i] *= τa / (τa + Δt)
         end
+    end
+    return
+end
+
+"""
+    kernel_accumulate_eta_s_gpu!
+
+CUDA twin of `kernel_accumulate_eta_s_cpu!`: one step of `dη_s/dτ = (1/τ)(p_z*/E*)`, i.e.
+`η_s += dlogtau·p_z*/E*` with `dlogtau = log(τ_b/τ_a)` and `E* = √(m² + Σ_{d≤pdim} p_d²)`.
+One thread per particle. See the CPU file for why η_s is the missing third position row and why
+accumulating it cannot move any other number.
+"""
+@inline function kernel_accumulate_eta_s_gpu!(eta_s, momenta, m::Float64, dlogtau::Float64,
+                                              N_particles::Int, pdim::Int)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if i <= N_particles
+        p2 = 0.0
+        for d in 1:pdim
+            @inbounds p2 += momenta[d, i]^2
+        end
+        @inbounds eta_s[i] += dlogtau * momenta[3, i] / sqrt(p2 + m * m)
     end
     return
 end

@@ -207,6 +207,12 @@ else
     # bit-identical.  See the file header for what each assertion guards.
     include(joinpath(@__DIR__, "test_relativistic_switch.jl"))
     include(joinpath(@__DIR__, "test_momentum_dims3.jl"))
+    # ── the p_z FRAME, against a code that has z ────────────────────────────────────
+    # Every other p_z gate is written in the same variables as the engine, so none of them can
+    # detect a mistake in what row 3 *means*. This one integrates the same physics in plain
+    # Cartesian lab coordinates with an explicit z and compares distributions. It also gates the
+    # two 2026-09-01 additions: pz_init (:thermal | :comoving) and the η_s accumulator.
+    run_suite("test_pz_lab_rapidity.jl")
     # ── CPU ↔ GPU, deterministically ────────────────────────────────────────────────
     # The ONLY exact comparison of the two backends: same inputs, same injected noise, per particle,
     # at 1e-12 or tighter. Everything else in the tree compares ensemble moments at 3 %, which is a

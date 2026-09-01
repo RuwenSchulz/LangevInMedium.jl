@@ -11,6 +11,7 @@ export interpolate_2d_cpu,
        kernel_compute_all_forces_cpu!,
        kernel_update_momenta_LRF_cpu!,
        kernel_bjorken_redshift_cpu!,
+       kernel_accumulate_eta_s_cpu!,
        kernel_rta_collision_cpu!,
        kernel_update_positions_cpu!,
        kernel_save_snapshot_cpu!,
@@ -524,6 +525,45 @@ function kernel_bjorken_redshift_cpu!(momenta, pz_row::Int, step, Δt, t0, N)
     f = τa / (τa + Δt)
     @inbounds for i in 1:N
         momenta[pz_row, i] *= f
+    end
+    return nothing
+end
+
+# === Spacetime rapidity: the missing third POSITION row ==========================================
+# The package stores TWO position rows (x, y) but THREE momentum rows, and the position kernel
+# already sums all three into E. The row that closes that asymmetry is eta_s, Milne's longitudinal
+# coordinate, whose streaming equation is the transverse one with the metric's 1/tau:
+#
+#     dx_perp/dtau = p_perp/E*          (kernel_update_positions_cpu!, the loop over `dimensions`)
+#     d eta_s/dtau = (1/tau)(p_z*/E*)   (here)
+#
+# eta_s is CYCLIC — nothing in the dynamics reads it (that is exactly why it could be dropped, and
+# why tau*p_z* is conserved by Noether, i.e. the Bjorken redshift). It is a PASSENGER: written,
+# never read, so switching it on cannot move any other number. With it,
+#
+#     y_lab = eta_s + atanh(p_z*/E*)
+#
+# and, because K = Delta eta_s + y*(freeze-out) is independent of eta_s(tau0) by construction,
+# dN/dy = rho(eta_s) (*) P(K) EXACTLY: one boost-invariant run gives the kernel and any production
+# profile is a convolution afterwards. Measured corr(eta_0, K) = +0.0005 (2026-09-01).
+"""
+    kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, dlogtau, N, pdim)
+
+One step of `dη_s/dτ = (1/τ)(p_z*/E*)`: `η_s += log(τ_b/τ_a)·p_z*/E*`, with
+`E* = √(m² + Σ_{d≤pdim} p_d²)` — the same mixed-frame energy the position update streams with
+(lab p_⊥, comoving p_z), which is what Milne kinematics calls for.
+
+`dlogtau = log(τ_b/τ_a)` is passed in already evaluated: the `1/τ` factor is then integrated
+EXACTLY across the step and only `p_z*/E*` is frozen, which is strictly better than an Euler
+`Δt/τ` at identical cost (one `log` per step, hoisted out of the particle loop).
+"""
+function kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, dlogtau, N, pdim)
+    @inbounds for i in 1:N
+        p2 = 0.0
+        for d in 1:pdim
+            p2 += momenta[d, i]^2
+        end
+        eta_s[i] += dlogtau * momenta[3, i] / sqrt(p2 + m * m)
     end
     return nothing
 end
