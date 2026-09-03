@@ -6,6 +6,7 @@ using ..Transport: eval_tau_n_spline
 
 # === Exported Symbols ===
 export interpolate_2d_cpu,
+    interpolate_3d_cpu,
        kernel_boost_to_rest_frame_cpu!,
        kernel_boost_to_lab_frame_cpu!,
        kernel_compute_all_forces_cpu!,
@@ -57,6 +58,92 @@ function interpolate_2d_cpu(x, y, values, xi, yi)
 end
 
 """
+    _bg_scalar(xgrid, ygrid, tgrid, field, x, y, r, t)
+
+Read a tabulated SCALAR of the background (temperature, or a flow magnitude) at a particle.
+`ygrid === nothing` is the shipped radial table `field[r, t]`; otherwise `field[x, y, t]` is a
+genuine function of the transverse plane. Keeping this in one place is what stops the two
+conventions drifting apart across the six kernels that read a background.
+"""
+@inline function _bg_flowmag(xgrid, ygrid, tgrid, Vfield, VxField, VyField, x, y, r, t)
+    if VxField === nothing
+        return interpolate_2d_cpu(xgrid, tgrid, Vfield, r, t)
+    end
+    vx = interpolate_3d_cpu(xgrid, ygrid, tgrid, VxField, x, y, t)
+    vy = interpolate_3d_cpu(xgrid, ygrid, tgrid, VyField, x, y, t)
+    return sqrt(vx*vx + vy*vy)
+end
+
+@inline function _bg_scalar(xgrid, ygrid, tgrid, field, x, y, r, t)
+    return ygrid === nothing ? interpolate_2d_cpu(xgrid, tgrid, field, r, t) :
+                               interpolate_3d_cpu(xgrid, ygrid, tgrid, field, x, y, t)
+end
+
+"""
+    _axis_cell(a, q) -> (i, i_next, weight)
+
+Locate `q` on the tabulated axis `a`: the node below it, its neighbour, and the blend weight.
+Clamps to the table (never extrapolates) and treats a LENGTH-1 axis -- a t-independent or
+y-independent background is naturally handed in as a single slice -- by returning the node twice
+with weight 0, where `length(a) - 1` would otherwise make `clamp(i, 1, 0)` throw.
+
+🪤 TOP-LEVEL ON PURPOSE. This began as a closure inside `interpolate_3d_cpu`, and its local `i`
+then SHARED the enclosing function's `i` (Julia boxes a variable assigned in both scopes when it
+is not a parameter of the inner function). The third call therefore overwrote the x-index before
+the node lookup used it, and the interpolator silently read the wrong cell in x -- exactly the
+closure-capture class CLAUDE.md records from KA-PRD Fig. 3(d), where an inner `a, b = Tlo, Thi`
+wrote the enclosing bracket. The trilinear-exactness test caught it because a wrong cell is not a
+small error; on a smooth field it would have looked like interpolation error.
+"""
+@inline function _axis_cell(a, q)
+    n = length(a)
+    n == 1 && return (1, 1, 0.0)
+    qc = clamp(q, first(a), last(a))
+    idx = clamp(searchsortedlast(a, qc), 1, n - 1)
+    a0 = a[idx]; d = a[idx + 1] - a0
+    return (idx, idx + 1, abs(d) < eps() ? 0.0 : (qc - a0) / d)
+end
+
+"""
+    interpolate_3d_cpu
+
+Trilinear lookup of a tabulated field `values[i, j, k]` on `(x[i], y[j], t[k])` at `(xi, yi, ti)`.
+The (x, y, t) twin of `interpolate_2d_cpu`, for a background that is a genuine function of the
+transverse PLANE rather than of the radius: `T(x, y, tau)`, `u^x(x, y, tau)`, `u^y(x, y, tau)`.
+
+Conventions are deliberately identical to the 2-D version and not re-derived: query points are
+CLAMPED to the table (extrapolating gave `T < 0` and `|v| > 1` once particles left the grid),
+`searchsortedlast` locates the cell, and a degenerate axis (`x1 == x0`) contributes its node value.
+Keeping them identical is what makes the reduction test meaningful — on a field with no y
+dependence this returns `interpolate_2d_cpu` to within a rounding of the y-blend -- NOT bit for
+bit, because `c*(1-yd) + c*yd` re-rounds even when the two nodes are equal. `test_background3d.jl`
+asserts agreement at that level (a few ulp) rather than exact equality, which is the strongest
+claim the arithmetic actually supports.
+"""
+function interpolate_3d_cpu(x, y, t, values, xi, yi, ti)
+    i, ip, xd = _axis_cell(x, xi)
+    j, jp, yd = _axis_cell(y, yi)
+    k, kp, td = _axis_cell(t, ti)
+
+    @inbounds begin
+        c000 = values[i, j, k];   c100 = values[ip, j, k]
+        c010 = values[i, jp, k];  c110 = values[ip, jp, k]
+        c001 = values[i, j, kp];  c101 = values[ip, j, kp]
+        c011 = values[i, jp, kp]; c111 = values[ip, jp, kp]
+    end
+
+    c00 = c000 * (1 - xd) + c100 * xd
+    c10 = c010 * (1 - xd) + c110 * xd
+    c01 = c001 * (1 - xd) + c101 * xd
+    c11 = c011 * (1 - xd) + c111 * xd
+
+    c0 = c00 * (1 - yd) + c10 * yd
+    c1 = c01 * (1 - yd) + c11 * yd
+
+    return c0 * (1 - td) + c1 * td
+end
+
+"""
     kernel_boost_to_rest_frame_cpu!
 
 Boost every particle's momentum from the lab into the local fluid rest frame at its own `(r, t_now = step·Δt + t0)`: a Lorentz boost along r̂ by the interpolated radial flow `v` (clamped below 1), or, with `relativistic = false`, the Galilean `p∥ −= m·v`. `radial_mode`: `momenta` holds `p_r` only. `V2Evolution`/`psi2` modulate `v` azimuthally. Particles at `r < eps` are left alone (r̂ undefined).
@@ -66,6 +153,13 @@ function kernel_boost_to_rest_frame_cpu!(
     m, N, step, Δt, t0;
     radial_mode::Bool = false,
     V2Evolution = nothing, psi2::Float64 = 0.0,
+    # --- 2-D BACKGROUND (optional). Absent => the shipped radial path, untouched. ---
+    # Supply ygrid plus u^x(x,y,t), u^y(x,y,t) tables and the flow is read as a VECTOR at the
+    # particle's own (x, y) instead of a magnitude along r-hat. Everything else about the boost is
+    # unchanged: the same Lorentz transformation, with the direction and magnitude taken from a
+    # vector field rather than from r-hat. Mutually exclusive with V2Evolution, which is an ad-hoc
+    # stand-in for the same anisotropy -- using both would count it twice.
+    ygrid = nothing, VxField = nothing, VyField = nothing,
     # ⚠ relativistic = false makes the frame change GALILEAN: p*∥ = p∥ − m·v with v the flow field
     # read as a VELOCITY (no γ, no E, no clamp — the non-relativistic class puts no bound on H·r).
     # This is what makes `relativistic = false` the actual exactly solvable process rather than the
@@ -87,14 +181,31 @@ function kernel_boost_to_rest_frame_cpu!(
             continue
         end
 
-        # --- local radial fluid velocity ---
-        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
-        # optional m=2 azimuthal modulation of the radial-flow magnitude (elliptic flow v2):
-        # v→v·(1+2 v2(r,t) cos2(φ−Ψ₂)).  Default (V2Evolution=nothing) ⇒ byte-identical radial flow.
-        if V2Evolution !== nothing && size(positions, 1) >= 2
-            v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
-            φ = atan(positions[2, i], positions[1, i])
-            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        # --- local fluid velocity: magnitude v and the unit vector it points along ---
+        local v::Float64, dirx::Float64, diry::Float64
+        if VxField !== nothing
+            vx = interpolate_3d_cpu(xgrid, ygrid, tgrid, VxField, positions[1, i], positions[2, i], t_now)
+            vy = interpolate_3d_cpu(xgrid, ygrid, tgrid, VyField, positions[1, i], positions[2, i], t_now)
+            v = sqrt(vx*vx + vy*vy)
+            v < eps() && continue          # no flow here, nothing to boost
+            dirx = vx / v; diry = vy / v
+        else
+            # --- local radial fluid velocity ---
+            v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
+            # optional m=2 azimuthal modulation of the radial-flow magnitude (elliptic flow v2):
+            # v→v·(1+2 v2(r,t) cos2(φ−Ψ₂)).  Default (V2Evolution=nothing) ⇒ byte-identical radial flow.
+            if V2Evolution !== nothing && size(positions, 1) >= 2
+                v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
+                φ = atan(positions[2, i], positions[1, i])
+                v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+            end
+            # radial_mode carries ONE position row, so positions[2, .] is out of bounds
+            # there. It used to be unreachable because r-hat was formed inside the
+            # Cartesian branch; hoisting the direction to the top of the loop exposed it.
+            # The CPU read it under @inbounds and silently used a garbage value that
+            # radial mode never consumes; the GPU bounds-checked and threw.
+            dirx = positions[1, i] / r
+            diry = size(positions, 1) >= 2 ? positions[2, i] / r : 0.0
         end
 
         if !relativistic
@@ -102,9 +213,8 @@ function kernel_boost_to_rest_frame_cpu!(
             if radial_mode
                 momenta[1, i] -= m * v
             else
-                x = positions[1, i]; y = positions[2, i]
-                momenta[1, i] -= m * v * (x / r)
-                momenta[2, i] -= m * v * (y / r)
+                momenta[1, i] -= m * v * dirx
+                momenta[2, i] -= m * v * diry
             end
             continue
         end
@@ -123,6 +233,7 @@ function kernel_boost_to_rest_frame_cpu!(
         E = sqrt(p2 + m^2)
 
         if radial_mode
+            VxField === nothing || error("radial_mode is incompatible with a 2-D background: p_r alone cannot represent a boost along a non-radial flow")
             # ==================================
             # 🟣 Radial mode (1D momentum)
             # ==================================
@@ -136,10 +247,8 @@ function kernel_boost_to_rest_frame_cpu!(
                 error("Cartesian boost requires at least 2D positions")
             end
 
-            # Extract coordinates
-            x = positions[1, i]
-            y = positions[2, i]
-            rhatx, rhaty = x / r, y / r
+            # decompose along the FLOW direction (r-hat in the radial case)
+            rhatx, rhaty = dirx, diry
 
             # Decompose momentum into parallel/perpendicular
             px, py = momenta[1, i], momenta[2, i]
@@ -177,6 +286,13 @@ function kernel_boost_to_lab_frame_cpu!(
     m, N, step, Δt, t0;
     radial_mode::Bool = false,
     V2Evolution = nothing, psi2::Float64 = 0.0,
+    # --- 2-D BACKGROUND (optional). Absent => the shipped radial path, untouched. ---
+    # Supply ygrid plus u^x(x,y,t), u^y(x,y,t) tables and the flow is read as a VECTOR at the
+    # particle's own (x, y) instead of a magnitude along r-hat. Everything else about the boost is
+    # unchanged: the same Lorentz transformation, with the direction and magnitude taken from a
+    # vector field rather than from r-hat. Mutually exclusive with V2Evolution, which is an ad-hoc
+    # stand-in for the same anisotropy -- using both would count it twice.
+    ygrid = nothing, VxField = nothing, VyField = nothing,
     relativistic::Bool = true          # false ⇒ Galilean: p∥ += m·v, see rest-frame kernel
     )
     @inbounds for i in 1:N
@@ -190,24 +306,40 @@ function kernel_boost_to_lab_frame_cpu!(
             continue
         end
 
-        # --- local fluid velocity ---
         t_now = step * Δt + t0
-        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
-        # optional m=2 azimuthal modulation (elliptic flow); must MATCH the rest-frame boost so the
-        # round-trip is exact when no diffusion.  Default (nothing) ⇒ unchanged radial flow.
-        if V2Evolution !== nothing && size(positions, 1) >= 2
-            v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
-            φ = atan(positions[2, i], positions[1, i])
-            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        # --- local fluid velocity: magnitude v and the unit vector it points along ---
+        local v::Float64, dirx::Float64, diry::Float64
+        if VxField !== nothing
+            vx = interpolate_3d_cpu(xgrid, ygrid, tgrid, VxField, positions[1, i], positions[2, i], t_now)
+            vy = interpolate_3d_cpu(xgrid, ygrid, tgrid, VyField, positions[1, i], positions[2, i], t_now)
+            v = sqrt(vx*vx + vy*vy)
+            v < eps() && continue          # no flow here, nothing to boost
+            dirx = vx / v; diry = vy / v
+        else
+            # --- local fluid velocity ---
+            v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
+            # optional m=2 azimuthal modulation (elliptic flow); must MATCH the rest-frame boost so the
+            # round-trip is exact when no diffusion.  Default (nothing) ⇒ unchanged radial flow.
+            if V2Evolution !== nothing && size(positions, 1) >= 2
+                v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
+                φ = atan(positions[2, i], positions[1, i])
+                v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+            end
+            # radial_mode carries ONE position row, so positions[2, .] is out of bounds
+            # there. It used to be unreachable because r-hat was formed inside the
+            # Cartesian branch; hoisting the direction to the top of the loop exposed it.
+            # The CPU read it under @inbounds and silently used a garbage value that
+            # radial mode never consumes; the GPU bounds-checked and threw.
+            dirx = positions[1, i] / r
+            diry = size(positions, 1) >= 2 ? positions[2, i] / r : 0.0
         end
 
         if !relativistic
             if radial_mode
                 momenta[1, i] += m * v
             else
-                x = positions[1, i]; y = positions[2, i]
-                momenta[1, i] += m * v * (x / r)
-                momenta[2, i] += m * v * (y / r)
+                momenta[1, i] += m * v * dirx
+                momenta[2, i] += m * v * diry
             end
             continue
         end
@@ -238,9 +370,8 @@ function kernel_boost_to_lab_frame_cpu!(
                 error("Cartesian boost requires at least 2D positions")
             end
 
-            x = positions[1, i]
-            y = positions[2, i]
-            rhatx, rhaty = x / r, y / r
+            # decompose along the FLOW direction (r-hat in the radial case)
+            rhatx, rhaty = dirx, diry
 
             # Decompose momentum along / perpendicular to radial direction
             px, py = momenta[1, i], momenta[2, i]
@@ -287,6 +418,8 @@ function kernel_compute_all_forces_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0, DsT;
+    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing,
     tau_Tmin::Float64,
     tau_invdT::Float64,
     tau_vals::AbstractVector{<:Real},
@@ -304,8 +437,12 @@ function kernel_compute_all_forces_cpu!(
     Vfield::Union{Nothing,AbstractMatrix} = nothing
  )
     M = m  # heavy-quark mass (can be parameterized)
-    proper_time_kicks && Vfield === nothing &&
-        error("kernel_compute_all_forces_cpu!: proper_time_kicks needs the velocity field")
+    # proper_time_kicks needs the flow MAGNITUDE. On the radial path that is `Vfield`; on a 2-D
+    # background it is derived from the (u^x, u^y) pair, so either source satisfies the guard —
+    # demanding `Vfield` alone would refuse a perfectly well-specified 2-D run.
+    proper_time_kicks && Vfield === nothing && VxField === nothing &&
+        error("kernel_compute_all_forces_cpu!: proper_time_kicks needs the velocity field " *
+              "(scalar Vfield on a radial background, or the (VxField, VyField) pair on a 2-D one)")
 
     @inbounds for i in 1:N
         # --- local temperature ---
@@ -318,7 +455,8 @@ function kernel_compute_all_forces_cpu!(
             r2_i += positions[d, i]^2
         end
         r = sqrt(r2_i)
-        T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)
+        T = _bg_scalar(xgrid, ygrid, tgrid, Tfield, positions[1, i],
+                       size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0)
         # Temperature should be non-negative; clamp to avoid NaNs from T<0.
         T = max(float(T), 0.0)
 
@@ -350,7 +488,8 @@ function kernel_compute_all_forces_cpu!(
         # k_r is the LRF radial momentum (p_z ⊥ the transverse boost), E* the full LRF energy.
         dil = 1.0
         if proper_time_kicks
-            v = interpolate_2d_cpu(xgrid, tgrid, Vfield, r, step * Δt + t0)
+            v = _bg_flowmag(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
+                            size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0)
             v = clamp(float(v), -0.999999, 0.999999)
             γv = 1.0 / sqrt(1.0 - v * v)
             kr = 0.0
@@ -614,6 +753,8 @@ function kernel_rta_collision_cpu!(
     Tfield, xgrid, tgrid,
     momenta, positions,
     Δt, m, N, step, t0, DsT;
+    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing,
     tau_Tmin::Float64,
     tau_invdT::Float64,
     tau_vals::AbstractVector{<:Real},
@@ -633,13 +774,15 @@ function kernel_rta_collision_cpu!(
             r2_i += positions[d, i]^2
         end
         r = sqrt(r2_i)
-        T = max(float(interpolate_2d_cpu(xgrid, tgrid, Tfield, r, step * Δt + t0)), 0.0)
+        T = max(float(_bg_scalar(xgrid, ygrid, tgrid, Tfield, positions[1, i],
+                                 size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0)), 0.0)
         τn = (DsT > 0.0 && T > 0.0) ? eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals) : 0.0
         # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)), the SAME factor
         # kernel_compute_all_forces_cpu! applies to the OU step. DEFAULT OFF ⇒ literal 1.0.
         dil = 1.0
-        if proper_time_kicks && Vfield !== nothing
-            v = float(interpolate_2d_cpu(xgrid, tgrid, Vfield, r, step * Δt + t0))
+        if proper_time_kicks && (Vfield !== nothing || VxField !== nothing)
+            v = float(_bg_flowmag(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
+                                  size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0))
             v = clamp(v, -0.999999, 0.999999)
             γv = 1.0 / sqrt(1.0 - v * v)
             kr = 0.0
@@ -693,6 +836,8 @@ Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `mome
 function kernel_update_positions_cpu!(
     positions, momenta, m, Δt, N,step,t0,
     xgrid,tgrid, Tfield,DsT;
+    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing,
     dimensions::Int = 2,
     # number of MOMENTUM rows (3 on a 2-D plane carrying p_z); only E = √(m²+Σp²) sees it — the
     # streaming, the diffusion and the reflection act on the `dimensions` spatial components.
@@ -738,7 +883,8 @@ function kernel_update_positions_cpu!(
             # diffusion through momentum kicks + advection; enabling this typically
             # double-counts diffusion compared to hydro.
             if position_diffusion
-                T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_safe, step * Δt + t0)
+                T = _bg_scalar(xgrid, ygrid, tgrid, Tfield, positions[1, i],
+                              size(positions,1) >= 2 ? positions[2, i] : 0.0, r_safe, step * Δt + t0)
                 # D_s = DsT/T is in GeV^-1; convert to fm for x-update with Δt in fm.
                 D = (DsT / max(float(T), eps())) / fmGeV
                 if D > 0
@@ -778,7 +924,8 @@ function kernel_update_positions_cpu!(
                     r2 += positions[d, i]^2
                 end
                 r_now = sqrt(r2)
-                T = interpolate_2d_cpu(xgrid, tgrid, Tfield, r_now, step * Δt + t0)
+                T = _bg_scalar(xgrid, ygrid, tgrid, Tfield, positions[1, i],
+                              size(positions,1) >= 2 ? positions[2, i] : 0.0, r_now, step * Δt + t0)
                 # D_s = DsT/T is in GeV^-1; convert to fm for x-update with Δt in fm.
                 D = (DsT / max(float(T), eps())) / fmGeV
                 if D > 0
@@ -880,8 +1027,10 @@ function kernel_set_to_fluid_velocity_cpu!(
     step::Int,
     Δt::Float64,
     t0::Float64;
+    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing,
     radial_mode::Bool = false,
-    relativistic::Bool = true          # false ⇒ imprint m·v, not m·γ·v
+    relativistic::Bool = true,         # false ⇒ imprint m·v, not m·γ·v
     )
     @inbounds for i in 1:N
         # --- Compute position & radius ---
@@ -915,14 +1064,28 @@ function kernel_set_to_fluid_velocity_cpu!(
 
         # --- Interpolate fluid velocity from (r, τ) field ---
         τ_now = step * Δt + t0
-        v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, τ_now)
+        # 2-D background: imprint the flow VECTOR, not a magnitude along r-hat
+        local v::Float64, dirx::Float64, diry::Float64
+        if VxField !== nothing
+            vx = interpolate_3d_cpu(xgrid, ygrid, tgrid, VxField, positions[1, i],
+                                    size(positions,1) >= 2 ? positions[2, i] : 0.0, τ_now)
+            vy = interpolate_3d_cpu(xgrid, ygrid, tgrid, VyField, positions[1, i],
+                                    size(positions,1) >= 2 ? positions[2, i] : 0.0, τ_now)
+            v = sqrt(vx*vx + vy*vy)
+            dirx = v < eps() ? 0.0 : vx/v
+            diry = v < eps() ? 0.0 : vy/v
+        else
+            v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, τ_now)
+            dirx = positions[1, i]/r
+            diry = size(positions,1) >= 2 ? positions[2, i]/r : 0.0
+        end
         if !relativistic
             if radial_mode
                 momenta[1, i] = m * v
             else
                 x = positions[1, i]; y = positions[2, i]
-                momenta[1, i] = m * v * (x / r)
-                momenta[2, i] = m * v * (y / r)
+                momenta[1, i] = m * v * dirx
+                momenta[2, i] = m * v * diry
             end
             continue
         end
@@ -944,8 +1107,8 @@ function kernel_set_to_fluid_velocity_cpu!(
             # 🟢 Cartesian mode (2D, rotation invariant)
             # =====================================
             # Set momentum along local radial direction
-            momenta[1, i] = m * γ * v * (x / r)
-            momenta[2, i] = m * γ * v * (y / r)
+            momenta[1, i] = m * γ * v * dirx
+            momenta[2, i] = m * γ * v * diry
         end
     end
     return nothing

@@ -318,7 +318,11 @@ momenta must be LOCAL-REST-FRAME momenta (this is called before the initial lab 
 pairs exact reflections in all three components.
 """
 function append_thermal_pz(momenta::AbstractMatrix, positions::AbstractMatrix, m::Real, T_of_r;
-                           antithetic::Bool = false, rng::AbstractRNG = Random.default_rng())
+                           antithetic::Bool = false, rng::AbstractRNG = Random.default_rng(),
+                           # On a 2-D background the local temperature is NOT a function of the
+                           # radius, so `T_of_r` cannot express it. Supplying `T_of_xy(x, y)`
+                           # overrides it; absent, the radial path is bit-identical.
+                           T_of_xy = nothing)
     size(momenta, 1) == 2 || error("append_thermal_pz: expected 2 transverse momentum rows, got $(size(momenta, 1))")
     N = size(momenta, 2)
     out = zeros(Float64, 3, N)
@@ -330,7 +334,10 @@ function append_thermal_pz(momenta::AbstractMatrix, positions::AbstractMatrix, m
         end
         r2 = 0.0
         for d in 1:size(positions, 1); r2 += Float64(positions[d, i])^2; end
-        T  = max(Float64(T_of_r(sqrt(r2))), 0.0)
+        T  = T_of_xy === nothing ?
+                max(Float64(T_of_r(sqrt(r2))), 0.0) :
+                max(Float64(T_of_xy(Float64(positions[1, i]),
+                                    size(positions, 1) >= 2 ? Float64(positions[2, i]) : 0.0)), 0.0)
         mT = sqrt(Float64(m)^2 + Float64(momenta[1, i])^2 + Float64(momenta[2, i])^2)
         out[3, i] = sample_pz_conditional_juttner(mT, T; rng = rng)
     end
@@ -381,9 +388,11 @@ forgotten almost immediately. `:comoving` is the defensible choice; the default 
 so existing products remain bit-identical.
 """
 function append_pz(mode::Symbol, momenta::AbstractMatrix, positions::AbstractMatrix, m::Real, T_of_r;
-                   antithetic::Bool = false, rng::AbstractRNG = Random.default_rng())
+                   antithetic::Bool = false, rng::AbstractRNG = Random.default_rng(),
+                   T_of_xy = nothing)
     if mode === :thermal
-        return append_thermal_pz(momenta, positions, m, T_of_r; antithetic = antithetic, rng = rng)
+        return append_thermal_pz(momenta, positions, m, T_of_r; antithetic = antithetic, rng = rng,
+                                 T_of_xy = T_of_xy)
     elseif mode === :comoving
         return append_comoving_pz(momenta)
     else

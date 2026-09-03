@@ -19,7 +19,7 @@
 #   julia --project=Julia Julia/LangevInMedium.jl/test/test_kernel_parity.jl
 # ==============================================================================================
 ENV["LIM_QUIET"] = "1"
-using Test, Random, Statistics, LinearAlgebra
+using Test, Random, Statistics, LinearAlgebra, Printf
 
 const HAVE_CUDA = try
     @eval using CUDA
@@ -368,6 +368,119 @@ else
             dimensions = 2, Tfo = 0.0, verbose = true)
         @test size(mom[end]) == (2, 256) && size(pos[end]) == (2, 256)
         @test all(isfinite, mom[end]) && all(isfinite, pos[end])
+    end
+
+    @testset "P10 2-D BACKGROUND — CPU/GPU parity of the trilinear path" begin
+        # The 2-D background (T[x,y,t] plus a (u^x, u^y) vector pair) was added CPU-first and the
+        # GPU kernels mirror it. The CPU tests prove the physics reduces to the shipped radial path;
+        # THIS proves the two backends implement that same physics, per particle, with the same
+        # noise -- the only instrument here that can see a silent GPU-only divergence, which is
+        # exactly the class the 0.2.0 interpolant and clamp bugs belonged to.
+        YG = collect(-20.0:0.5:20.0)
+        XG2 = collect(-20.0:0.5:20.0)
+        T3  = [max(0.12, 0.45*exp(-(x^2+y^2)/60)*(0.4/τ)^(1/3)) for x in XG2, y in YG, τ in TG]
+        # a flow that is nowhere parallel to r-hat, so the direction logic is exercised and not
+        # accidentally satisfied by the radial special case
+        UX  = [0.55*tanh(hypot(x,y)/5)*(x/max(hypot(x,y),1e-9)) - 0.18*(y/20.0) for x in XG2, y in YG, τ in TG]
+        UY  = [0.55*tanh(hypot(x,y)/5)*(y/max(hypot(x,y),1e-9)) + 0.18*(x/20.0) for x in XG2, y in YG, τ in TG]
+        d_XG2, d_YG, d_T3, d_UX, d_UY = CuArray(XG2), CuArray(YG), CuArray(T3), CuArray(UX), CuArray(UY)
+
+        @testset "the trilinear lookup itself" begin
+            function probe3!(out, x, y, t, v, qx, qy, qt, n)
+                i = (blockIdx().x - 1)*blockDim().x + threadIdx().x
+                i <= n && (@inbounds out[i] = KG.interpolate_3d_cuda(x, y, t, v, qx[i], qy[i], qt[i]))
+                return
+            end
+            Random.seed!(91)
+            nq = 20_000
+            # spill outside the table on every axis, and land exactly on nodes
+            qx = vcat(range(-60.0, 60.0; length = nq ÷ 2), 40.0 .* rand(nq ÷ 2) .- 20.0)
+            qy = vcat(range(-60.0, 60.0; length = nq ÷ 2), 40.0 .* rand(nq ÷ 2) .- 20.0)
+            qt = vcat(range(-3.0, 9.0;   length = nq ÷ 2), 0.4 .+ 2.0 .* rand(nq ÷ 2))
+            qx[1:length(XG2)] .= XG2; qy[1:length(XG2)] .= YG[1]; qt[1:length(XG2)] .= TG[1]
+            # 🔑 T is strictly positive, so a pointwise relative error is meaningful and `ulpeq`
+            # applies. u^x and u^y are SIGNED and cross zero, where `|Δ|/max(|a|,|b|)` is
+            # meaningless -- measured, it reports 31 ulps for a 7e-15 absolute difference on a
+            # field of order 0.5. That is the same pathology this file's own `dev` docstring
+            # records for momentum components, so the vector components are compared the same way:
+            # deviation against the ARRAY'S OWN SCALE.
+            for (nm, vals) in (("T", T3), ("ux", UX), ("uy", UY))
+                dv  = CuArray(vals)
+                cpu = [KC.interpolate_3d_cpu(XG2, YG, TG, vals, qx[i], qy[i], qt[i]) for i in 1:nq]
+                dout = CUDA.zeros(Float64, nq)
+                launch(probe3!, nq, dout, d_XG2, d_YG, d_TG, dv,
+                       CuArray(qx), CuArray(qy), CuArray(qt), nq)
+                got = Array(dout)
+                if nm == "T"
+                    @test ulpeq(got, cpu)
+                else
+                    @test maximum(abs.(got .- cpu)) <= 8e-16 * maximum(abs, cpu)
+                end
+                @test all(isfinite, got)
+            end
+            # NON-UNIFORM axes: the device binary search must not assume constant spacing
+            xnu = [-20.0, -19.5, -3.0, 0.0, 0.2, 7.0, 20.0]
+            ynu = [-20.0, -6.0, -0.1, 0.0, 4.0, 20.0]
+            Tnu = [1.0 + 0.01x - 0.02y + 0.03τ for x in xnu, y in ynu, τ in TG]   # strictly positive: ulpeq applies
+            cpu = [KC.interpolate_3d_cpu(xnu, ynu, TG, Tnu, qx[i], qy[i], qt[i]) for i in 1:nq]
+            dout = CUDA.zeros(Float64, nq)
+            launch(probe3!, nq, dout, CuArray(xnu), CuArray(ynu), d_TG, CuArray(Tnu),
+                   CuArray(qx), CuArray(qy), CuArray(qt), nq)
+            @test ulpeq(Array(dout), cpu)
+        end
+
+        @testset "boosts on a 2-D background, every switch combination" begin
+            for pdim in (2, 3), rel in (true, false)
+                mom, pos = state(; pdim = pdim, seed = 77)
+                dmom, dpos = CuArray(mom), CuArray(pos)
+                for (cpuk, gpuk) in ((KC.kernel_boost_to_rest_frame_cpu!, KG.kernel_boost_to_rest_frame_gpu!),
+                                     (KC.kernel_boost_to_lab_frame_cpu!,  KG.kernel_boost_to_lab_frame_gpu!))
+                    cpuk(mom, pos, XG2, TG, nothing, M, NP, 7, 2e-3, 0.4;
+                         radial_mode = false, relativistic = rel,
+                         ygrid = YG, VxField = UX, VyField = UY)
+                    launch(gpuk, NP, dmom, dpos, d_XG2, d_TG, d_VF, M, NP, 7, 2e-3, 0.4,
+                           false, false, d_V2, 0.0, rel, d_YG, d_UX, d_UY)
+                    a, r = dev(mom, dmom)
+                    @test a < 1e-13 && r < 1e-13
+                end
+            end
+        end
+
+        @testset "forces kernel on a 2-D background, SAME noise" begin
+            # Mirrors P4 exactly, with the background swapped for the 2-D tables. Same
+            # pre-generated noise on both sides, so this is a per-particle comparison and not a
+            # statistical one.
+            for rel in (true, false), ptk in (false, true)
+                mom, pos = state(; pdim = 3, seed = 33)
+                ξ  = randn(MersenneTwister(44), 3, NP)
+                rd = randn(MersenneTwister(55), 3, NP)
+                pm, pu = zeros(NP), zeros(3, NP)
+                ηv, kLv, kTv = zeros(NP), zeros(NP), zeros(NP)
+                det, sto = zeros(3, NP), zeros(3, NP)
+                T0s, invdT, vals = TR.build_tau_drag_spline(M, DST; Tmin = 0.05, Tmax = 0.8, nT = 1024)
+                KC.kernel_compute_all_forces_cpu!(T3, XG2, TG, mom, pos, pm, pu, ηv, kLv, kTv,
+                    ξ, det, sto, 2e-3, M, rd, 3, NP, 7, 0.4, DST;
+                    tau_Tmin = T0s, tau_invdT = invdT, tau_vals = vals,
+                    radial_mode = false, relativistic = rel, proper_time_kicks = ptk,
+                    Vfield = nothing, ygrid = YG, VxField = UX, VyField = UY)
+                ddet = CUDA.zeros(Float64, 3, NP); dsto = CUDA.zeros(Float64, 3, NP)
+                dpm = CUDA.zeros(Float64, NP); dpu = CUDA.zeros(Float64, 3, NP)
+                dη = CUDA.zeros(Float64, NP); dkL = CUDA.zeros(Float64, NP); dkT = CUDA.zeros(Float64, NP)
+                launch(KG.kernel_compute_all_forces_gpu!, NP, d_T3, d_XG2, d_TG,
+                    CuArray(mom), CuArray(pos), dpm, dpu, dη, dkL, dkT, CuArray(ξ), ddet, dsto,
+                    2e-3, M, CuArray(rd), 3, NP, 7, 0.4, DST, T0s, invdT, CuArray(vals),
+                    false, Int32(0), rel, ptk, d_VF, d_YG, d_UX, d_UY)
+                # P4 (the radial twin of this test) asserts the RELATIVE deviation at 1e-12 and
+                # not the absolute one, because `dev`'s absolute value scales with the field: the
+                # stochastic terms are the largest of these arrays and land at 1.7e-13 absolute
+                # while sitting at 1.6e-14 relative. Same convention here, so the 2-D gate is no
+                # weaker than the radial one it mirrors.
+                for (h, d) in ((det, ddet), (sto, dsto), (ηv, dη), (kLv, dkL), (kTv, dkT))
+                    _, r_ = dev(h, d)
+                    @test r_ < 1e-12
+                end
+            end
+        end
     end
 
     @testset "D1 KNOWN DIVERGENCES — recorded, not reconciled" begin
