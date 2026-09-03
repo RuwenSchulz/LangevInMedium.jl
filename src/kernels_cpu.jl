@@ -656,7 +656,16 @@ function kernel_rta_collision_cpu!(
             dil = 1.0 / (den > 1e-6 ? den : 1e-6)
         end
         # τn ≤ 0 ⇒ infinitely fast relaxation ⇒ always re-draw (DsT→0 local-equilibrium limit)
-        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt * dil / τn, 0.0, 1.0) : 1.0
+        # 🔴 FIXED 2026-09-02 — the collision probability over a step is EXPONENTIAL, not linear.
+        # This was `clamp(Δt·dil/τn, 0, 1)`, so the survival probability was 1 − Δt/τ_n and the
+        # realised BGK rate was −ln(1 − Δt/τ_n)/Δt ≈ (1/τ_n)(1 + Δt/2τ_n), i.e. always TOO FAST.
+        # Measured before the fix against the ℓ=1 decay of a drifting ensemble at T = 0.30
+        # (τ_n = 0.5976 fm), ratio to the nominal 1/τ_n: 1.0013 / 1.0069 / 1.0517 / 1.0936 / 1.2198
+        # at Δt = 0.002 / 0.01 / 0.05 / 0.1 / 0.2 — each within 1 % of that closed form, so the
+        # mechanism was confirmed rather than inferred. `−expm1(−x)` is the exact per-step
+        # probability at ANY Δt and removes the ceiling on the step size. Production Δt ≈ 1e-3 ⇒
+        # the change is below 0.1 %, but it is not zero: the two RTA cells move.
+        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(-expm1(-Δt * dil / τn), 0.0, 1.0) : 1.0
         rand() < Pcol || continue
         pstar = _draw_juttner_pstar_lib(M, T, dimensions)
         if radial_mode
@@ -888,6 +897,20 @@ function kernel_set_to_fluid_velocity_cpu!(
 
         if r < eps()  # avoid divide-by-zero
             continue
+        end
+
+        # 🔴 FIXED 2026-09-02 — ZERO EVERY MOMENTUM ROW BEYOND THE SPATIAL ONES. This kernel used
+        # to write rows 1–2 only, so with `momentum_dimensions = 3` the p_z* row kept whatever the
+        # initial condition put there while still entering E = √(m² + p_⊥² + p_z*²) in the position
+        # update — and the particle that is supposed to BE the fluid element streamed slower than
+        # it. Measured before the fix at v = 0.5, T = 0.30, τ ∈ [0.4, 2.4]: ⟨v_x⟩ = 0.4645 against
+        # the fluid's 0.5000, a −7.10 % deficit (CPU and GPU agreed to six digits), with
+        # ⟨p_z*²⟩ = 0.596 GeV² surviving to the end of the run. The fluid is longitudinally
+        # comoving in Milne by construction, so the glued state is p_z* = 0 exactly.
+        # The old gate could not see it: `test_momentum_dims3.jl` "(R)" uses a ZERO-flow box, where
+        # the deficit vanishes identically. Now gated at v = 0.5 in `test_limits_and_contracts.jl` L1.
+        for d in 3:size(momenta, 1)
+            momenta[d, i] = 0.0
         end
 
         # --- Interpolate fluid velocity from (r, τ) field ---

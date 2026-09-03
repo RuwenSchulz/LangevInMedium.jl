@@ -46,9 +46,15 @@ Keywords (defaults in `simulate_cpu.jl`/`simulate_gpu.jl`):
   `momentum_dimensions = 3` and `initial_time > 0`.
 - `relativistic`: `true` = Jüttner kinematics (drag `·m/E`, streaming `p/E`, Lorentz boosts);
   `false` = the exactly solvable Galilean process (drag `η_D`, streaming `p/m`, `p∥ ∓ m·v`).
-- `collision_mode`: `:langevin` (exact-OU step) or `:rta` (BGK re-draw from the local Jüttner
-  with probability `Δt/τ_n`, τ_n the CURRENT time).
-- `momentum_langevin = false` or `DsT = 0`: particles are glued to the flow.
+- `collision_mode`: `:langevin` (exact-OU step), `:rta` (BGK re-draw from the local Jüttner with
+  probability `1 − e^{−Δt/τ_n}`, τ_n the CURRENT time), or `:none` (FREE STREAMING — no drag, no
+  noise, no frame change; the Bjorken redshift still applies, being the longitudinal free-streaming
+  law). ⚠ `:none` is the ONLY way to ask for free streaming. `DsT = 0` and
+  `momentum_langevin = false` are both the COMOVING limit (`p = m·γ·v`); a negative `DsT` used to
+  free-stream by accident and is now refused.
+- `momentum_langevin = false` or `DsT = 0`: particles are glued to the flow (`p = m·γ·v`, and
+  every momentum row beyond the spatial ones is set to zero — the fluid is longitudinally comoving
+  in Milne by construction).
 - `position_diffusion`: extra overdamped `√(2D_sΔt)` kicks on the positions (off: the
   underdamped dynamics already diffuses); `reflecting_boundary`: reflect at `r = xgrid[end]`.
 - `V2Evolutionn, psi2`: optional elliptic modulation `v → v(1 + 2v₂cos2(φ−Ψ₂))`.
@@ -110,8 +116,8 @@ function simulate_ensemble_bulk(
 )
     integrator_mode == 0 ||
         error("simulate_ensemble_bulk(::CPUBackend): integrator_mode=$(integrator_mode) is not implemented on the CPU (only 0, the pre-point exact-OU step); the drift-midpoint variant (1) exists on the GPU path only.")
-    (collision_mode == :langevin || collision_mode == :rta) ||
-        error("simulate_ensemble_bulk(::CPUBackend): collision_mode=$(collision_mode) is not supported (only :langevin and :rta).")
+    (collision_mode == :langevin || collision_mode == :rta || collision_mode == :none) ||
+        error("simulate_ensemble_bulk(::CPUBackend): collision_mode=$(collision_mode) is not supported (only :langevin, :rta and :none).")
     return simulate_ensemble_bulk_cpu(r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
         N_particles = N_particles, Δt = Δt,

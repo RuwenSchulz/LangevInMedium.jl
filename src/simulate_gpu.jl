@@ -5,7 +5,8 @@ using ProgressMeter
 using ..KernelsGPU
 using ...Utils
 using ...KernelsCPU: interpolate_2d_cpu     # host-side T(r, τ0) lookup for the initial p_z draw
-using ...SimulateCPU: _snapshot_times
+using ...SimulateCPU: _snapshot_times, _step_count, _check_time_window, _warn_escaped_particles,
+                      _validate_transport_inputs
 using CUDA
 using ...Transport
 
@@ -67,8 +68,13 @@ function simulate_ensemble_bulk_gpu(
 
     try
         # === Derived parameters ===
+        # 🔴 2026-09-02: identical to the CPU path — refuse the inputs that used to degrade to
+        # silent free streaming, warn when the window leaves the table, and count steps with the
+        # ulp-tolerant rule instead of a bare floor(). See the helpers in simulate_cpu.jl.
+        _validate_transport_inputs(m, DsT)
+        _check_time_window(initial_time, final_time, SpaceTimeGrid[2])
         total_time = final_time - initial_time
-        steps = floor(Int, total_time / Δt)
+        steps = _step_count(initial_time, final_time, Δt)
         steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
         save_every = min(round(Int, save_interval / Δt), steps)   # robust to binary roundoff; clamped as on the CPU path
         save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
@@ -100,7 +106,7 @@ function simulate_ensemble_bulk_gpu(
         tau_vals = Float64[0.0, 0.0]
         # RTA/BGK needs the CURRENT time instead — see build_taun_current_spline.
         taun_vals = Float64[0.0, 0.0]
-        if momentum_langevin && DsT > 0.0
+        if momentum_langevin && DsT > 0.0 && collision_mode !== :none
             Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
             Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
             tau_Tmin, tau_invdT, tau_vals = build_tau_drag_spline(m, DsT;
@@ -128,6 +134,8 @@ function simulate_ensemble_bulk_gpu(
         # === RTA/BGK: precompute the isotropic Jüttner inverse-CDF table on CPU, upload to GPU ===
         # Divergence-free `p*` sampler for kernel_rta_collision_gpu! (replaces the CPU rejection loop).
         rta_mode = collision_mode == :rta
+        # `:none` = FREE STREAMING (2026-09-02); the twin of the CPU flag. See simulate_cpu.jl.
+        free_stream = collision_mode === :none
         invcdf_nU::Int = 2
         invcdf_nT::Int = 2
         invcdf_Tmin::Float64 = 0.0
@@ -305,8 +313,8 @@ function simulate_ensemble_bulk_gpu(
                 if position_diffusion
                     CUDA.randn!(ξ_position)
                 end
-            else
-                CUDA.randn!(ξ_momentum)  # OU momentum noise — always needed
+            elseif !free_stream
+                CUDA.randn!(ξ_momentum)  # OU momentum noise — always needed (not under `:none`)
                 # ξ_position is only consumed by the position-diffusion update; random_directions only by the
                 # radial (1D) force kernel as a p≈0 fallback direction. Generating (and normalizing) them every
                 # step when their consumer is off is pure waste — skip it. Behaviour-identical for the real
@@ -322,11 +330,15 @@ function simulate_ensemble_bulk_gpu(
                 end
             end
 
-            # Step 1: Transform momenta to local rest frame (LRF)
-            @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
-                momenta, positions, xgrid, tgrid, VelocityEvolution,
-                m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
-                relativistic)
+            # Step 1: Transform momenta to local rest frame (LRF). Skipped under `:none`, where the
+            # lab momenta are constant and the boost pair would only apply the γ regularisation's
+            # ≈1e-10 contraction per step (see the CPU twin).
+            if !free_stream
+                @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
+                    momenta, positions, xgrid, tgrid, VelocityEvolution,
+                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                    relativistic)
+            end
 
             # Step 1b: Bjorken redshift of p_z in the LRF (invariant under the transverse boost)
             if bjorken_redshift
@@ -334,7 +346,10 @@ function simulate_ensemble_bulk_gpu(
                     momenta, 3, step, Δt, initial_time, N_particles)
             end
 
-            if !momentum_langevin || DsT == 0.0
+            if free_stream
+                # nothing to do: the momenta are already the (constant) lab momenta
+
+            elseif !momentum_langevin || DsT == 0.0
 
                 @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
                     momenta, positions, xgrid, tgrid,
@@ -429,6 +444,9 @@ function simulate_ensemble_bulk_gpu(
             GC.gc(true); CUDA.reclaim()
             return fo
         end
+
+        # 🔴 2026-09-02: warn if particles finished outside the tabulated radial axis (CPU twin).
+        _warn_escaped_particles(Array(positions), xgridd)
 
         # === Transfer saved histories back to CPU ===
         # 2D layout: (dimensions, N_particles * (num_saves+1)) — single cudaMemcpy, slice on CPU.

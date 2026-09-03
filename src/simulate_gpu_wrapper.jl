@@ -57,8 +57,8 @@ function Simulate.simulate_ensemble_bulk(
     track_eta_s::Bool = false,
     verbose::Bool = false,
 )
-    (collision_mode == :langevin || collision_mode == :rta) ||
-        error("simulate_ensemble_bulk(::GPUBackend): collision_mode=$(collision_mode) is not supported on GPU (only :langevin and :rta).")
+    (collision_mode == :langevin || collision_mode == :rta || collision_mode == :none) ||
+        error("simulate_ensemble_bulk(::GPUBackend): collision_mode=$(collision_mode) is not supported on GPU (only :langevin, :rta and :none).")
     return SimulateGPU.simulate_ensemble_bulk_gpu(
         r_grid_Langevin,p_grid_Langevin,heavy_quark_density,
         TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;

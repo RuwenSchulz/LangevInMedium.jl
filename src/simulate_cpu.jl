@@ -8,7 +8,108 @@ using ..Utils
 using ..Transport
 
 # === Exported Symbols ===
-export simulate_ensemble_bulk_cpu, _snapshot_times
+export simulate_ensemble_bulk_cpu, _snapshot_times, _step_count, _check_time_window,
+       _warn_escaped_particles, _validate_transport_inputs
+
+"""
+    _step_count(t0, tf, Δt) -> Int
+
+Number of steps in `[t0, tf]`, immune to the binary representation of the endpoints.
+
+🔴 FIXED 2026-09-02. This was a bare `floor(Int, (tf − t0)/Δt)`. When the difference is not exactly
+representable — `1.4 − 0.4 = 0.9999999999999999` — the quotient lands a fraction of an ulp BELOW the
+integer and `floor` takes a whole step off. Usually that is one step of 10⁻³ fm and nobody notices;
+the damage is that it also breaks `steps % save_every == 0`, and then `_snapshot_times` drops the
+entire trailing save interval and blames `save_interval` for "not dividing the evolution".
+MEASURED worst case: t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 kept 501 of 1000 steps —
+HALF the requested history, silently, with a warning pointing at the wrong cause.
+
+The snap tolerance is 64 ulps of the quotient (≈ 9·10⁻¹⁰ at q = 1.26·10⁵), which is ~4 orders above
+any representation error and ~3 below any shortfall a caller could mean. ⚠ It DOES change runs whose
+window was previously mis-floored: AttractorHydro's portrait (0.4 → 13.0 at Δt = 10⁻⁴) goes
+125 999 → 126 000 steps and 1260 → 1261 snapshots. LP1's 12.6 fm and O+O's 7.6 fm divide exactly and
+are untouched.
+"""
+function _step_count(t0::Real, tf::Real, Δt::Real)
+    q = (Float64(tf) - Float64(t0)) / Float64(Δt)
+    isfinite(q) || return 0
+    steps = floor(Int, q)
+    if (steps + 1) - q <= 64 * eps(max(abs(q), 1.0))
+        steps += 1
+    end
+    return steps
+end
+
+"""
+    _check_time_window(t0, tf, tgrid)
+
+Warn when the requested evolution leaves the tabulated time axis.
+
+🔴 ADDED 2026-09-02. `interpolate_2d_*` clamps every query into the table — right for a particle
+leaving the fireball rim, wrong for a run that outlives the hydro output. Past `tgrid[end]` the
+medium FREEZES at its last tabulated slice and the run continues, with no error and no warning, on
+both backends (measured: a table ending at τ = 2 integrated to τ = 6 kept evolving in the τ = 2
+medium). A warning, not an error: freezing the medium is occasionally what a caller wants, and
+AttractorMomentum's own driver already validates the window before calling.
+"""
+function _check_time_window(t0::Real, tf::Real, tgrid)
+    lo = Float64(first(tgrid)); hi = Float64(last(tgrid))
+    tol = 1e-9 * max(1.0, abs(hi - lo))
+    if Float64(t0) < lo - tol || Float64(tf) > hi + tol
+        @warn "simulate_ensemble_bulk: the requested window leaves the tabulated time axis — the background is CLAMPED (frozen) outside it, silently" requested = (Float64(t0), Float64(tf)) tabulated = (lo, hi)
+    end
+    return nothing
+end
+
+"""
+    _warn_escaped_particles(positions, xgrid)
+
+Warn if any particle finished outside the tabulated radial axis, where `T` and `v` are frozen at
+their rim values — an effectively infinite fireball. Added 2026-09-02 with `_check_time_window`;
+NO `maxlog`: both are once-per-RUN diagnostics, and `maxlog` is keyed by source location, so it
+would silence every call after the first in a campaign that drives the engine many times;
+measured on a table cut at r = 8 fm, 16.2 % of a 20 000-particle ensemble ended outside it, out to
+r = 15.2 fm. One pass over the FINAL positions only, so it costs nothing per step.
+"""
+function _warn_escaped_particles(positions::AbstractMatrix, xgrid)
+    N = size(positions, 2)
+    N == 0 && return nothing
+    rmax = Float64(last(xgrid))
+    rmax > 0 || return nothing
+    cnt = 0; rmaxseen = 0.0
+    @inbounds for i in 1:N
+        r2 = 0.0
+        for d in 1:size(positions, 1)
+            r2 += Float64(positions[d, i])^2
+        end
+        r = sqrt(r2)
+        r > rmax && (cnt += 1)
+        r > rmaxseen && (rmaxseen = r)
+    end
+    if cnt > 0
+        @warn "simulate_ensemble_bulk: particles finished OUTSIDE the tabulated radial axis — they were dragged at the rim T and v, i.e. in an infinite fireball" escaped = cnt of_N = N fraction = round(cnt / N; digits = 4) r_max_reached = round(rmaxseen; digits = 3) xgrid_end = rmax
+    end
+    return nothing
+end
+
+"""
+    _validate_transport_inputs(m, DsT)
+
+🔴 ADDED 2026-09-02. `tau_drag` returns 0.0 for any non-positive `m`, `T` or `DsT`, and every kernel
+reads `τ ≤ 0` as `η_D = κ = 0`. So a mistyped mass or a negative `D_sT` used to produce a
+FREE-STREAMING run indistinguishable from a Langevin run except by its numbers — measured, `m = 0`,
+`m = −1.5` and `DsT = −0.1` all left ⟨p²⟩ frozen to 1e-9, with nothing said. Both are now refused.
+
+`DsT == 0` stays legal and is NOT free streaming: it is the comoving limit (`p = m·γ·v`, every
+particle handed the fluid's momentum). Ask for free streaming with `collision_mode = :none`.
+"""
+function _validate_transport_inputs(m::Real, DsT::Real)
+    (isfinite(m) && m > 0) ||
+        error("simulate_ensemble_bulk: m = $m is not a positive mass. A non-positive mass makes tau_drag return 0, which every kernel reads as η_D = κ = 0 — the run would free-stream silently.")
+    (isfinite(DsT) && DsT >= 0) ||
+        error("simulate_ensemble_bulk: DsT = $DsT is negative. A negative D_sT makes tau_drag return 0, which every kernel reads as η_D = κ = 0 — the run would free-stream silently. For free streaming pass collision_mode = :none; for the comoving limit pass DsT = 0.")
+    return nothing
+end
 
 """
     _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
@@ -73,14 +174,25 @@ function simulate_ensemble_bulk_cpu(
     track_eta_s::Bool = false)
 
     # === Setup and Preallocation ===
+    # 🔴 2026-09-02: refuse the inputs that used to degrade to silent free streaming, and say so
+    # when the requested window leaves the background table (both are new; see the helpers above).
+    _validate_transport_inputs(m, DsT)
+    _check_time_window(initial_time, final_time, SpaceTimeGrid[2])
     total_time = final_time - initial_time
-    steps = floor(Int, total_time / Δt)
+    steps = _step_count(initial_time, final_time, Δt)     # ulp-tolerant; was a bare floor()
     steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
     # save_interval == total time can give round(save/Δt) = floor(total/Δt) + 1 ⇒ num_saves = 0 and a
     # crash in `range(..., length = 1)`; clamp so that the last snapshot is always taken.
     save_every = min(round(Int, save_interval / Δt), steps)
     save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
     num_saves = div(steps, save_every)
+
+    # `:none` = FREE STREAMING (2026-09-02). It exists because the tree had no way to ask for it:
+    # `DsT = 0` is the COMOVING limit (p = m·γ·v) and `momentum_langevin = false` is the same limit,
+    # while the only thing that actually free-streamed was a NEGATIVE DsT — by accident, through
+    # `tau_drag ≤ 0 ⇒ η_D = κ = 0`, which is now refused. Three call sites in the tree asked for
+    # "free streaming" and got the comoving limit; see README "The LIMITS and the INPUT CONTRACT".
+    free_stream = collision_mode === :none
 
     xgrid, tgrid = SpaceTimeGrid
 
@@ -228,7 +340,7 @@ function simulate_ensemble_bulk_cpu(
     tau_vals = Float64[0.0, 0.0]
     # RTA/BGK needs the CURRENT time, not the drag — see build_taun_current_spline.
     taun_vals = Float64[0.0, 0.0]
-    if momentum_langevin && DsT > 0.0
+    if momentum_langevin && DsT > 0.0 && !free_stream
         Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
         Tmax = max(float(maximum(TemperatureEvolutionn)), Tmin + eps(Float64))
         tau_Tmin, tau_invdT, tau_vals = build_tau_drag_spline(m, DsT;
@@ -255,21 +367,33 @@ function simulate_ensemble_bulk_cpu(
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
         # ⚡ randn!(ξ) in place — `ξ .= randn(pdim, N)` allocated a fresh N×pdim matrix EVERY step.
-        # Same RNG stream, same values, same order ⇒ bit-identical.
-        randn!(ξ)
+        # Same RNG stream, same values, same order ⇒ bit-identical. Skipped under `:none`, whose
+        # only consumer of randomness is the initial sampler.
+        free_stream || randn!(ξ)
 
-        # 1. Boost momenta to local rest frame
-        kernel_boost_to_rest_frame_cpu!(
-            momenta, positions, xgrid, tgrid,
-            VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-            V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+        # 1. Boost momenta to local rest frame.
+        # `collision_mode = :none` is FREE STREAMING (added 2026-09-02): no drag, no noise, and no
+        # frame change either — the lab momenta are constant, so the boost pair would be a round
+        # trip whose only effect is the γ = 1/√(1−v²+1e-10) contraction (≈1e-10 per step). Skipping
+        # it makes free streaming exact. Everything below is bit-identical when free_stream = false.
+        if !free_stream
+            kernel_boost_to_rest_frame_cpu!(
+                momenta, positions, xgrid, tgrid,
+                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+        end
 
-        # 1b. Longitudinal redshift of p_z in the LRF (p_z is invariant under the transverse boost)
+        # 1b. Longitudinal redshift of p_z in the LRF (p_z is invariant under the transverse boost,
+        # so it is the same operation with or without the boost pair — and dp_z/dτ = −p_z/τ IS the
+        # longitudinal free-streaming law, so it belongs in the :none path too).
         if bjorken_redshift
             kernel_bjorken_redshift_cpu!(momenta, 3, step, Δt, initial_time, N_particles)
         end
 
-        if !momentum_langevin || DsT == 0.0
+        if free_stream
+            # nothing to do: the momenta are already the (constant) lab momenta
+
+        elseif !momentum_langevin || DsT == 0.0
             kernel_set_to_fluid_velocity_cpu!(
                 momenta, positions,  xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
@@ -374,6 +498,10 @@ function simulate_ensemble_bulk_cpu(
         end
 
     end
+
+    # 🔴 2026-09-02: say so if particles finished outside the tabulated radial axis, where T and v
+    # are frozen at their rim values. One pass over the final positions; nothing per step.
+    _warn_escaped_particles(positions, xgrid)
 
     # === Final Data Packaging ===
     # The saved snapshots sit at t0 + k·save_every·Δt. When `steps` is not a multiple of `save_every`

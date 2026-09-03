@@ -9,6 +9,63 @@ export sample_particles_from_FONLL
 export append_thermal_pz, append_comoving_pz, append_pz, sample_pz_conditional_juttner, check_momentum_dims
 
 """
+    _cumtrapz(y, x) -> Vector{Float64}
+
+Cumulative trapezoid of `y` over the ACTUAL nodes `x`: `out[1] = 0`, `out[k] = ∫_{x₁}^{x_k} y dx`.
+
+🔴 FIXED 2026-09-02 — this replaces `cumsum(y) * mean(diff(x))` throughout the FONLL sampler.
+That form is a right-Riemann sum with ONE constant spacing, which is two separate errors: it is
+only first order even on a uniform grid, and on a non-uniform grid it is simply the wrong
+quadrature, so refinement cannot fix it. Measured against the exact ⟨p⟩ of `P(p) ∝ p·f(p)` with a
+FONLL-like `(1+(p/2.1)²)^(−3.1)` (`test_limits_and_contracts.jl` L6):
+
+| p grid over [0, 10] | old (Riemann) | new (trapezoid) |
+|---|---|---|
+| uniform, np = 100 | −3.14 % | +0.05 % |
+| uniform, np = 300 (production) | **−1.08 %** | **−0.02 %** |
+| uniform, np = 1200 | −0.29 % | −0.03 % |
+| log-spaced, 300 | **−44.6 %** | −0.01 % |
+
+⚠ THIS MOVES EVERY FONLL INITIAL CONDITION IN THE TREE by ≈ 1 % in ⟨p_T⟩ (the production grid is
+np = 300, pmax = 10). It is a bias on the IC, so it partly cancels in a ratio that carries the same
+IC top and bottom. Six of the ten `regression_corpus.jl` hashes were regenerated for it.
+"""
+function _cumtrapz(y::AbstractVector, x::AbstractVector)
+    n = length(y)
+    n == length(x) || error("_cumtrapz: length mismatch $(length(y)) vs $(length(x))")
+    out = zeros(Float64, n)
+    @inbounds for k in 2:n
+        out[k] = out[k-1] + 0.5 * (Float64(y[k]) + Float64(y[k-1])) * (Float64(x[k]) - Float64(x[k-1]))
+    end
+    return out
+end
+
+"Trapezoid quadrature weights on the nodes `x`: `∫f dx ≈ Σ w[i] f[i]`. Non-uniform safe."
+function _trapz_weights(x::AbstractVector)
+    n = length(x)
+    w = zeros(Float64, n)
+    n < 2 && return w
+    @inbounds for k in 1:n-1
+        h = 0.5 * (Float64(x[k+1]) - Float64(x[k]))
+        w[k] += h; w[k+1] += h
+    end
+    return w
+end
+
+"Normalise a cumulative array into a strictly increasing CDF on [0, 1] (or return `nothing`)."
+function _to_cdf!(c::Vector{Float64})
+    n = length(c)
+    (n >= 2 && isfinite(c[n]) && c[n] > 0) || return nothing
+    c[1] = 0.0
+    @inbounds for k in 2:n
+        c[k] = max(c[k], c[k-1] + eps(Float64))
+    end
+    c ./= c[n]
+    c[n] = 1.0
+    return c
+end
+
+"""
     sample_particles_from_FONLL(r_grid, p_grid, f, N; cartesian_spatial_sampling=false) -> (x, p)
 
 Draw `N` particles from a tabulated initial phase-space density `f[p_index, r_index]` (an
@@ -39,8 +96,13 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
         end
     end
 
-    dr = mean(diff(collect(r_grid)))
-    dp = mean(diff(collect(p_grid)))
+    # 🔴 2026-09-02: every quadrature below is a TRAPEZOID ON THE ACTUAL NODES (`_cumtrapz` /
+    # `_trapz_weights`). It used to be `cumsum(·) * mean(diff(grid))`, a right-Riemann sum on an
+    # assumed-uniform grid — first order where the grid IS uniform and simply wrong where it is not.
+    # See the `_cumtrapz` docstring for the measured table.
+    r_nodes = collect(Float64, r_grid)
+    p_nodes = collect(Float64, p_grid)
+    wp = _trapz_weights(p_nodes)          # ∫dp weights, used for every marginal over p
 
     # --- Precompute conditional CDFs for p|r (needed by both sampling modes) ---
     # Build P(p|r) ∝ p * f(r,p) for each r
@@ -48,17 +110,11 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
     inverse_cdf_p_given_r = Vector{Any}(undef, Nr)
     for i in 1:Nr
         p_pdf = P_p_given_r[:, i]
-        if sum(p_pdf) > 0
-            cdf_p = cumsum(p_pdf) * dp
-            cdf_p[1] = 0.0
-            for k in 2:length(cdf_p)
-                cdf_p[k] = max(cdf_p[k], cdf_p[k-1] + eps(Float64))
-            end
-            cdf_p ./= cdf_p[end]
-            cdf_p[end] = 1.0
-            inverse_cdf_p_given_r[i] = LinearInterpolation(cdf_p, p_grid, extrapolation_bc=Flat())
-        else
+        cdf_p = _to_cdf!(_cumtrapz(p_pdf, p_nodes))
+        if cdf_p === nothing
             inverse_cdf_p_given_r[i] = _ -> 0.0
+        else
+            inverse_cdf_p_given_r[i] = LinearInterpolation(cdf_p, p_nodes, extrapolation_bc=Flat())
         end
     end
 
@@ -73,11 +129,11 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
 
         rmax = Float64(last(r_grid))
 
-        # Marginal spatial density on radial grid: n_spatial(r) = ∫ p f(r,p) dp
-        f_spatial = vec(sum(P_p_given_r, dims=1)) * dp   # length Nr
+        # Marginal spatial density on radial grid: n_spatial(r) = ∫ p f(r,p) dp  (trapezoid in p)
+        f_spatial = vec(P_p_given_r' * wp)               # length Nr
 
         # Interpolate onto arbitrary r
-        r_grid_vec = collect(Float64, r_grid)
+        r_grid_vec = r_nodes
         f_spatial_interp = LinearInterpolation(r_grid_vec, f_spatial, extrapolation_bc=0.0)
 
         # Envelope for rejection: maximum of n_spatial(r) over the grid
@@ -123,25 +179,13 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
         # =====================================================================
         P_rp = @. r_grid' .* p_grid .* f  # shape (Np, Nr)
 
-        # total normalization
-        Z = sum(P_rp) * dr * dp
-        if Z == 0
-            error("Distribution normalization is zero.")
-        end
-        P_rp ./= Z
-
-        # Marginal PDF for r
-        P_r = sum(P_rp, dims=1)[:] * dp  # integrate over p
-        cdf_r = cumsum(P_r) * dr
-        if !isempty(cdf_r)
-            cdf_r[1] = 0.0
-            for i in 2:length(cdf_r)
-                cdf_r[i] = max(cdf_r[i], cdf_r[i-1] + eps(Float64))
-            end
-            cdf_r ./= cdf_r[end]
-            cdf_r[end] = 1.0
-        end
-        inverse_cdf_r = LinearInterpolation(cdf_r, r_grid, extrapolation_bc=Flat())
+        # Marginal PDF for r: integrate over p with the trapezoid weights, then a cumulative
+        # trapezoid over the r nodes. (The overall normalisation cancels in `_to_cdf!`, so the
+        # separate Z is gone; the zero-distribution guard it carried is kept below.)
+        P_r = vec(P_rp' * wp)
+        cdf_r = _to_cdf!(_cumtrapz(P_r, r_nodes))
+        cdf_r === nothing && error("Distribution normalization is zero.")
+        inverse_cdf_r = LinearInterpolation(cdf_r, r_nodes, extrapolation_bc=Flat())
 
         for i in 1:N_samples
             # Sample r, φ

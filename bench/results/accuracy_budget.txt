@@ -1,0 +1,77 @@
+# bench_accuracy.jl — run 2026-09-02 on ruwen-MS-7D75 (RTX 5070, Julia 1.12.6), LangevInMedium 0.2.3.
+# ACCURACY, not speed: every number is a systematic error against a closed form or a quadrature,
+# so machine load cannot move it. Re-run with:
+#   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_accuracy.jl
+# NOTE: the (A) rows share one seeded IC, so read them as a slope — see the note in the script.
+# Block (D) is POST-FIX: the RTA per-step probability is -expm1(-dt/tau_n) as of 0.2.3, and the
+# table carries the pre-fix numbers alongside so the removal of the Δt trend is visible.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+LangevInMedium — Δt accuracy budget   (2026-09-02 21:55, Julia 1.12.6)
+bath T = 0.3 GeV, m = 1.5 GeV, D_sT = 0.11634  ⇒  η_D = 2.6136 fm⁻¹, τ_drag = 0.3826 fm
+production runs use Δt ≈ 1e-3…5e-3 fm, i.e. ηΔt ≈ 0.00261…0.0131
+
+── (A) stationary ⟨p²⟩ vs the exact Jüttner moment ──
+  relativistic, 2 rows   ref ⟨p²⟩ = 1.29000 GeV²,  SEM 0.059 %
+    ηΔt       0.160    0.080    0.040    0.020    0.010
+    bias%    -2.249   -1.006   -0.459   -0.218   -0.022
+  PASS (A) relativistic, 2 rows: bias is one-signed and scales as (ηΔt)^1.56  ⇒  |bias| ≈ 52.68 %·(ηΔt)^1.56
+    ⇒ at production ηΔt = 0.00261 this extrapolates to 0.00486 %
+
+  relativistic, 3 rows   ref ⟨p²⟩ = 2.10850 GeV²,  SEM 0.059 %
+    ηΔt       0.160    0.080    0.040    0.020    0.010
+    bias%    -2.161   -1.148   -0.584   -0.305   -0.164
+  PASS (A) relativistic, 3 rows: bias is one-signed and scales as (ηΔt)^0.94  ⇒  |bias| ≈ 12.00 %·(ηΔt)^0.94
+    ⇒ at production ηΔt = 0.00261 this extrapolates to 0.04615 %
+
+  GALILEAN CONTROL, 2 rows   ref ⟨p²⟩ = 0.90000 GeV²,  SEM 0.059 %
+    ηΔt       0.160    0.080    0.040    0.020    0.010
+    bias%     0.092    0.116    0.093    0.033    0.068
+  PASS (A) GALILEAN CONTROL, 2 rows: exact at every Δt (all 5 within 3 SEM = 0.177 %) — the measurement itself is unbiased
+
+── (B) realised D_s from the MSD slope vs D_s = D_sT/T ──
+  D_s reference = 0.07652 fm   (2 spatial rows, 3 momentum rows)
+    ηΔt       0.160    0.080    0.040    0.020    0.010
+    bias%    -0.815    0.312   -0.065   -0.144    0.030
+  PASS (B) realised D_s within 2 % at the smallest step (ηΔt = 0.010)
+    fitted |bias| ≲ 4.57 %·(ηΔt)^1.07  (noise-limited; see the note)
+
+── (C) realised ℓ=1 (diffusion-current) rate vs λ₁·η_D ──
+  λ₁ = K₂/K₃(z = 5.00) = 0.64027;  fitted-rate noise floor ≈ ±3.79 %
+    ηΔt            0.160    0.080    0.040    0.020    0.010
+    rate/η_D      0.5205   0.6478   0.6640   0.6365   0.6134
+    vs λ₁ (%)     -18.70     1.18     3.71    -0.59    -4.20
+  PASS (C) the ℓ=1 rate is λ₁·η_D at the smallest step, within the 11.4 % noise floor
+
+── (D) RTA/BGK: the realised rate is 1/τ_n at any step size ──
+  τ_n = 0.59759 fm.  A BGK step that re-draws with probability p per Δt realises
+  a rate −ln(1 − p)/Δt, so the per-step probability must be p = 1 − e^{−Δt/τ_n} for that
+  to be 1/τ_n. It was the LINEARISED Δt/τ_n until 2026-09-02, which relaxed the ensemble
+  by −ln(1 − Δt/τ_n)/(Δt/τ_n) too fast — 1.0517 at Δt/τ_n = 0.084, 1.2198 at 0.33.
+    Δt        Δt/τ_n     measured/nominal    OLD linearised law    was measured
+    0.0020    0.0033             0.9988                1.0017         1.0013
+    0.0100    0.0167             0.9993                1.0085         1.0069
+    0.0500    0.0837             1.0038                1.0443         1.0517
+    0.1000    0.1673             0.9981                1.0944         1.0936
+    0.2000    0.3347             0.9967                1.2175         1.2198
+  PASS (D) the realised BGK rate is 1/τ_n at every step size, with no Δt trend
+    ⇒ the step-size ceiling the RTA used to carry is gone: `−expm1(−Δt/τ_n)` is the
+      exact per-step probability, so Δt is now limited by the STREAMING error only.
+
+
+[PASS] bench_accuracy: 6 gates

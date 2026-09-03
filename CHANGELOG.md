@@ -3,6 +3,145 @@
 Entries marked ⚠ changed the default dynamics or the meaning of a label: outputs produced
 before them are not comparable to outputs produced after.
 
+## 0.2.3 — 2026-09-02  (the limits and the input contract: seven defects, all fixed)
+
+⚠ **THIS RELEASE CHANGES THE DEFAULT DYNAMICS.** Four of the ten `regression_corpus.jl` hashes were
+regenerated. Read "What regenerates" below before comparing anything to a pre-0.2.3 product.
+
+### The question that found them
+0.2.1 audited every function and 0.2.2 the p_z frame. Neither asked what the engine does when it is
+asked for a *limit* (D_sT → 0, glued to the flow, free streaming) or handed an input outside its
+assumptions (a table that ends before `final_time`, a non-uniform density grid, `m ≤ 0`). Seven
+defects came out of that question in one pass. Each is now gated in the new
+`test/test_limits_and_contracts.jl` (41 assertions, ≈ 34 s, in the `LIM_FAST` set) with its pre-fix
+measurement in the comment, so a regression has something specific to fail against. Full account and
+tables in README → "The LIMITS and the INPUT CONTRACT".
+
+### Fixed — moves numbers
+1. 🔴🔴 **`sample_particles_from_FONLL` assumed a UNIFORM grid and was first order even there.** Its
+   inverse CDF was `cumsum(w) * mean(diff(grid))` — a right-Riemann sum with one constant spacing.
+   Now a cumulative trapezoid on the actual nodes (`Utils._cumtrapz`, `_trapz_weights`, `_to_cdf!`),
+   applied to all three quadratures it does: `P(p|r)`, the radial marginal, and the Cartesian
+   branch's spatial density. Measured against the exact ⟨p⟩ of `P(p) ∝ p·f(p)`, FONLL-like shape,
+   12 independent seeds: **production np = 300, −1.08 % → −0.08 ± 0.05 %**; np = 100, −3.14 % →
+   −0.01 %; log-spaced 300, **−44.6 % → −0.07 %**. Two errors were in there — on a uniform grid the
+   old rule converged (O(Δp)); on a non-uniform grid it was the wrong quadrature and refinement did
+   not help (−25.7 % at 160 points, still −24.7 % at 1600). The residual is now
+   grid-INDEPENDENT, which is the signature that the quadrature is right.
+2. **The RTA/BGK per-step collision probability is `−expm1(−Δt·dil/τ_n)`**, not `Δt/τ_n`. The
+   linearisation made the survival probability `1 − Δt/τ_n` and the realised rate
+   `−ln(1 − Δt/τ_n)/Δt`: always too fast. Ratio to the nominal `1/τ_n` at
+   Δt = 0.002/0.01/0.05/0.1/0.2 went **1.0013 / 1.0069 / 1.0517 / 1.0936 / 1.2198 →
+   1.0049 / 1.0070 / 0.9970 / 1.0014 / 1.0006** — the Δt-dependence is gone, and with it the
+   step-size ceiling the RTA carried.
+3. **`_step_count` replaces `floor(Int, (tf − t0)/Δt)`.** `1.4 − 0.4 = 0.9999999999999999`, so the
+   quotient lands a fraction of an ulp below the integer and a whole step was lost — and that also
+   broke `steps % save_every == 0`, after which `_snapshot_times` dropped the entire trailing save
+   interval and blamed `save_interval`. Measured worst case: t0 = 0.4, tf = 1.4, Δt = 10⁻³,
+   save 0.5 kept **501 of 1000 steps**. Snaps within 64 ulps; gated in both directions so a genuine
+   shortfall is not swallowed.
+
+### Fixed — no production run affected
+4. **The glued-to-the-flow limit forgot the p_z row.** `kernel_set_to_fluid_velocity_*` wrote rows
+   1–2 only on both backends, so with `momentum_dimensions = 3` row 3 kept the IC's value and still
+   entered `E`: ⟨v_x⟩ = **0.4645 vs the fluid's 0.5000, −7.10 %** (CPU and GPU to six digits),
+   ⟨p_z*²⟩ = 0.596 GeV² at the end. Both kernels now zero every row beyond the spatial ones;
+   measured after, **0.500000 and ⟨p_z*²⟩ = 0**. The old gate used a zero-flow box, where the
+   deficit is identically zero.
+5. **`collision_mode = :none` — free streaming, at last.** `DsT = 0` is the COLD COMOVING limit
+   (`p = m·γ·v`, measured 0.86603 exactly), `DsT → 0⁺` is the THERMAL comoving limit (1.0350, 19.5 %
+   higher), and free streaming was reachable only through a NEGATIVE `DsT`, by accident. Four places
+   in the tree called `DsT = 0` "free streaming" — this README, `CLAUDE.md`,
+   `Projects/SpectraDiagnostic/plot_dst_sweep.jl`, and `AttractorPaper5/Code/run_langevin_kompost.jl`,
+   which *ran* it and labelled the curve. `:none` skips drag, noise and the boost pair, so the
+   momenta are exactly constant; the Bjorken redshift still applies, being the longitudinal
+   free-streaming law. All four call sites corrected.
+6. **`m ≤ 0` and `DsT < 0` are refused.** They used to degrade silently to free streaming (⟨p²⟩
+   frozen to 1e-9, nothing said) because `tau_drag` returns 0 for any non-positive argument and
+   every kernel reads `τ ≤ 0` as `η_D = κ = 0`. `DsT == 0` stays legal — it is a limit, not an error.
+7. **The background window is checked.** Past `tgrid[end]` the medium froze at its last slice and
+   the run continued in silence; particles past `xgrid[end]` were dragged at the rim `T` and `v`
+   forever (measured: **16.2 %** of an ensemble left a table cut at r = 8 fm, out to r = 15.2 fm).
+   The clamping is kept — it is occasionally deliberate — and announced by two once-per-run
+   warnings. Neither carries `maxlog`, deliberately: `maxlog` is keyed by source location, so it
+   would silence every call after the first in a campaign, which is the silence they exist to break.
+
+### Checked and found correct (pinned, not changed)
+`reflecting_boundary` preserves the uniform disc measure (⟨r⟩, ⟨r²⟩ within 0.11 % over 20 fm, no
+escapes). `track_eta_s` is an exact passenger (momenta AND positions bit-identical with it on and
+off, max |Δ| = **0.000e+00**). The 0.2.1 hot-loop rewrite has held: **0 bytes per particle-step**
+across CPU × N ∈ {2·10⁴, 10⁵} × pdim ∈ {2, 3} × {`:langevin`, `:rta`}.
+
+### Added — `bench/bench_accuracy.jl`, the Δt accuracy budget
+`bench_physics_gates.jl` block (d) pins the propagator's Δt bias inside a 1.5 % budget and says in
+its own comment that it is "a budget gate, not a scaling measurement": at N = 1.5·10⁵ its SEM is
+0.37 % and its three readings do not resolve a slope. So the tree knew the bias existed and had
+never measured its ORDER or COEFFICIENT. The new bench averages each stationary quantity over TIME
+as well as particles (N_eff ≈ N·NTAU at the same cost) and fits log|bias| against log Δt:
+**|⟨p²⟩ bias| ≈ 12.0 %·(ηΔt)^0.94**, i.e. 0.046 % at production ηΔt = 2.6·10⁻³, with the Galilean
+branch as an unbiased-measurement CONTROL (5/5 within 3 SEM); D_s unbiased to ≲1 % for ηΔt ≤ 0.08;
+and the RTA Δt ceilings. It measures accuracy, not speed, so unlike `bench_throughput.jl` it is
+valid on a loaded machine. Results in `bench/results/accuracy_budget.txt`.
+
+### Added — `examples/`, five runnable setups
+The README had one six-line snippet and there are ~65 call sites in `Projects/`, none of which is
+readable as an introduction. `examples/` now holds a uniform bath where every quantity has a closed
+form (01), a heavy-ion run with a FONLL IC and a freeze-out spectrum (02), the four limits side by
+side (03 — the one to read: it is the example the `DsT = 0` confusion above would not have survived),
+the longitudinal sector and the dN/dy kernel (04), and the GPU freeze-out latch (05). Each prints
+measured numbers next to what they should be and writes a figure to `examples/figures/`.
+
+Two things surfaced while writing them, both now documented in `example_common.jl` rather than
+merely worked around: flooring a synthetic background at `Tfo` itself puts the whole outside region
+exactly ON the freeze-out isotherm, so a `<` and a `<=` test disagree and two examples reported
+⟨τ_fo⟩ of 2.5 fm and 8.2 fm for the same physics; and taking `DsT → 0⁺` at 10⁻⁹ pushes `η_eff·Δt`
+to ≈ 10⁴, where the exact-OU step degenerates into a Gaussian redraw at frozen `E` — close to the
+Jüttner but not it (≈ 2 % in ⟨E*⟩), so the limit has to be taken at a resolved step.
+
+### Added — `bench/bench_semianalytic.jl`, closed forms with plots
+`Projects/SemiAnalyticBenchmarks/bench_langevin_ou.jl` (B10) already pins the Galilean ⟨p²⟩
+relaxation, the 1/√N rate and the momentum autocorrelation, in the momentum sector only. The new
+package-level bench takes the five it does not, 9 gates, all passing:
+- **(S1)** the full Uhlenbeck–Ornstein phase-space covariance — `σ_pp`, `σ_xx` and the
+  cross-correlation `σ_xp = (T/η)(1 − e^{−ηt})`, which nothing in the tree tested and which is where
+  an operator-split error between the momentum and position updates would show. Worst deviations
+  0.40 % / 0.21 % / 0.54 % across the ballistic→diffusive crossover.
+- **(S2)** the exact BGK moment law `⟨g⟩(t) = e^{−t/τ_n}⟨g⟩₀ + (1−e^{−t/τ_n})⟨g⟩_eq` — the whole
+  curve, not its rate — at Δt spanning 100×. Worst 0.5 %, and it is a gate on the `−expm1` fix
+  above: with the linearised probability the Δt = 0.2 curve was simply the wrong exponential.
+- **(S3)** free streaming with the Bjorken redshift: `⟨p_z*²⟩ ∝ 1/τ²` telescopes to **2.9e-13**, and
+  `⟨x_⊥(τ)⟩` converges to the per-particle closed form at measured order **1.00** (the scheme is
+  first order by construction — the redshift reads the start of the step, the position update the end).
+- **(S4)** the equilibrium SHAPE by two-sample KS against an independent rejection sample:
+  0.00187 (2 rows) and 0.00394 (3 rows) against a 95 % critical value of 0.00430.
+- **(S5)** the comoving blast wave checked PER PARTICLE. The residual is the one-step lag between
+  setting `p = m·γ(r)v(r)` and streaming the position, and it halves with Δt at measured order
+  **1.00** — 5.3e-4 → 6.6e-5 GeV over Δt = 4·10⁻³ → 5·10⁻⁴.
+
+### What regenerates
+The corpus says it precisely: **6 of the 10 CPU hashes reproduced** and the 4 that moved are exactly
+`sampler_cart`, `sampler_polar`, `radial_dim1` (the trapezoid) and `rta_flow` (the exponential).
+Nothing leaked into the injected-particle (`x_init`/`p_init`) Langevin path.
+
+| fix | reaches | who |
+|---|---|---|
+| FONLL trapezoid | every run that lets the engine sample (`heavy_quark_density`, no `x_init`) | **LP1, O+O, AM, KA — every FONLL IC in the tree**; the IC's ⟨p_T⟩ moves ≈ +1 % |
+| RTA `−expm1` | `collision_mode = :rta` only | LP1's two RTA cells; < 0.1 % at production Δt |
+| step count | windows whose `(tf − t0)/Δt` was mis-floored | **AttractorHydro's portrait** (0.4 → 13.0 at Δt = 10⁻⁴): 125 999 → 126 000 steps, 1260 → 1261 snapshots. LP1's 12.6 fm and O+O's 7.6 fm divide exactly and are untouched |
+| the other four | nothing in production | no driver passes `momentum_langevin = false`, `m ≤ 0` or `DsT < 0`; `:none` is new |
+
+⚠ Committing this bumps the submodule commit, which stale-flags every product that recorded the
+old one — as the 2026-08-16 Galilean commit did. Unlike that one it is NOT attestable as a no-op:
+three of the fixes move numbers, and the products above genuinely need regenerating.
+
+### Verification of this release
+Julia 1.12.6, RTX 5070, 2026-09-02. `test_limits_and_contracts.jl` 41/41; full `runtests.jl` green
+(the only Broken entries the two deliberate expected-fail gates U2 and F5); `bench_physics_gates.jl`
+18/18; `programme.jl check` → `engine` PASS; corpus regenerated with the four-line provenance note
+in `regression_corpus_baseline.txt`. **`bench_throughput.jl` was NOT re-run** — four other Julia
+jobs from concurrent sessions were on the machine at load average 14.5 (0.2.1 refused at 3.5), and
+a wall-clock table taken under that and written to a dated results file is worse than no table.
+
 ## 0.2.2 — 2026-09-01  (the p_z frame: a gate that has z, an initialisation switch, and η_s)
 
 **The CPU default dynamics are bit-identical to 0.2.1** — all ten `regression_corpus.jl` hashes

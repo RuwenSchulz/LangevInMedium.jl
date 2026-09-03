@@ -1,0 +1,55 @@
+# bench_semianalytic.jl — run 2026-09-03, LangevInMedium 0.2.3 (Julia 1.12.6, RTX 5070).
+# The engine against CLOSED FORMS. Every target here is analytic, so machine load cannot move a
+# number in this file (it was taken under load average ~40 from concurrent sessions, deliberately).
+# Figures: bench/results/figures/semianalytic_*.png
+#   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_semianalytic.jl
+
+
+
+
+
+
+
+==============================================================================================
+LangevInMedium — semi-analytic benchmarks   (m = 1.5 GeV, T = 0.3 GeV, D_sT = 0.11634)
+η_D = 2.6136 fm⁻¹, τ_drag = 0.3826 fm
+==============================================================================================
+
+── (S1) Uhlenbeck–Ornstein phase-space covariance (Galilean, exact) ──
+  σ_pp: worst |meas/exact − 1| = 0.0040  (stationary mT = 0.45000 GeV²; SEM 0.0016)
+  σ_xx: worst |meas/exact − 1| = 0.0021  over ηt ∈ [0.24, 5.8] (ballistic → diffusive)
+  σ_xp: worst |meas/exact − 1| = 0.0054  ← the cross-correlation nothing else tests
+  PASS (S1) σ_pp = mT at every t
+  PASS (S1) σ_xx = 2(T/m)/η²·(ηt − 1 + e^{−ηt}) across the crossover
+  PASS (S1) σ_xp = (T/η)(1 − e^{−ηt})
+
+── (S2) exact BGK moment law ⟨g⟩(t) = e^{−t/τ_n}⟨g⟩₀ + (1−e^{−t/τ_n})⟨g⟩_eq ──
+    Δt      Δt/τ_n    worst |⟨p²⟩ meas/exact − 1|   worst |⟨p_x⟩ meas/exact − 1|
+   0.0020    0.0033                     0.0025                        0.0073
+   0.0200    0.0335                     0.0048                        0.0333
+   0.1000    0.1673                     0.0041                        0.0064
+   0.2000    0.3347                     0.0030                        0.0053
+  PASS (S2) the whole ⟨p²⟩(t) curve follows the exact BGK law at every Δt (3 %)
+
+── (S3) free streaming + Bjorken redshift: closed form and convergence order ──
+  ⟨x_⊥(τ)⟩ vs the per-particle closed form: max |Δx| = 0.0001745, 0.0000875, 0.0000438, 0.0000219 fm
+      at Δt = 0.008, 0.004, 0.002, 0.001  ⇒  convergence order 1.00 (the scheme is first order by construction)
+  PASS (S3) x_⊥(τ) converges to the closed form at first order (measured 1.00)
+  ⟨p_z*²⟩(τ) vs the exact (τ₀/τ)²: worst |meas/exact − 1| = 2.893e-13 over τ ∈ [0.4, 6.0]
+  PASS (S3) ⟨p_z*²⟩ ∝ 1/τ² telescopes exactly under free streaming
+
+── (S4) equilibrium shape: |p| distribution vs the exact Jüttner (KS) ──
+  2 momentum rows: KS = 0.00187   (95 % critical 0.00430 at N = 200000)  consistent
+  PASS (S4) 2 rows: |p| distribution is the exact Jüttner (KS 0.00187 < 0.00860)
+  3 momentum rows: KS = 0.00394   (95 % critical 0.00430 at N = 200000)  consistent
+  PASS (S4) 3 rows: |p| distribution is the exact Jüttner (KS 0.00394 < 0.00860)
+
+── (S5) comoving blast wave: p = m·γ(r)·v(r), per particle ──
+  comoving: worst per-particle |p_meas − m·γ(r)v(r)| = 0.0005270, 0.0002636, 0.0001318, 0.0000659 GeV
+      at Δt = 0.004, 0.002, 0.001, 0.0005  ⇒  order 1.00 (the one-step lag; it is NOT a modelling error)
+  ⟨|p|⟩ comoving = 0.78714 GeV   vs free streaming (:none) = 0.92435 GeV   (ratio 0.852)
+  PASS (S5) the glued momentum is m·γ(r)·v(r) up to the O(Δt) streaming lag (order 1.00)
+
+  figures → /home/ruwen/Desktop/phd-git/Julia/LangevInMedium.jl/bench/results/figures
+
+[PASS] bench_semianalytic: 9 gates
