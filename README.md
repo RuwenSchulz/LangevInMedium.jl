@@ -500,6 +500,5 @@ bench/                    bench_common.jl, bench_semianalytic.jl (closed forms +
 
 ---
 
-<sub>MIT licensed. The engine behind the LangevinPaper1 / O+O / AttractorMomentum /
-AttractorHydro / KineticAttractor studies. Changes that move a number are recorded in
+<sub>MIT licensed. Changes that move a number are recorded in
 [`CHANGELOG.md`](CHANGELOG.md) with the measurement that found them.</sub>
