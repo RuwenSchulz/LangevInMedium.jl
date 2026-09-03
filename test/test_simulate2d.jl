@@ -17,14 +17,22 @@
 # measured, and it CONVERGES under refinement. So the assertion is on ensemble moments at a
 # tolerance set by that, plus a convergence check -- never bit-identity, which is not available.
 #
-# Run: julia --project=Julia/LangevInMedium.jl Julia/LangevInMedium.jl/test/test_simulate2d.jl
+# Run: julia --project=Julia Julia/LangevInMedium.jl/test/test_simulate2d.jl
 # =================================================================================================
 
 using Test, Printf, Random
 
-const _HERE = @__DIR__
-include(joinpath(_HERE, "..", "src", "LangevInMedium.jl"))
-using .LangevInMedium
+# CUDA is optional: the GPU end-to-end testset below is skipped without a device, and says so.
+const HAVE_CUDA = try
+    @eval using CUDA
+    Base.invokelatest(() -> CUDA.functional())
+catch
+    false
+end
+
+# `using` the package rather than including the source: this file needs CUDA for the GPU
+# testset, and CUDA lives in the Julia project environment.
+using LangevInMedium
 
 const M    = 1.5
 const DsT  = 0.2
@@ -61,9 +69,9 @@ function ic(n; seed = 4242)
     return x, p
 end
 
-function run_case(grid, Tfield, Vfield, x0, p0; kw...)
+function run_case(grid, Tfield, Vfield, x0, p0; backend = CPUBackend(), kw...)
     Random.seed!(20260903)
-    return simulate_ensemble_bulk(CPUBackend(), nothing, nothing, nothing,
+    return simulate_ensemble_bulk(backend, nothing, nothing, nothing,
         Tfield, Vfield, grid;
         N_particles = size(x0, 2), Δt = 0.004,
         initial_time = TAU0, final_time = TAUF, save_interval = TAUF - TAU0,
@@ -119,7 +127,37 @@ end
         @test abs(rad.p2 - ell.p2)/rad.p2 > 0.01
     end
 
-    @testset "3. the input contract is enforced" begin
+    @testset "3. GPU end to end on a 2-D background" begin
+        if !HAVE_CUDA
+            @warn "CUDA not functional — the 2-D GPU driver run is SKIPPED (kernel-level parity is still covered by P10 in test_kernel_parity.jl)"
+        else
+            rs, ts, T2, V2, xs, ys, T3, UX, UY = backgrounds()
+            # a flow with a real m=2 component, so the run exercises the vector path rather than
+            # the radial special case
+            EX = [UX[i,j,k]*1.25 for i in eachindex(xs), j in eachindex(ys), k in eachindex(ts)]
+            EY = [UY[i,j,k]*0.75 for i in eachindex(xs), j in eachindex(ys), k in eachindex(ts)]
+            x0, p0 = ic(8000)
+            c = run_case((xs, ys, ts), T3, (EX, EY), x0, p0)
+            g = run_case((xs, ys, ts), T3, (EX, EY), x0, p0; backend = GPUBackend())
+
+            # snapshot 1 is the lab-frame boost of the SEEDED state: fully deterministic, so it
+            # must agree to round-off on both backends. This is the part that would expose a
+            # wrong index, a wrong direction or an untransferred table.
+            d1 = maximum(abs.(Array(g[2][1]) .- c[2][1]))
+            @printf("  snapshot 1 (deterministic): max |gpu - cpu| = %.3e\n", d1)
+            @test d1 < 1e-12
+
+            # the evolved state can only be compared statistically -- CURAND is unseedable, so the
+            # two runs draw DIFFERENT noise. The corpus uses the same 3%% convention.
+            mc, mg = moments(c), moments(g)
+            rp = abs(mc.p2 - mg.p2)/mc.p2; rx = abs(mc.x2 - mg.x2)/mc.x2
+            @printf("  evolved: <p^2> cpu %.5f gpu %.5f (%.2f%%)   <x^2> cpu %.4f gpu %.4f (%.2f%%)\n",
+                    mc.p2, mg.p2, 100rp, mc.x2, mg.x2, 100rx)
+            @test rp < 0.03 && rx < 0.03
+        end
+    end
+
+    @testset "4. the input contract is enforced" begin
         rs, ts, T2, V2, xs, ys, T3, UX, UY = backgrounds()
         x0, p0 = ic(200)
         # 3-element grid but a 2-D temperature table

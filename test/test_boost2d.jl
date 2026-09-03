@@ -32,14 +32,15 @@
 #   4. GUARDS. `radial_mode` (a p_r-only momentum row) cannot represent a boost along a non-radial
 #      flow and must refuse rather than quietly project.
 #
-# Run: julia --project=Julia/LangevInMedium.jl Julia/LangevInMedium.jl/test/test_boost2d.jl
+# Run: julia --project=Julia Julia/LangevInMedium.jl/test/test_boost2d.jl
 # =================================================================================================
 
 using Test, Printf, Random
 
-const _HERE = @__DIR__
-include(joinpath(_HERE, "..", "src", "LangevInMedium.jl"))
-using .LangevInMedium.KernelsCPU: kernel_boost_to_rest_frame_cpu!, kernel_boost_to_lab_frame_cpu!
+# `using` the package, not the source, so every gate in this directory runs in one
+# environment (the same one the corpus and the parity gate use).
+using LangevInMedium
+using LangevInMedium.KernelsCPU: kernel_boost_to_rest_frame_cpu!, kernel_boost_to_lab_frame_cpu!
 
 const M  = 1.5
 const T0 = 0.0
