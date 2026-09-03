@@ -24,16 +24,17 @@
 #      particles left the grid.
 #   4. DEGENERATE AXES. A length-1 axis must contribute its node value, not a division by zero.
 #
-# Run: julia --project=Julia/LangevInMedium.jl Julia/LangevInMedium.jl/test/test_background3d.jl
+# Run: julia --project=Julia Julia/LangevInMedium.jl/test/test_background3d.jl
 # =================================================================================================
 
 using Test, Printf, Random
 
-const _HERE = @__DIR__
-include(joinpath(_HERE, "..", "src", "LangevInMedium.jl"))
+# `using` the package, not the source, so every gate in this directory runs in one
+# environment (the same one the corpus and the parity gate use).
+using LangevInMedium
 # KernelsCPU is included by the package but not `using`-ed into its namespace, so the
 # interpolators are reached through the submodule directly.
-using .LangevInMedium.KernelsCPU: interpolate_2d_cpu, interpolate_3d_cpu
+using LangevInMedium.KernelsCPU: interpolate_2d_cpu, interpolate_3d_cpu
 
 @testset "3-D background lookup" begin
 

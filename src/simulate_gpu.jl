@@ -4,7 +4,8 @@ module SimulateGPU
 using ProgressMeter
 using ..KernelsGPU
 using ...Utils
-using ...KernelsCPU: interpolate_2d_cpu     # host-side T(r, τ0) lookup for the initial p_z draw
+using ...KernelsCPU: interpolate_2d_cpu, interpolate_3d_cpu   # host-side T lookups for the
+                                                              # initial p_z draw (radial / 2-D)
 using ...SimulateCPU: _snapshot_times, _step_count, _check_time_window, _warn_escaped_particles,
                       _validate_transport_inputs
 using CUDA
@@ -277,9 +278,17 @@ function simulate_ensemble_bulk_gpu(
         track_eta_s && freezeout_capture &&
             error("simulate_ensemble_bulk_gpu: track_eta_s and freezeout_capture cannot be combined (the capture path returns the crossing state, not histories).")
         if size(moment, 1) < pdim
+            # On a 2-D background the local temperature is not a function of the radius, so the
+            # p_z completion is handed the particle's own (x, y). Mirrors the CPU driver; without
+            # it the radial closure indexes a 3-D table with two indices and throws.
             moment = append_pz(pz_init, moment, position, m,
-                r -> interpolate_2d_cpu(xgridd, ttgrid, TemperatureEvolutionn, r, initial_time);
-                antithetic = antithetic_momenta && x_init === nothing)
+                ygrid === nothing ?
+                    (r -> interpolate_2d_cpu(xgridd, ttgrid, TemperatureEvolutionn, r, initial_time)) :
+                    (r -> error("unreachable: T_of_xy is supplied on a 2-D background"));
+                antithetic = antithetic_momenta && x_init === nothing,
+                T_of_xy = ygrid === nothing ? nothing :
+                    ((x, y) -> interpolate_3d_cpu(xgridd, ygridd, ttgrid,
+                                                  TemperatureEvolutionn, x, y, initial_time)))
         end
         size(moment, 1) == pdim || error("momentum rows $(size(moment, 1)) ≠ momentum_dimensions $pdim")
 
