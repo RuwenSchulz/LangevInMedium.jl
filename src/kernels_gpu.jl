@@ -54,6 +54,73 @@ const _eval_tau_n_spline_cuda = _eval_time_spline_cuda
 # table reads the edge value). Until 0.2.0 this clamped the cell INDEX but still extrapolated,
 # so T went negative (⇒ κ < 0 ⇒ √κ = NaN) and |v| exceeded 1 once particles left the grid; the
 # CPU had been fixed, the GPU had not. Degenerate cells (x1 == x0) are handled like the CPU.
+# Device-side axis lookup: the node below `q`, its neighbour (itself on a degenerate axis) and the
+# blend weight. TOP-LEVEL ON PURPOSE -- the CPU twin began as a closure inside the interpolator and
+# its local `i` then SHARED the enclosing function's `i`, so the third call silently overwrote the
+# x-index (the KA-PRD Fig. 3(d) closure-capture class). Same binary search as the 2-D lookup, so it
+# is index-identical to `searchsortedlast` on any sorted axis.
+@inline function _axis_cell_cuda(a, q)
+    n = length(a)
+    n == 1 && return (1, 1, 0.0)
+    qc = q < a[1] ? a[1] : (q > a[n] ? a[n] : q)
+    lo = 1; hi = n
+    while lo < hi
+        mid = (lo + hi + 1) >>> 1
+        if a[mid] <= qc
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    idx = lo < 1 ? 1 : (lo > n - 1 ? n - 1 : lo)
+    a0 = a[idx]; d = a[idx + 1] - a0
+    return (idx, idx + 1, CUDA.abs(d) < eps(Float64) ? 0.0 : (qc - a0) / d)
+end
+
+# Trilinear lookup on a tabulated (x, y, t) background -- the device twin of `interpolate_3d_cpu`,
+# and the (x,y,t) twin of `interpolate_2d_cuda`. Conventions (clamping, cell location, degenerate
+# axes) are deliberately identical to both, which is what makes the CPU/GPU parity test and the
+# reduction-to-radial test meaningful.
+@inline function interpolate_3d_cuda(x, y, t, values, xi, yi, ti)
+    i, ip, xd = _axis_cell_cuda(x, xi)
+    j, jp, yd = _axis_cell_cuda(y, yi)
+    k, kp, td = _axis_cell_cuda(t, ti)
+
+    @inbounds begin
+        c000 = values[i, j, k];   c100 = values[ip, j, k]
+        c010 = values[i, jp, k];  c110 = values[ip, jp, k]
+        c001 = values[i, j, kp];  c101 = values[ip, j, kp]
+        c011 = values[i, jp, kp]; c111 = values[ip, jp, kp]
+    end
+
+    c00 = c000 * (1 - xd) + c100 * xd
+    c10 = c010 * (1 - xd) + c110 * xd
+    c01 = c001 * (1 - xd) + c101 * xd
+    c11 = c011 * (1 - xd) + c111 * xd
+
+    c0 = c00 * (1 - yd) + c10 * yd
+    c1 = c01 * (1 - yd) + c11 * yd
+
+    return c0 * (1 - td) + c1 * td
+end
+
+# Read a background SCALAR (temperature, or a flow magnitude) at a particle: the shipped radial
+# table when `ygrid === nothing`, otherwise a genuine function of the transverse plane. The branch
+# is on a TYPE, so it is resolved at compile time and costs nothing on the device.
+@inline function _bg_scalar_cuda(xgrid, ygrid, tgrid, field, x, y, r, t)
+    return ygrid === nothing ? interpolate_2d_cuda(xgrid, tgrid, field, r, t) :
+                               interpolate_3d_cuda(xgrid, ygrid, tgrid, field, x, y, t)
+end
+
+@inline function _bg_flowmag_cuda(xgrid, ygrid, tgrid, Vfield, VxField, VyField, x, y, r, t)
+    if VxField === nothing
+        return interpolate_2d_cuda(xgrid, tgrid, Vfield, r, t)
+    end
+    vx = interpolate_3d_cuda(xgrid, ygrid, tgrid, VxField, x, y, t)
+    vy = interpolate_3d_cuda(xgrid, ygrid, tgrid, VyField, x, y, t)
+    return CUDA.sqrt(vx*vx + vy*vy)
+end
+
 @inline function interpolate_2d_cuda(x, y, values, xi, yi)
     xi = xi < x[1] ? x[1] : (xi > x[length(x)] ? x[length(x)] : xi)
     yi = yi < y[1] ? y[1] : (yi > y[length(y)] ? y[length(y)] : yi)
@@ -159,7 +226,11 @@ Boost every particle's momentum from the lab into the local fluid rest frame at 
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
     radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64,
-    relativistic::Bool = true      # false ⇒ Galilean p∥ −= m·v; see kernels_cpu.jl for the history
+    relativistic::Bool = true,     # false ⇒ Galilean p∥ −= m·v; see kernels_cpu.jl for the history
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path, untouched. ---
+    # These are the last positional arguments so every existing launch site is unaffected. The
+    # `=== nothing` branches below are TYPE checks, resolved at compile time on the device.
+    ygrid = nothing, VxField = nothing, VyField = nothing
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -176,22 +247,37 @@ Boost every particle's momentum from the lab into the local fluid rest frame at 
             return
         end
 
-        # --- local radial fluid velocity ---
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
-        # optional m=2 azimuthal modulation → elliptic flow v2 (use_v2=false ⇒ unchanged)
-        if use_v2 && size(positions, 1) >= 2
-            v2m = interpolate_2d_cuda(xgrid, tgrid, V2Evolution, r, t_now)
-            φ = atan(positions[2, i], positions[1, i])
-            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        # --- local fluid velocity: magnitude v and the unit vector it points along ---
+        local v::Float64, dirx::Float64, diry::Float64
+        if VxField !== nothing
+            vx = interpolate_3d_cuda(xgrid, ygrid, tgrid, VxField, positions[1, i], positions[2, i], t_now)
+            vy = interpolate_3d_cuda(xgrid, ygrid, tgrid, VyField, positions[1, i], positions[2, i], t_now)
+            v = CUDA.sqrt(vx*vx + vy*vy)
+            v < eps(Float64) && return       # no flow here, nothing to boost
+            dirx = vx / v; diry = vy / v
+        else
+            # --- local radial fluid velocity ---
+            v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
+            if use_v2 && size(positions, 1) >= 2
+                v2m = interpolate_2d_cuda(xgrid, tgrid, V2Evolution, r, t_now)
+                φ = atan(positions[2, i], positions[1, i])
+                v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+            end
+            # radial_mode carries ONE position row, so positions[2, .] is out of bounds
+            # there. It used to be unreachable because r-hat was formed inside the
+            # Cartesian branch; hoisting the direction to the top of the loop exposed it.
+            # The CPU read it under @inbounds and silently used a garbage value that
+            # radial mode never consumes; the GPU bounds-checked and threw.
+            dirx = positions[1, i] / r
+            diry = size(positions, 1) >= 2 ? positions[2, i] / r : 0.0
         end
         if !relativistic
             # Galilean: subtract the flow momentum m·v along r̂.
             if radial_mode
                 @inbounds momenta[1, i] -= m * v
             else
-                x = positions[1, i]; y = positions[2, i]
-                @inbounds momenta[1, i] -= m * v * (x / r)
-                @inbounds momenta[2, i] -= m * v * (y / r)
+                @inbounds momenta[1, i] -= m * v * dirx
+                @inbounds momenta[2, i] -= m * v * diry
             end
             return
         end
@@ -220,9 +306,8 @@ Boost every particle's momentum from the lab into the local fluid rest frame at 
             # 🟢 Cartesian mode (2D or 3D)
             # ==================================
             # Extract coordinates
-            x = positions[1, i]
-            y = positions[2, i]
-            rhatx, rhaty = x / r, y / r
+            # decompose along the FLOW direction (r-hat in the radial case)
+            rhatx, rhaty = dirx, diry
 
             # Decompose momentum into parallel/perpendicular
             px, py = momenta[1, i], momenta[2, i]
@@ -250,7 +335,9 @@ Inverse of `kernel_boost_to_rest_frame_gpu!` at the same `(r, t_now)`: rest-fram
     momenta, positions, xgrid, tgrid, VelocityEvolution,
     m::Float64, N_particles::Int, steps, Δt, initial_time,
     radial_mode::Bool, use_v2::Bool, V2Evolution, psi2::Float64,
-    relativistic::Bool = true      # false ⇒ Galilean p∥ += m·v
+    relativistic::Bool = true,     # false ⇒ Galilean p∥ += m·v
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path, untouched. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -264,22 +351,38 @@ Inverse of `kernel_boost_to_rest_frame_gpu!` at the same `(r, t_now)`: rest-fram
             return
         end
 
-        # --- local fluid velocity ---
         t_now = steps * Δt + initial_time
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
-        # optional m=2 azimuthal modulation (must match the rest-frame boost for an exact round-trip)
-        if use_v2 && size(positions, 1) >= 2
-            v2m = interpolate_2d_cuda(xgrid, tgrid, V2Evolution, r, t_now)
-            φ = atan(positions[2, i], positions[1, i])
-            v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+        # --- local fluid velocity: magnitude v and the unit vector it points along ---
+        local v::Float64, dirx::Float64, diry::Float64
+        if VxField !== nothing
+            vx = interpolate_3d_cuda(xgrid, ygrid, tgrid, VxField, positions[1, i], positions[2, i], t_now)
+            vy = interpolate_3d_cuda(xgrid, ygrid, tgrid, VyField, positions[1, i], positions[2, i], t_now)
+            v = CUDA.sqrt(vx*vx + vy*vy)
+            v < eps(Float64) && return       # no flow here, nothing to boost
+            dirx = vx / v; diry = vy / v
+        else
+            # --- local fluid velocity ---
+            v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, t_now)
+            # optional m=2 azimuthal modulation (must match the rest-frame boost for an exact round-trip)
+            if use_v2 && size(positions, 1) >= 2
+                v2m = interpolate_2d_cuda(xgrid, tgrid, V2Evolution, r, t_now)
+                φ = atan(positions[2, i], positions[1, i])
+                v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
+            end
+            # radial_mode carries ONE position row, so positions[2, .] is out of bounds
+            # there. It used to be unreachable because r-hat was formed inside the
+            # Cartesian branch; hoisting the direction to the top of the loop exposed it.
+            # The CPU read it under @inbounds and silently used a garbage value that
+            # radial mode never consumes; the GPU bounds-checked and threw.
+            dirx = positions[1, i] / r
+            diry = size(positions, 1) >= 2 ? positions[2, i] / r : 0.0
         end
         if !relativistic
             if radial_mode
                 @inbounds momenta[1, i] += m * v
             else
-                x = positions[1, i]; y = positions[2, i]
-                @inbounds momenta[1, i] += m * v * (x / r)
-                @inbounds momenta[2, i] += m * v * (y / r)
+                @inbounds momenta[1, i] += m * v * dirx
+                @inbounds momenta[2, i] += m * v * diry
             end
             return
         end
@@ -307,9 +410,8 @@ Inverse of `kernel_boost_to_rest_frame_gpu!` at the same `(r, t_now)`: rest-fram
             # ======================================
             # 🟢 Cartesian mode (2D, rotation invariant)
             # ======================================
-            x = positions[1, i]
-            y = positions[2, i]
-            rhatx, rhaty = x / r, y / r
+            # decompose along the FLOW direction (r-hat in the radial case)
+            rhatx, rhaty = dirx, diry
 
             # Decompose momentum along / perpendicular to radial direction
             px, py = momenta[1, i], momenta[2, i]
@@ -358,7 +460,9 @@ because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go. On
     tau_Tmin::Float64, tau_invdT::Float64, tau_vals,
     radial_mode::Bool, integrator_mode::Int32,   # 0 = pre-point exact-OU (legacy), 1 = drift-midpoint O(ε²)
     relativistic::Bool,                           # true = ·m/E (Jüttner); false = ηD (Maxwell)
-    proper_time_kicks::Bool, Vfield               # 2026-08-25: kick per proper time Δt·E*/E_lab (see CPU kernel note)
+    proper_time_kicks::Bool, Vfield,              # 2026-08-25: kick per proper time Δt·E*/E_lab (see CPU kernel note)
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -371,7 +475,8 @@ because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go. On
             r2 += positions[d, i]^2
         end
         r = sqrt(r2)
-        T = interpolate_2d_cuda(xgrid, tgrid, TemperatureEvolution, r, steps * Δt + initial_time)
+        T = _bg_scalar_cuda(xgrid, ygrid, tgrid, TemperatureEvolution, positions[1, i],
+                            size(positions,1) >= 2 ? positions[2, i] : 0.0, r, steps * Δt + initial_time)
         T = T > 0.0 ? T : 0.0        # non-negative, as the CPU kernel
 
         # --- transport coefficients ---
@@ -395,7 +500,8 @@ because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go. On
         # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)); mirrors the CPU kernel.
         dil = 1.0
         if proper_time_kicks
-            v = interpolate_2d_cuda(xgrid, tgrid, Vfield, r, steps * Δt + initial_time)
+            v = _bg_flowmag_cuda(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
+                                 size(positions,1) >= 2 ? positions[2, i] : 0.0, r, steps * Δt + initial_time)
             v = v > 0.999999 ? 0.999999 : (v < -0.999999 ? -0.999999 : Float64(v))
             γv = 1.0 / sqrt(1.0 - v * v)
             kr = 0.0
@@ -574,6 +680,8 @@ Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `mome
     random_normals,  # pre-generated random numbers for diffusion
     relativistic::Bool,
     momentum_dimensions::Int = dimensions,   # momentum rows; only E sees the longitudinal one
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing,
 )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
@@ -598,7 +706,8 @@ Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `mome
             dr = (pr / E) * Δt
 
             if position_diffusion
-                T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r_safe, steps * Δt + initial_time)
+                T = _bg_scalar_cuda(xgrid, ygrid, tgrid, Tfield, positions[1, idx],
+                                    size(positions,1) >= 2 ? positions[2, idx] : 0.0, r_safe, steps * Δt + initial_time)
                 # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm. T floored at eps (CPU twin).
                 D = (DsT / (T > eps(Float64) ? T : eps(Float64))) / fmGeV
                 if D > 0.0
@@ -639,7 +748,8 @@ Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `mome
                     r2 += positions[d, idx]^2
                 end
                 r = CUDA.sqrt(r2)
-                T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
+                T = _bg_scalar_cuda(xgrid, ygrid, tgrid, Tfield, positions[1, idx],
+                                    size(positions,1) >= 2 ? positions[2, idx] : 0.0, r, steps * Δt + initial_time)
                 # D_s = DsT/T in GeV^-1; convert to fm for x-update with Δt in fm. T floored at eps (CPU twin).
                 D = (DsT / (T > eps(Float64) ? T : eps(Float64))) / fmGeV
                 if D > 0.0
@@ -688,7 +798,7 @@ Store `momenta` into `momenta_history[:, :, save_idx]`. One CUDA thread per part
     current_momentum,
     save_idx::Int,
     N_particles::Int,
-    dimensions::Int
+    dimensions::Int,
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
@@ -736,7 +846,9 @@ On-the-fly freeze-out latch: for each particle not yet frozen, read `T(r, τ)`; 
     fo_pos, fo_mom, fo_tau, fo_flag, last_pos, last_mom, last_tau, last_T,
     positions, momenta, xgrid, tgrid, Tfield, Tfo::Float64,
     N_particles::Int, steps::Int, Δt::Float64, initial_time::Float64,
-    dimensions::Int, radial_mode::Bool, interp::Bool
+    dimensions::Int, radial_mode::Bool, interp::Bool,
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
@@ -752,7 +864,8 @@ On-the-fly freeze-out latch: for each particle not yet frozen, read `T(r, τ)`; 
                 r = CUDA.sqrt(r2)
             end
             τ = steps * Δt + initial_time
-            T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, τ)
+            T = _bg_scalar_cuda(xgrid, ygrid, tgrid, Tfield, positions[1, idx],
+                                size(positions,1) >= 2 ? positions[2, idx] : 0.0, r, τ)
             if T < Tfo
                 Tl = last_T[idx]
                 # frac=1 ⇒ current (raw first-below); frac∈[0,1] ⇒ interpolated to exact T=Tfo
@@ -809,7 +922,9 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
     invCDF, nU::Int, nT::Int, Ttab_min::Float64, Ttab_invdT::Float64,
     dimensions::Int, radial_mode::Bool,
     u_collide, u_sample, dir_gauss,
-    proper_time_kicks::Bool = false, Vfield = nothing,   # 2026-08-29: collide per PROPER time
+    proper_time_kicks::Bool = false, Vfield = nothing,   # 2026-08-29: collide per PROPER time,
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing
     )
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if i <= N_particles
@@ -825,7 +940,8 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
             end
             r = CUDA.sqrt(r2)
         end
-        T = interpolate_2d_cuda(xgrid, tgrid, Tfield, r, steps * Δt + initial_time)
+        T = _bg_scalar_cuda(xgrid, ygrid, tgrid, Tfield, positions[1, i],
+                            size(positions,1) >= 2 ? positions[2, i] : 0.0, r, steps * Δt + initial_time)
         Tpos = T > 0.0 ? T : 0.0
 
         # τ_n here IS the diffusion-CURRENT time (build_taun_current_spline) — see the 🔴 note above.
@@ -836,8 +952,9 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
         # τ_n it is matched to is a comoving quantity, so the elapsed time must be comoving too.
         # DEFAULT OFF ⇒ dil is the literal constant 1.0 and Pcol is bit-for-bit the old expression.
         dil = 1.0
-        if proper_time_kicks && Vfield !== nothing
-            v = interpolate_2d_cuda(xgrid, tgrid, Vfield, r, steps * Δt + initial_time)
+        if proper_time_kicks && (Vfield !== nothing || VxField !== nothing)
+            v = _bg_flowmag_cuda(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
+                                 size(positions,1) >= 2 ? positions[2, i] : 0.0, r, steps * Δt + initial_time)
             v = v > 0.999999 ? 0.999999 : (v < -0.999999 ? -0.999999 : Float64(v))
             γv = 1.0 / CUDA.sqrt(1.0 - v * v)
             kr = 0.0
@@ -900,7 +1017,9 @@ Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ
     Δt::Float64,
     initial_time::Float64,
     radial_mode::Bool,
-    relativistic::Bool = true      # false ⇒ imprint m·v, not m·γ·v
+    relativistic::Bool = true,     # false ⇒ imprint m·v, not m·γ·v
+    # --- 2-D BACKGROUND (optional, trailing). Absent => the shipped radial path. ---
+    ygrid = nothing, VxField = nothing, VyField = nothing
     )
     idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     if idx <= N_particles
@@ -928,7 +1047,20 @@ Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ
 
         # --- Interpolate fluid velocity from (r, τ) field ---
         τ_now = steps * Δt + initial_time
-        v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, τ_now)
+        local v::Float64, dirx::Float64, diry::Float64
+        if VxField !== nothing
+            vx = interpolate_3d_cuda(xgrid, ygrid, tgrid, VxField, positions[1, idx],
+                                     size(positions,1) >= 2 ? positions[2, idx] : 0.0, τ_now)
+            vy = interpolate_3d_cuda(xgrid, ygrid, tgrid, VyField, positions[1, idx],
+                                     size(positions,1) >= 2 ? positions[2, idx] : 0.0, τ_now)
+            v = CUDA.sqrt(vx*vx + vy*vy)
+            dirx = v < eps(Float64) ? 0.0 : vx/v
+            diry = v < eps(Float64) ? 0.0 : vy/v
+        else
+            v = interpolate_2d_cuda(xgrid, tgrid, VelocityEvolution, r, τ_now)
+            dirx = positions[1, idx]/r
+            diry = size(positions,1) >= 2 ? positions[2, idx]/r : 0.0
+        end
 
         if !relativistic
             if radial_mode

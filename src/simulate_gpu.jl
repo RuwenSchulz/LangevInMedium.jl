@@ -72,7 +72,7 @@ function simulate_ensemble_bulk_gpu(
         # silent free streaming, warn when the window leaves the table, and count steps with the
         # ulp-tolerant rule instead of a bare floor(). See the helpers in simulate_cpu.jl.
         _validate_transport_inputs(m, DsT)
-        _check_time_window(initial_time, final_time, SpaceTimeGrid[2])
+        _check_time_window(initial_time, final_time, SpaceTimeGrid[end])
         total_time = final_time - initial_time
         steps = _step_count(initial_time, final_time, Δt)
         steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
@@ -91,11 +91,41 @@ function simulate_ensemble_bulk_gpu(
         blocks = cld(N_particles, threads)
 
         # === Upload background grids to GPU ===
-        xgridd, ttgrid = SpaceTimeGrid
-        xgrid = CuArray(xgridd)
-        tgrid = CuArray(ttgrid)
-        TemperatureEvolution = CuArray(TemperatureEvolutionn)
-        VelocityEvolution = CuArray(VelocityEvolutionn)
+        # Geometry is dispatched on the DATA, exactly as on the CPU path: a 2-tuple grid with a
+        # matrix T is the shipped radial background; a 3-tuple with T[x,y,t] and a (u^x, u^y) pair
+        # is a genuine function of the transverse plane. The contract is validated here, on the
+        # host, so a shape error is a clear message rather than a kernel launch failure.
+        local xgrid, ygrid, tgrid, VelocityEvolution, VxField, VyField
+        if length(SpaceTimeGrid) == 3
+            xgridd, ygridd, ttgrid = SpaceTimeGrid
+            ndims(TemperatureEvolutionn) == 3 || error(
+                "simulate_ensemble_bulk(GPU): a 3-element SpaceTimeGrid selects the 2-D background, " *
+                "so the temperature table must be T[x, y, t] (got ndims = $(ndims(TemperatureEvolutionn)))")
+            (VelocityEvolutionn isa Union{Tuple,AbstractVector} && length(VelocityEvolutionn) == 2) || error(
+                "simulate_ensemble_bulk(GPU): the 2-D background needs the flow as a VECTOR, " *
+                "i.e. (u_x, u_y) tables of size (nx, ny, nt); got $(typeof(VelocityEvolutionn))")
+            V2Evolutionn === nothing || error(
+                "simulate_ensemble_bulk(GPU): V2Evolution is an ad-hoc stand-in for exactly the " *
+                "anisotropy a 2-D background carries properly; using both would count it twice")
+            vx_h, vy_h = VelocityEvolutionn
+            size(vx_h) == size(vy_h) == size(TemperatureEvolutionn) || error(
+                "simulate_ensemble_bulk(GPU): T, u_x and u_y must share the table shape")
+            (length(xgridd), length(ygridd), length(ttgrid)) == size(TemperatureEvolutionn) || error(
+                "simulate_ensemble_bulk(GPU): grid lengths do not match the table shape")
+            xgrid = CuArray(xgridd); ygrid = CuArray(ygridd); tgrid = CuArray(ttgrid)
+            TemperatureEvolution = CuArray(TemperatureEvolutionn)
+            VxField = CuArray(vx_h); VyField = CuArray(vy_h)
+            # the scalar flow table is absent on this path; the magnitude is derived from the pair
+            VelocityEvolution = CuArray(zeros(Float64, 1, 1))
+        else
+            xgridd, ttgrid = SpaceTimeGrid
+            xgrid = CuArray(xgridd)
+            ygrid = nothing
+            tgrid = CuArray(ttgrid)
+            TemperatureEvolution = CuArray(TemperatureEvolutionn)
+            VelocityEvolution = CuArray(VelocityEvolutionn)
+            VxField = nothing; VyField = nothing
+        end
         # optional elliptic-flow modulation: upload the v2(r,t) field, or a dummy when off
         use_v2 = V2Evolutionn !== nothing
         V2Evolution = use_v2 ? CuArray(V2Evolutionn) : CuArray(zeros(Float64, 1, 1))
@@ -261,7 +291,7 @@ function simulate_ensemble_bulk_gpu(
         @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
             momenta, positions, xgrid, tgrid,
             VelocityEvolution, m, N_particles, 0, Δt, initial_time, radial_mode, use_v2, V2Evolution, psi2,
-            relativistic)
+            relativistic, ygrid, VxField, VyField)
 
         # === Allocate history arrays as 2D to avoid CuDeviceArray{3} in kernels ===
         # Layout: (dimensions, N_particles * (num_saves+1)), stride = N_particles per snapshot
@@ -337,7 +367,7 @@ function simulate_ensemble_bulk_gpu(
                 @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
                     m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
-                    relativistic)
+                    relativistic, ygrid, VxField, VyField)
             end
 
             # Step 1b: Bjorken redshift of p_z in the LRF (invariant under the transverse boost)
@@ -354,7 +384,7 @@ function simulate_ensemble_bulk_gpu(
                 @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
                     momenta, positions, xgrid, tgrid,
                     VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode,
-                    relativistic)
+                    relativistic, ygrid, VxField, VyField)
             elseif rta_mode
                 # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn in the LRF,
                 # then boost back to lab. Skips the OU force/update kernels entirely.
@@ -368,12 +398,12 @@ function simulate_ensemble_bulk_gpu(
                     invcdf_d, invcdf_nU, invcdf_nT, invcdf_Tmin, invcdf_invdT,
                     pdim, radial_mode,
                     u_collide, u_sample, random_directions,
-                    proper_time_kicks, VelocityEvolution)
+                    proper_time_kicks, VelocityEvolution, ygrid, VxField, VyField)
 
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
                     m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
-                    relativistic)
+                    relativistic, ygrid, VxField, VyField)
             else
                 # Step 2: Compute deterministic and stochastic terms in LRF
                 @cuda threads=threads blocks=blocks kernel_compute_all_forces_gpu!(
@@ -384,7 +414,7 @@ function simulate_ensemble_bulk_gpu(
                     step, initial_time, DsT,
                     tau_Tmin, tau_invdT, tau_vals_d,
                     radial_mode, Int32(integrator_mode), relativistic,
-                    proper_time_kicks, VelocityEvolution)
+                    proper_time_kicks, VelocityEvolution, ygrid, VxField, VyField)
 
                 # Step 3: Update momenta in LRF
                 @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
@@ -395,14 +425,14 @@ function simulate_ensemble_bulk_gpu(
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
                     m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
-                    relativistic)
+                    relativistic, ygrid, VxField, VyField)
             end
             # Step 5: Update particle positions based on momenta
             # IMPORTANT: pass the current time-step, not the total number of steps.
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
                 positions, momenta, m, Δt, N_particles, step, initial_time,
                 xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, position_diffusion, reflecting_boundary, ξ_position,
-                relativistic, pdim)
+                relativistic, pdim, ygrid, VxField, VyField)
 
             # Step 5a2: spacetime rapidity — the third position row (kernels_cpu.jl note).
             if track_eta_s
@@ -419,7 +449,7 @@ function simulate_ensemble_bulk_gpu(
                     fo_pos_gpu, fo_mom_gpu, fo_tau_gpu, fo_flag_gpu,
                     last_pos_gpu, last_mom_gpu, last_tau_gpu, last_T_gpu,
                     positions, momenta, xgrid, tgrid, TemperatureEvolution, Tfo,
-                    N_particles, step, Δt, initial_time, dimensions, radial_mode, freezeout_interp)
+                    N_particles, step, Δt, initial_time, dimensions, radial_mode, freezeout_interp, ygrid, VxField, VyField)
             end
 
             # Step 6: Save state if necessary

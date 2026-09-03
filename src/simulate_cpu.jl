@@ -177,7 +177,10 @@ function simulate_ensemble_bulk_cpu(
     # 🔴 2026-09-02: refuse the inputs that used to degrade to silent free streaming, and say so
     # when the requested window leaves the background table (both are new; see the helpers above).
     _validate_transport_inputs(m, DsT)
-    _check_time_window(initial_time, final_time, SpaceTimeGrid[2])
+    # SpaceTimeGrid[end], not [2]: on a 3-element (x, y, t) grid the second entry is the Y AXIS,
+    # and checking the run window against it is silently vacuous whenever the box happens to
+    # bracket the times.
+    _check_time_window(initial_time, final_time, SpaceTimeGrid[end])
     total_time = final_time - initial_time
     steps = _step_count(initial_time, final_time, Δt)     # ulp-tolerant; was a bare floor()
     steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
@@ -194,7 +197,42 @@ function simulate_ensemble_bulk_cpu(
     # "free streaming" and got the comoving limit; see README "The LIMITS and the INPUT CONTRACT".
     free_stream = collision_mode === :none
 
-    xgrid, tgrid = SpaceTimeGrid
+    # --- BACKGROUND GEOMETRY: dispatched on what was handed in, never on a flag ---
+    # A 2-tuple (xgrid, tgrid) with a matrix T is the shipped RADIAL background. A 3-tuple
+    # (xgrid, ygrid, tgrid) with a 3-D T and a (u^x, u^y) pair is a genuine function of the
+    # transverse PLANE. Dispatching on the data rather than on a keyword means the radial path
+    # cannot be reached by accident and the 2-D path cannot be half-selected: a 3-D table with a
+    # 2-tuple grid is a shape error, not a silently different physics run.
+    local xgrid, ygrid, tgrid, VxField, VyField
+    if length(SpaceTimeGrid) == 3
+        xgrid, ygrid, tgrid = SpaceTimeGrid
+        ndims(TemperatureEvolutionn) == 3 || error(
+            "simulate_ensemble_bulk: a 3-element SpaceTimeGrid selects the 2-D background, so the " *
+            "temperature table must be T[x, y, t] (got ndims = $(ndims(TemperatureEvolutionn)))")
+        (VelocityEvolutionn isa Union{Tuple,AbstractVector} && length(VelocityEvolutionn) == 2) || error(
+            "simulate_ensemble_bulk: the 2-D background needs the flow as a VECTOR, i.e. " *
+            "(u_x, u_y) tables of size (nx, ny, nt); got $(typeof(VelocityEvolutionn))")
+        VxField, VyField = VelocityEvolutionn
+        V2Evolutionn === nothing || error(
+            "simulate_ensemble_bulk: V2Evolution is an ad-hoc stand-in for exactly the anisotropy " *
+            "a 2-D background carries properly; using both would count it twice")
+        size(VxField) == size(TemperatureEvolutionn) == size(VyField) || error(
+            "simulate_ensemble_bulk: T, u_x and u_y must share the table shape " *
+            "$(size(TemperatureEvolutionn)) / $(size(VxField)) / $(size(VyField))")
+        (length(xgrid), length(ygrid), length(tgrid)) == size(TemperatureEvolutionn) || error(
+            "simulate_ensemble_bulk: grid lengths $((length(xgrid), length(ygrid), length(tgrid))) " *
+            "do not match the table shape $(size(TemperatureEvolutionn))")
+    else
+        xgrid, tgrid = SpaceTimeGrid
+        ygrid = nothing; VxField = nothing; VyField = nothing
+    end
+    # the tables the kernels read for a SCALAR magnitude (temperature always; flow only for
+    # proper_time_kicks) plus the vector pair, bundled once so no call site can pass a subset
+    bg2d = (; ygrid = ygrid, VxField = VxField, VyField = VyField)
+    # kernels that only need the flow MAGNITUDE (proper_time_kicks) take `Vfield`, a matrix.
+    # On the 2-D path the magnitude is derived from the vector pair instead, so the scalar
+    # table is absent rather than a tuple the kernel signature would reject.
+    Vfield_scalar = ygrid === nothing ? VelocityEvolutionn : nothing
 
     # For `dimensions == 1` we still evolve a *radial* degree of freedom in the
     # transverse plane. Sampling directly in polar (r,φ) on the grid can create
@@ -296,8 +334,15 @@ function simulate_ensemble_bulk_cpu(
         # conditional at T(r, τ0), :comoving sets p_z* = 0 (free-streamed from the production
         # point). See `append_pz`.
         momenta = append_pz(pz_init, momenta, positions, m,
-            r -> interpolate_2d_cpu(xgrid, tgrid, TemperatureEvolutionn, r, initial_time);
-            antithetic = antithetic_momenta && x_init === nothing)
+            ygrid === nothing ?
+                (r -> interpolate_2d_cpu(xgrid, tgrid, TemperatureEvolutionn, r, initial_time)) :
+                (r -> error("unreachable: T_of_xy is supplied on a 2-D background"));
+            antithetic = antithetic_momenta && x_init === nothing,
+            # on a 2-D background the local temperature is not a function of the radius, so the
+            # p_z completion is handed the particle's own (x, y) instead
+            T_of_xy = ygrid === nothing ? nothing :
+                ((x, y) -> interpolate_3d_cpu(xgrid, ygrid, tgrid, TemperatureEvolutionn,
+                                              x, y, initial_time)))
     end
     size(momenta, 1) == pdim || error("momentum rows $(size(momenta, 1)) ≠ momentum_dimensions $pdim")
 
@@ -313,7 +358,7 @@ function simulate_ensemble_bulk_cpu(
     kernel_boost_to_lab_frame_cpu!(
     momenta, positions, xgrid, tgrid,
     VelocityEvolutionn, m, N_particles, 0, Δt, initial_time,radial_mode = radial_mode,
-    V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+    V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
 
     momenta_history[:,:,1] .= momenta
     position_history[:, :, 1] .= positions
@@ -380,7 +425,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_boost_to_rest_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         end
 
         # 1b. Longitudinal redshift of p_z in the LRF (p_z is invariant under the transverse boost,
@@ -397,7 +442,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_set_to_fluid_velocity_cpu!(
                 momenta, positions,  xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-                relativistic = relativistic)
+                relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         elseif collision_mode == :rta
             # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn.
             # 🔴 τn here is the CURRENT relaxation time (tau_n_main3), NOT the OU drag.
@@ -410,13 +455,13 @@ function simulate_ensemble_bulk_cpu(
                 Δt, m, N_particles, step, initial_time, DsT;
                 tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = taun_vals,
                 dimensions = pdim, radial_mode = radial_mode,
-                proper_time_kicks = proper_time_kicks, Vfield = VelocityEvolutionn)
+                proper_time_kicks = proper_time_kicks, Vfield = Vfield_scalar, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
 
             # Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         else
 
             # 2. Compute forces in rest frame
@@ -433,7 +478,7 @@ function simulate_ensemble_bulk_cpu(
                 radial_mode = radial_mode,
                 relativistic = relativistic,
                 proper_time_kicks = proper_time_kicks,
-                Vfield = VelocityEvolutionn)
+                Vfield = Vfield_scalar, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
 
             # 3. Update momenta
             kernel_update_momenta_LRF_cpu!(
@@ -444,7 +489,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
-                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic)
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         end
         # 5. Update positions
        
@@ -456,7 +501,7 @@ function simulate_ensemble_bulk_cpu(
                     radial_mode = radial_mode,
                     position_diffusion = position_diffusion,
                     reflecting_boundary = reflecting_boundary,
-                    relativistic = relativistic
+                    relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField
                 )
 
 
