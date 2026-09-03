@@ -197,6 +197,10 @@ run_suite("test_kernel_units.jl")
 # WHEN each kernel reads the background — end-of-step for the lookups, start-of-step for the
 # Bjorken redshift. Two conventions on purpose; pinned so the mixture stays deliberate.
 run_suite("test_time_convention.jl")
+# The LIMITS (D_sT → 0, glued to the flow) and the INPUT CONTRACT (a table that ends before
+# final_time, a non-uniform density grid, m ≤ 0). Six blocks are @test_broken: defects measured
+# 2026-09-02 and deliberately left in place, so applying a fix turns the gate red on purpose.
+run_suite("test_limits_and_contracts.jl")
 
 if get(ENV, "LIM_FAST", "0") == "1"
     @info "LIM_FAST=1: skipping the engine gates (relativistic switch, momentum_dims3, CPU/GPU kernel parity, GPU-only paths)"

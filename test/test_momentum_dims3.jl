@@ -57,7 +57,7 @@ Uniform bath at T, zero flow, particles handed in via x_init/p_init (so the engi
 is the dynamics). Returns (times, mom_hist, pos_hist).
 """
 function box_run(backend; M, T, DsT, N, dt, tfinal, save, x0, p0, pdim, t0 = 0.0,
-                 redshift = false, momentum_langevin = true, seed = 1)
+                 redshift = false, momentum_langevin = true, collision_mode = :langevin, seed = 1)
     Random.seed!(seed)
     xgrid = collect(0.0:0.5:400.0); tgrid = collect(t0:1.0:(t0 + tfinal + 2))
     Tf = fill(T, length(xgrid), length(tgrid)); Vf = zeros(length(xgrid), length(tgrid))
@@ -67,7 +67,7 @@ function box_run(backend; M, T, DsT, N, dt, tfinal, save, x0, p0, pdim, t0 = 0.0
         initial_time = t0, final_time = t0 + tfinal, save_interval = save, m = M, DsT = DsT,
         dimensions = 2, momentum_dimensions = pdim, bjorken_redshift = redshift,
         position_diffusion = false, momentum_langevin = momentum_langevin,
-        reflecting_boundary = false, Tfo = 0.0)
+        collision_mode = collision_mode, reflecting_boundary = false, Tfo = 0.0)
 end
 
 "Ensemble estimators on one snapshot: ⟨p²⟩, λ₁ = ⟨(M/E)p²⟩/⟨p²⟩, ⟨p_x⟩, ⟨(M/E)p_x⟩."
@@ -171,13 +171,20 @@ const DS_FM = (DST_ / T_) * HBARC             # D_s = D_sT/T [GeV⁻¹] → fm (
     end
 
     @testset "(R) Bjorken redshift telescopes exactly under free streaming" begin
-        # momentum_langevin=false ⇒ the transverse rows are glued to the (zero) flow and p_z evolves
-        # ONLY by the redshift, so ∏ τ_a/τ_b = τ₀/τ to machine precision.
+        # ⚠ MIGRATED 2026-09-02 (LangevInMedium 0.2.3), and the migration is the point of the fix.
+        # This block used `momentum_langevin = false` to freeze the transverse rows so that p_z
+        # evolved ONLY by the redshift. That worked by accident: the glue kernel wrote rows 1–2 and
+        # left row 3 alone — which was the DEFECT (a particle glued to a MOVING fluid kept a p_z*
+        # it should not have, and streamed −7.10 % too slow; this box has zero flow, so the gate
+        # could not see it). The glue kernel now zeroes every row beyond the spatial ones, so
+        # `momentum_langevin = false` correctly sets p_z* = 0 and can no longer be used this way.
+        # `collision_mode = :none` is the honest tool and always was: it IS free streaming, and
+        # under it p_z evolves only by the redshift, so ∏ τ_a/τ_b = τ₀/τ to machine precision.
         N_R = 20_000; t0 = 0.4; tf = 2.0; dt = 1e-3
         P = hcat([vcat(0.3 .* randn(2), 0.5 .* randn(1)) for _ in 1:N_R]...)
         tt, mm, _ = box_run(CPUBackend(); M = M_, T = T_, DsT = DST_, N = N_R, dt = dt, tfinal = tf,
                             save = 0.4, x0 = 4.0 .* ones(2, N_R), p0 = P, pdim = 3, t0 = t0,
-                            redshift = true, momentum_langevin = false)
+                            redshift = true, collision_mode = :none)
         for (k, τ) in enumerate(tt)
             @test isapprox(mean(mm[k][3, :] .^ 2), mean(P[3, :] .^ 2) * (t0 / τ)^2; rtol = 1e-9)
         end
@@ -222,7 +229,7 @@ const DS_FM = (DST_ / T_) * HBARC             # D_s = D_sT/T [GeV⁻¹] → fm (
             P = hcat([vcat(0.3 .* randn(2), 0.5 .* randn(1)) for _ in 1:N_R]...)
             tr, mr, _ = Base.invokelatest(box_run, GPUBackend(); M = M_, T = T_, DsT = DST_, N = N_R, dt = 1e-3,
                                           tfinal = 2.0, save = 0.4, x0 = 4.0 .* ones(2, N_R), p0 = P, pdim = 3,
-                                          t0 = t0, redshift = true, momentum_langevin = false)
+                                          t0 = t0, redshift = true, collision_mode = :none)   # see (R)
             for (k, τ) in enumerate(tr)
                 @test isapprox(mean(mr[k][3, :] .^ 2), mean(P[3, :] .^ 2) * (t0 / τ)^2; rtol = 1e-9)
             end

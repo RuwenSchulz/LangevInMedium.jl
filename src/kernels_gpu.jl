@@ -854,7 +854,9 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
             dil = 1.0 / (den > 1e-6 ? den : 1e-6)
         end
 
-        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(Δt * dil / τn, 0.0, 1.0) : 1.0
+        # 🔴 FIXED 2026-09-02 — exponential per-step collision probability; line-for-line twin of
+        # `kernel_rta_collision_cpu!` (see there for the measured linearisation error).
+        Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(-CUDA.expm1(-Δt * dil / τn), 0.0, 1.0) : 1.0
 
         @inbounds uc = u_collide[i]
         if uc < Pcol
@@ -915,6 +917,13 @@ Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ
 
         if r < eps(Float64)  # avoid divide-by-zero
             return
+        end
+
+        # 🔴 FIXED 2026-09-02 — zero every momentum row beyond the spatial ones; line-for-line twin
+        # of `kernel_set_to_fluid_velocity_cpu!`. See that kernel for the measurement (−7.10 % on
+        # ⟨v_x⟩ with 3 momentum rows, identical on both backends before the fix).
+        @inbounds for d in 3:size(momenta, 1)
+            momenta[d, idx] = 0.0
         end
 
         # --- Interpolate fluid velocity from (r, τ) field ---
