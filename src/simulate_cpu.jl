@@ -118,13 +118,20 @@ Times of the `num_saves + 1` stored snapshots. Snapshot k (k = 0…num_saves) is
 k·save_every, i.e. at t0 + k·save_every·Δt. Returns the historical `range(t0, tf, length)` when
 that is exact (steps divisible by save_every) so existing outputs are unchanged; otherwise the
 true times, with a warning that the last `steps − num_saves·save_every` steps are not in the history.
+
+NO `maxlog`, for the reason given at `_warn_escaped_particles`: this is a once-per-RUN diagnostic
+and `maxlog` is keyed by source location, so it silenced every run after the first in a campaign
+that drives the engine many times. Measured 2026-09-15 with `maxlog = 1` still in place: five
+consecutive calls at t0 = 0.4, tf = 1.4, Δt = 10⁻³, save_interval = 0.5 each returned history only
+out to 0.9 fm — half the requested evolution — and only the FIRST said so. Dropping history
+silently is exactly what this warning exists to prevent.
 """
 function _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
     if steps % save_every == 0
         return range(t0, tf, length = num_saves + 1)
     end
     dropped = steps - num_saves * save_every
-    @warn "save_interval does not divide the evolution: the last $dropped step(s) ($(dropped * Δt) fm) are not in the returned history; time_points reflect the snapshots actually taken" maxlog = 1
+    @warn "save_interval does not divide the evolution: the last $dropped step(s) ($(dropped * Δt) fm) are not in the returned history; time_points reflect the snapshots actually taken" requested_final_time = tf last_snapshot = t0 + num_saves * save_every * Δt
     return range(t0, t0 + num_saves * save_every * Δt, length = num_saves + 1)
 end
 

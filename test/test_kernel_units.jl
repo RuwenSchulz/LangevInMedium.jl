@@ -355,6 +355,27 @@ end
     @test_throws ErrorException UT.append_thermal_pz(zeros(3, 4), zeros(2, 4), 1.5, r -> 0.3)
 end
 
+@testset "U9b _to_cdf! is strictly increasing at ANY scale" begin
+    # 🔴 REGRESSION GUARD, 2026-09-15. The tie-breaking nudge was `c[k-1] + eps(Float64)` — an
+    # ABSOLUTE 2.2e-16, not representable next to a cumulative of 10³ or more, so `max` returned
+    # `c[k-1]` and the CDF came out flat exactly where the guard was supposed to bite. Measured
+    # then: 149 tied knots at every scale ≥ 10³ on this density, 0 at scale 1. Nothing moved
+    # (the ties sit in the zero-density tail), but the docstring's "strictly increasing" was false.
+    # `nextfloat` is the representable step at any magnitude. The overall scale of a density must
+    # never reach the CDF at all, so assert that directly.
+    pg = collect(range(0.0, 10.0; length = 300))
+    shape(pp) = pp < 5.0 ? (1 + (pp / 2.1)^2)^(-3.1) : 0.0     # a hard cutoff ⇒ a flat CDF tail
+    base = nothing
+    for scale in (1.0, 1e3, 1e6, 1e9, 1e12)
+        y = scale .* [pp * shape(pp) for pp in pg]
+        c = UT._to_cdf!(UT._cumtrapz(y, pg))
+        @test c !== nothing
+        @test all(>(0.0), diff(c))                              # strictly increasing, every scale
+        # and the CDF itself is scale-invariant to rounding: the normalisation must cancel
+        base === nothing ? (base = copy(c)) : @test maximum(abs.(c .- base)) < 1e-12
+    end
+end
+
 @testset "U9 sample_particles_from_FONLL reproduces the density it was handed" begin
     # FIDELITY, not just "it returns the right shape": bin the sampled particles and compare against
     # the tabulated density in BOTH spatial modes.

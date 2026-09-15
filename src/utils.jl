@@ -52,13 +52,27 @@ function _trapz_weights(x::AbstractVector)
     return w
 end
 
-"Normalise a cumulative array into a strictly increasing CDF on [0, 1] (or return `nothing`)."
+"""
+Normalise a cumulative array into a strictly increasing CDF on [0, 1] (or return `nothing` if the
+distribution is empty).
+
+⚠ The nudge that breaks ties must be scaled to the VALUE, not absolute. This used to read
+`max(c[k], c[k-1] + eps(Float64))`, and `eps(Float64)` is an absolute 2.2e-16: for any cumulative
+above ≈10³ the sum is not representable as a distinct float, `max` returns `c[k-1]`, and the
+result is flat exactly where the guard was supposed to bite. Measured 2026-09-15 on a FONLL-shaped
+density with a hard cutoff at 5 GeV, 300 nodes: **149 tied knots at every overall scale ≥ 10³**,
+against 0 at scale 1 — and the "strictly increasing" in this docstring was false. It changed no
+result (the ties fall in the zero-density tail, `LinearInterpolation` handles the flat region, and
+the sampled ⟨p⟩ was bit-identical across scales 1 → 10⁹), which is why nothing caught it; it would
+matter the moment a tie landed in a populated region. `nextfloat` is the smallest distinguishable
+step at whatever magnitude `c[k-1]` happens to have, so the guard now bites at every scale.
+"""
 function _to_cdf!(c::Vector{Float64})
     n = length(c)
     (n >= 2 && isfinite(c[n]) && c[n] > 0) || return nothing
     c[1] = 0.0
     @inbounds for k in 2:n
-        c[k] = max(c[k], c[k-1] + eps(Float64))
+        c[k] = max(c[k], nextfloat(c[k-1]))
     end
     c ./= c[n]
     c[n] = 1.0

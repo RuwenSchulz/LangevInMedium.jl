@@ -3,6 +3,70 @@
 Entries marked ⚠ changed the default dynamics or the meaning of a label: outputs produced
 before them are not comparable to outputs produced after.
 
+## 0.2.4 — 2026-09-15  (the dropped-history warning could not be heard, and a gate measured half its window)
+
+No change to the dynamics: all ten `regression_corpus.jl` CPU hashes reproduce bit for bit and the
+GPU moments match. The defects are in the *diagnostics*, in one benchmark's window, and in a guard
+that was silently doing nothing.
+
+### Fixed
+1. 🔴 **The "save_interval does not divide the evolution" warning carried `maxlog = 1`, so in a
+   campaign only the FIRST affected run said so.** `maxlog` is keyed by source location — the exact
+   reason the 0.2.3 window and escaped-particle warnings were written without it (see
+   `_warn_escaped_particles`). Dropping history is precisely what that warning exists to announce,
+   and it announced it once per session. Measured 2026-09-15: five consecutive `_snapshot_times`
+   calls at t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 each returned history only to
+   **0.9 fm of the requested 1.4 fm — half the evolution — and four of the five were silent**. The
+   `maxlog` is gone and the message now also names `requested_final_time` and `last_snapshot`, so
+   the size of the loss is in the warning rather than left to be worked out. Guarded in
+   `test/runtests.jl` "snapshot time axis matches the snapshots taken": five calls must produce five
+   warnings (the guard was falsified against the old behaviour — it sees 1, and fails).
+2. 🔴 **`bench_physics_gates.jl` gate (b), labelled "tail after 10 τ_drag", measured the tail after
+   5.0 τ_drag.** Its `tfinal` comes from a physical time (`10/η_D = 3.826 fm`), so `tfinal/Δt` is an
+   arbitrary real, `steps % save_every ≠ 0`, and with `save = tfinal/2` the entire trailing save
+   interval went: last snapshot **1.914 fm, exactly half the window**. Gate (a) lost 12.4 % of its
+   diffusive window at T = 0.45 and T = 0.30 the same way. Both gates still PASSED — (b) starts in
+   equilibrium, so its observable is stationary — which is why nothing caught it except the driver
+   warning silenced by defect 1. `box_run` now snaps `tfinal` to an exact multiple of the save
+   interval. All 18 gates still pass, now over the windows their labels claim. The snap also made
+   gate (a) *sharper*, which is the sign the lost window was degrading the measurement and not only
+   mislabelling it: D_s measured/nominal at z = 3.33 / 5.00 / 9.62 went **0.9896 / 0.9956 / 0.9975 →
+   0.9975 / 0.9969 / 0.9975** on the CPU and **0.9948 / 1.0072 / 1.0034 → 0.9978 / 0.9974 / 0.9986**
+   on the GPU — worst deviation 1.04 % → 0.31 %.
+
+3. **`_to_cdf!`'s tie-breaking nudge was an absolute `eps(Float64)`, so it did nothing above a
+   cumulative of ≈10³.** `max(c[k], c[k-1] + eps(Float64))` adds 2.2e-16 — not representable next to
+   a value of 10³ or more, so `max` returned `c[k-1]` and the array came out flat exactly where the
+   guard was meant to bite, while the docstring said "strictly increasing". Measured 2026-09-15 on a
+   FONLL-shaped density with a hard cutoff, 300 nodes: **149 tied knots at every overall scale
+   ≥ 10³, against 0 at scale 1.** It changed no result — the ties land in the zero-density tail,
+   `LinearInterpolation` handles the flat region, and the sampled ⟨p⟩ was bit-identical from scale 1
+   to 10⁹ — which is why nothing caught it, but a tie in a populated region would not have been
+   harmless. Now `nextfloat(c[k-1])`, which is the representable step at any magnitude: strictly
+   increasing at every scale tested, ⟨p⟩ unchanged, all ten corpus hashes unchanged.
+
+### Changed — figures and documentation
+- **`bench_semianalytic.jl` (S5) is plotted as what its gate measures.** The gate is per-particle
+  (`max |p_meas − m·γ(r)v(r)|`, order 1.00); the figure was a histogram of `|p|`, which throws that
+  away and showed the comoving and free-streaming distributions overlapping instead. It now draws
+  each particle's own residual against its radius with the predicted one-step lag
+  `−m·d(γv)/dr·v·Δt` through it — the residual follows the closed form in *shape*, and is
+  identically zero past r = 8 fm where the flow profile saturates and dv/dr = 0 — plus the Δt
+  convergence. The old plot's sign was never stated; the residual is negative (the momentum is
+  written at the radius the particle has just left).
+- **`examples/01_uniform_bath.jl`, the ℓ=1 panel, now draws the statistical floor.** The current
+  decays exponentially for ~11 τ_drag and then flattens into the ensemble's own standard error on
+  ⟨p_x⟩. Unmarked, that tail read as the engine leaving the closed form; the panel now shades the
+  SEM band and the window the rate is actually fitted over. (⚠ the floor is taken over the
+  equilibrated snapshots: the IC is a δ-function in p, so `sem_px[1]` is exactly 0 and a plain
+  minimum collapses the log axis.)
+- **The module docstring said the drag is `η_D = T²/(M·D_sT)·(M/E)`.** That is `η_eff`;
+  `η_D = T²/(M·D_sT)` and the `M/E*` factor is the relativistic branch. The README and the kernel
+  docstrings had it right.
+- **README and `examples/README.md`**: the limits section is written as physics rather than as an
+  account of which parent-repo drivers once got it wrong, and the fourth thumbnail is example 03
+  rather than a bench figure.
+
 ## 0.2.3 — 2026-09-02  (the limits and the input contract: seven defects, all fixed)
 
 ⚠ **THIS RELEASE CHANGES THE DEFAULT DYNAMICS.** Four of the ten `regression_corpus.jl` hashes were

@@ -95,6 +95,9 @@ rate_inst(k) = begin
     η_D * mean((M ./ Ek) .* view(mom[k], 1, :)) / mean(view(mom[k], 1, :))
 end
 floor_pct = 2.4 * sqrt(1e6 / N)
+# The standard error on ⟨p_x⟩ itself, snapshot by snapshot: once the current falls below this the
+# measurement is reading its own noise, not the engine. It is what the figure's shaded band is.
+sem_px = [std(view(m, 1, :)) / sqrt(N) for m in mom]
 
 println("── relaxation ──")
 @printf("  ⟨p²⟩:  %.4f → %.4f GeV²   (Jüttner ⟨p²⟩ = %.4f, off by %+.2f %%)\n",
@@ -122,9 +125,22 @@ if plots_on()
     pa = plot(t ./ τ_drag, p2; m = :circle, c = :steelblue, xlabel = "t / τ_drag",
               ylabel = "⟨p²⟩ [GeV²]", label = "engine", title = "isotropisation")
     hline!(pa, [p2eq]; ls = :dash, c = :black, label = "Jüttner ⟨p²⟩")
-    pb = plot(t ./ τ_drag, max.(px, 1e-4); m = :circle, c = :firebrick, yscale = :log10,
+    # The current decays exponentially until it reaches the ensemble's own standard error on
+    # ⟨p_x⟩ — below that band the points are noise, which is why the rate is fitted only over
+    # `sel` (⟨p_x⟩ > 10 % of its initial value). Drawing the band keeps the flat tail from
+    # reading as the engine leaving the closed form.
+    # Stop the axis a factor 3 under the floor: below that the points are pure noise and a wider
+    # axis only makes the excursions look like structure. ⚠ Take the floor over the EQUILIBRATED
+    # snapshots: the IC here is a δ-function in p, so sem_px[1] is exactly 0 and a plain
+    # `minimum` would put the axis bottom at 0 and collapse the log scale.
+    pxlo = minimum(@view sem_px[2:end]) / 3
+    pb = plot(t ./ τ_drag, max.(px, pxlo); m = :circle, c = :firebrick, yscale = :log10,
               xlabel = "t / τ_drag", ylabel = "⟨p_x⟩ [GeV]", label = "engine",
-              title = "ℓ=1 current decay")
+              title = "ℓ=1 current decay", ylims = (pxlo, 6 * px[1]), legend = :topright)
+    plot!(pb, t ./ τ_drag, sem_px; fillrange = pxlo, fillalpha = 0.2, fillcolor = :gray,
+          lc = :gray, ls = :dot, lw = 1, label = "noise floor (SEM, N = $N)")
+    vspan!(pb, [0.0, maximum(t[sel]) / τ_drag]; fillalpha = 0.10, fillcolor = :steelblue,
+           lc = :transparent, label = "rate fitted here")
     plot!(pb, t ./ τ_drag, px[1] .* exp.(-K2K3 * η_D .* t); ls = :dash, c = :black,
           label = "exp(−(K₂/K₃)η_D t)")
     pc = plot(c1, max.(h1, 1e-4); m = :circle, c = :steelblue, yscale = :log10,

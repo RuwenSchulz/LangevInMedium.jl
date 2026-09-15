@@ -89,6 +89,18 @@ const DST     = 0.11634
         # not divisible: 5295 steps, save every 662 ⇒ 7 saves at k·1.324, NOT k·10.59/7
         tp = @test_logs (:warn, r"does not divide") ST(0.0, 10.59, 2e-3, 5295, 662, 7)
         @test length(tp) == 8 && isapprox(step(tp), 662 * 2e-3; rtol = 1e-12) && tp[1] == 0.0
+        # 🔴 REGRESSION GUARD, 2026-09-15. The warning carried `maxlog = 1`, which is keyed by
+        # source location — so in a CAMPAIGN only the FIRST affected run announced that it had
+        # dropped history and every later one lost it in silence. Measured then: five consecutive
+        # calls each returned history only to 0.9 fm of a requested 1.4 fm, and four said nothing.
+        # Every affected call must warn, so drive it five times and count five warnings.
+        @test length(Test.collect_test_logs(() -> (for _ in 1:5
+                    ST(0.4, 1.4, 1e-3, 999, 500, 1)
+                end))[1]) == 5
+        # and the message now names what was requested against what came back
+        rec = Test.collect_test_logs(() -> ST(0.4, 1.4, 1e-3, 999, 500, 1))[1][1]
+        @test rec.kwargs[:requested_final_time] == 1.4
+        @test isapprox(rec.kwargs[:last_snapshot], 0.9; rtol = 1e-12)
     end
 
     @testset "effective_DsT prescription (const / linear)" begin

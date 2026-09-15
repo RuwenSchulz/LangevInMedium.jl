@@ -332,7 +332,7 @@ let N = QUICK ? 20_000 : 60_000
     # Δr = v·Δt. So the residual is m·d(γv)/dr·v·Δt = O(Δt) by construction and the right statement
     # is its ORDER, not its size. (At Δt = 10⁻³, v = 0.5 and dv/dr = 0.075 fm⁻¹ that predicts
     # ≈ 8·10⁻⁵ GeV, which is what comes out.)
-    local meas, pred, mf
+    local meas, pred, mf, r_fine, res_fine
     worsts = Float64[]; dts = QUICK ? (2e-3, 5e-4) : (4e-3, 2e-3, 1e-3, 5e-4)
     for dt in dts
         _, mc, xc = go(DsT = 0.0, Δt = dt)
@@ -341,6 +341,7 @@ let N = QUICK ? 20_000 : 60_000
         pred  = M .* v_end ./ sqrt.(1 .- v_end .^ 2)
         meas  = vec(sqrt.(sum(abs2, mc[end]; dims = 1)))
         push!(worsts, maximum(abs.(meas .- pred)))
+        dt == last(dts) && (r_fine = r_end; res_fine = meas .- pred)
     end
     _, mfh, _ = go(DsT = DST, collision_mode = :none)            # free streaming, for the contrast
     mf = mfh[end]
@@ -355,20 +356,35 @@ let N = QUICK ? 20_000 : 60_000
     gate!(0.7 < ord < 1.4 && worsts[end] < 1e-4,
           "(S5) the glued momentum is m·γ(r)·v(r) up to the O(Δt) streaming lag (order $(fmt(ord; d=2)))")
     if !NOPLOT
-        edges = range(0, 3.0; length = 50); ctr = (edges[1:end-1] .+ edges[2:end]) ./ 2
-        h(v) = begin
-            c = zeros(length(edges) - 1)
-            for x in v; b = searchsortedlast(edges, x); 1 <= b <= length(c) && (c[b] += 1); end
-            c ./ (sum(c) * step(edges))
-        end
-        p = plot(ctr, max.(h(meas), 1e-4); m = :circle, c = :steelblue, yscale = :log10,
-                 xlabel = "|p| [GeV]", ylabel = "normalised density",
-                 label = "comoving (DsT = 0)", title = "(S5) the two limits that are NOT each other",
-                 ylims = (1e-3, 10))
-        plot!(p, ctr, max.(h(pred), 1e-4); ls = :dash, c = :black, label = "exact m·γ(r)v(r)")
-        plot!(p, ctr, max.(h(vec(sqrt.(sum(abs2, mf; dims = 1)))), 1e-4); m = :square,
-              c = :firebrick, label = "free streaming (collision_mode = :none)")
-        savefig(stash!(p), joinpath(FIGDIR, "semianalytic_S5_blastwave_vs_free.png"))
+        # The gate is PER PARTICLE, so the figure is too. Left: every particle's own residual
+        # against the closed form at its own radius, with the predicted one-step lag
+        # m·d(γv)/dr·v·Δt drawn through it — a histogram of |p| would hide exactly the
+        # per-particle information the gate is built on. Right: that residual is O(Δt).
+        nsub = min(length(r_fine), 4000)      # a readable scatter, not 60 000 overplotted dots
+        sub  = round.(Int, range(1, length(r_fine); length = nsub))
+        rr_s = r_fine[sub]; res_s = res_fine[sub]
+        # The momentum is written at r_before and compared against the closed form at r_after, so
+        # the residual is NEGATIVE and equals −m·d(γv)/dr·v·Δt — the particle carries the momentum
+        # of the radius it has just left. Beyond r = 8 fm the flow profile saturates, dv/dr = 0,
+        # and the residual vanishes identically: that step is the prediction, not an artefact.
+        dvdr(r) = r < 8.0 ? vmax / 8.0 : 0.0
+        lag(r) = (v = vprof(min(r, last(xg))); -M * dvdr(r) / (1 - v^2)^1.5 * v * last(dts))
+        rline = range(0, maximum(rr_s); length = 400)
+        pa = plot(rr_s, 1e3 .* res_s; seriestype = :scatter, ms = 1.4, mswidth = 0,
+                  c = :steelblue, alpha = 0.4, label = "per particle (Δt = $(last(dts)) fm)",
+                  xlabel = "r [fm]", ylabel = "p_meas − m·γ(r)v(r)  [MeV]",
+                  title = "(S5) comoving blast wave, particle by particle")
+        plot!(pa, rline, 1e3 .* lag.(rline); ls = :dash, c = :black, lw = 2,
+              label = "predicted one-step lag  −m·d(γv)/dr·v·Δt")
+        hline!(pa, [0.0]; c = :gray, ls = :dot, lw = 1, label = "")
+        pb = plot(collect(dts), worsts; m = :circle, c = :steelblue,
+                  xscale = :log10, yscale = :log10, xlabel = "Δt [fm]",
+                  ylabel = "worst |p_meas − m·γ(r)v(r)| [GeV]",
+                  label = "measured", title = "(S5) ... and it vanishes as Δt (order $(fmt(ord; d = 2)))")
+        plot!(pb, collect(dts), worsts[1] .* (collect(dts) ./ dts[1]); ls = :dash, c = :black,
+              label = "slope 1")
+        savefig(stash!(plot(pa, pb; layout = (1, 2), size = (1150, 430))),
+                joinpath(FIGDIR, "semianalytic_S5_blastwave_vs_free.png"))
     end
 end
 

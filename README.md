@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img alt="version"  src="https://img.shields.io/badge/version-0.2.3-blue">
+  <img alt="version"  src="https://img.shields.io/badge/version-0.2.4-blue">
   <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
   <img alt="julia"    src="https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia&logoColor=white">
   <img alt="backends" src="https://img.shields.io/badge/backends-CPU%20%2B%20CUDA-76B900">
@@ -18,7 +18,7 @@
 </p>
 <p align="center">
   <sub>
-    <b>Everything above is produced by one 139-line example</b> (<a href="examples/01_uniform_bath.jl"><code>examples/01_uniform_bath.jl</code></a>)
+    <b>Everything above is produced by a single example script</b> (<a href="examples/01_uniform_bath.jl"><code>examples/01_uniform_bath.jl</code></a>)
     and every dashed line is a closed form, not a fit: the Jüttner ⟨p²⟩, the ℓ=1 decay rate
     <code>(K₂/K₃)·η_D</code>, the exact Jüttner momentum distribution, and <code>D_s = D_sT/T·ħc</code>
     from the mean-square displacement (measured −0.45 %).
@@ -117,7 +117,7 @@ LIM_NOPLOT=1 julia --project=Julia .../examples/03_four_limits.jl     # numbers 
 |---|---|---|
 | [**01**](examples/01_uniform_bath.jl) `uniform_bath` | a box at fixed `T`, no flow, a δ-function initial momentum | what `D_sT` actually sets; that ⟨p²⟩ → the Jüttner value, the current decays at `(K₂/K₃)η_D`, and the MSD slope is `2·d·D_s`. **Everything here has a closed form** — if the engine breaks, it breaks here first |
 | [**02**](examples/02_bjorken_fireball.jl) `bjorken_fireball` | a cooling, expanding fireball; the engine samples a FONLL-shaped density; freeze-out off the snapshots | the production shape of a real run, and the radial flow lifting the `p_T` spectrum (⟨p_T⟩ 1.586 → 1.318 GeV) |
-| [**03**](examples/03_four_limits.jl) `four_limits` | `:langevin`, `:rta`, `DsT = 0`, `DsT → 0⁺`, `:none` on one background | **read this one.** Three of those five were confused with each other in production code. See below |
+| [**03**](examples/03_four_limits.jl) `four_limits` | `:langevin`, `:rta`, `DsT = 0`, `DsT → 0⁺`, `:none` on one background | **read this one before choosing a collision setting.** The three weak-coupling settings are three *different* limits, and the figure separates them |
 | [**04**](examples/04_pz_and_rapidity.jl) `pz_and_rapidity` | `momentum_dimensions = 3`, both `pz_init` modes, `track_eta_s` | what row 3 *means* (`p_z* = m_T sinh(y − η_s)`, not a lab `p_z`), and the kernel that makes `dN/dy = ρ(η_s) ⊛ P(K)` exact |
 | [**05**](examples/05_gpu_freezeout.jl) `gpu_freezeout` | the GPU path with `freezeout_capture` | the production pattern: memory ∝ `N` instead of `N·(saves+1)`, the crossing resolved to `Δt`, and the fact that the run does **not** stop at freeze-out |
 
@@ -126,22 +126,33 @@ LIM_NOPLOT=1 julia --project=Julia .../examples/03_four_limits.jl     # numbers 
 <td width="25%"><a href="examples/02_bjorken_fireball.jl"><img src="examples/figures/02_bjorken_fireball.png" alt="02"></a><br><sub><b>02</b> a heavy-ion run: the radial flow lifting the charm p_T spectrum, the freeze-out time distribution, the radial expansion</sub></td>
 <td width="25%"><a href="examples/04_pz_and_rapidity.jl"><img src="examples/figures/04_pz_and_rapidity.png" alt="04"></a><br><sub><b>04</b> the two p_z* initialisations being forgotten, and the dN/dy kernel P(K) they leave behind</sub></td>
 <td width="25%"><a href="examples/05_gpu_freezeout.jl"><img src="examples/figures/05_gpu_freezeout.png" alt="05"></a><br><sub><b>05</b> the GPU freeze-out latch: spectrum, crossing time resolved to Δt, and the freeze-out surface</sub></td>
-<td width="25%"><a href="bench/bench_semianalytic.jl"><img src="bench/results/figures/semianalytic_S5_blastwave_vs_free.png" alt="S5"></a><br><sub><b>S5</b> the comoving blast wave against free streaming — two limits that are <i>not</i> each other</sub></td>
+<td width="25%"><a href="examples/03_four_limits.jl"><img src="examples/figures/03_four_limits.png" alt="03"></a><br><sub><b>03</b> the five collision settings on one background: which of them thermalise, which stay glued to the flow, and which do nothing at all</sub></td>
 </tr>
 </table>
 
-### The example that exists because of a real bug
+### The weak-coupling limits
 
 <p align="center">
-  <img src="examples/figures/03_four_limits.png" alt="The four limits" width="94%">
+  <img src="examples/figures/03_four_limits.png" alt="The collision settings side by side" width="94%">
 </p>
 
-`D_sT = 0` is **not** free streaming — it is the *comoving* limit, every quark handed `p = m·γ(r)v(r)`
-with **no thermal width at all** (the black spike). `D_sT → 0⁺` is a *third* thing: it thermalises
-*with* the fluid and keeps the full Jüttner width, landing ~20 % higher in ⟨p_x⟩ (orange). Free
-streaming is `collision_mode = :none` (red spike), and until v0.2.3 the only thing that actually
-free-streamed was a *negative* `D_sT`, by accident. Three places in the parent repository — including
-a driver that produced a figure — asked for `D_sT = 0` and called the result "free streaming".
+Three settings sit near zero coupling and none of them is the same limit.
+
+`D_sT = 0` is the **comoving** limit: every quark is handed `p = m·γ(r)v(r)` at its own radius, with
+no thermal width at all — `⟨p_x⟩ = 0.86603 GeV` and `sd(p_x) = 0` exactly (the black spike).
+`D_sT → 0⁺` is a **different** limit: the quark thermalises *with* the fluid and keeps the full
+Jüttner width, landing on `γ·v·⟨E*⟩ = 1.068 GeV`, **23 % higher** (orange). **Free streaming** is
+neither, and is `collision_mode = :none` (red spike): no drag, no noise, no frame change, so the
+momenta are exactly constant — the boosted initial momentum, 2.196 GeV, forever.
+
+The two zero-coupling limits differ because the order of limits matters. At `D_sT = 0` the noise is
+switched off before the drag has anywhere to relax to, so the particle *is* the fluid element. At
+`D_sT → 0⁺` drag and noise stay in Einstein balance all the way down, so the equilibrium is the
+local Jüttner however small the coefficient gets. `:none` removes the collision term itself, which
+is a third thing again.
+
+`m ≤ 0` and `D_sT < 0` are refused since v0.2.3; before that they degraded silently to free
+streaming (CHANGELOG 0.2.3).
 
 ## Validation
 
@@ -176,8 +187,8 @@ realised rate was 22 % too fast).
 | Bjorken redshift | `⟨p_z*²⟩ ∝ 1/τ²` telescopes | **2.9e-13** |
 | free streaming + redshift | per-particle closed form for `x_⊥(τ)` | converges at order **1.00** |
 | equilibrium **shape** | two-sample KS vs the exact Jüttner, 2 and 3 rows | 0.0019 / 0.0039 (95 % critical 0.0043) |
-| comoving blast wave | `p = m·γ(r)v(r)`, **per particle** | one-step lag, order **1.00** |
-| MSD slope | `2·d·D_s` at three `z` | 0.9896 / 0.9956 / 0.9975 |
+| comoving blast wave | `p = m·γ(r)v(r)`, **per particle**, and the residual's shape in `r` | the predicted one-step lag `−m·d(γv)/dr·v·Δt`, order **1.00** |
+| MSD slope | `2·d·D_s` at three `z` | 0.9975 / 0.9969 / 0.9975 (CPU) |
 | ℓ=1 rate | `η_D·K₂/K₃` (3 rows), `λ₁(2D)·η_D` (2 rows) | 0.6364 vs 0.6403 · 0.6952 vs 0.6977 |
 
 `σ_xp` is the sharp one: it is built from the momentum update and the position update *together*,
@@ -185,6 +196,16 @@ so an operator-split error shows there while `σ_pp` and `σ_xx` can each look r
 
 <p align="center">
   <img src="bench/results/figures/semianalytic_S1_ou_covariance.png" alt="OU phase-space covariance" width="70%">
+</p>
+
+The comoving limit is checked the same way — per particle, not through a moment. Every quark must
+carry exactly `p = m·γ(r)v(r)` at its own radius, and the residual left over is not merely small but
+*predicted*: the momentum is written at the radius the particle has just left, so it lags by
+`−m·d(γv)/dr·v·Δt`, and it vanishes identically beyond `r = 8 fm` where the flow profile saturates
+and `dv/dr = 0`.
+
+<p align="center">
+  <img src="bench/results/figures/semianalytic_S5_blastwave_vs_free.png" alt="Comoving blast wave, per particle" width="94%">
 </p>
 
 ### How wrong is it at a given Δt?
@@ -207,9 +228,9 @@ D_s is unbiased to ≲1 % for η_D Δt ≤ 0.08
 Israel–Stewart τ_n that Fluidum's `τ_diffusion_hadron` evaluates. For a Fokker–Planck process
 with drag η_D the ℓ=1 mode decays at `η_D·K₂/K₃` (an exact 3-D identity), so a Langevin built
 from `tau_drag` reproduces **both** hydro coefficients, D_s and τ_n. Building the drag from
-`tau_n_main3` applies K₃/K₂ once too often and inflates the realised D_s by 1.26–1.74× — that
-was the state of every product before 2026-08-02. The BGK (`:rta`) path needs τ_n, not the drag
-(`build_taun_current_spline`). `test/runtests.jl` guards the ratio pointwise.
+`tau_n_main3` instead applies K₃/K₂ once too often and inflates the realised D_s by 1.26–1.74×.
+The BGK (`:rta`) path needs τ_n, not the drag (`build_taun_current_spline`).
+`test/runtests.jl` guards the ratio pointwise.
 
 `LV_TAUN_SCALE` (env var, default 1) rescales **both** splines — diagnostic only; it moves D_s
 too. The bench suite refuses to run under any other value.
@@ -220,9 +241,9 @@ A 2-D momentum run relaxes to the 2-D Jüttner, whose ℓ=1 rate differs from th
 `dimensions = 2, momentum_dimensions = 3` is the combination that removes that offset: three
 momentum components on a two-dimensional transverse plane.
 
-**3. `D_sT = 0`, `D_sT → 0⁺` and `:none` are three different limits.** See the figure above.
-`m ≤ 0` and `D_sT < 0` are refused since v0.2.3 — before that they degraded *silently* to free
-streaming, producing a run indistinguishable from a Langevin run except by its numbers.
+**3. `D_sT = 0`, `D_sT → 0⁺` and `:none` are three different limits.** See
+["The weak-coupling limits"](#the-weak-coupling-limits) above. `m ≤ 0` and `D_sT < 0` are refused
+since v0.2.3; before that they degraded silently to free streaming.
 
 
 ## CPU vs GPU
@@ -451,6 +472,39 @@ with the pre-fix measurement in the comment, so a regression has something speci
   no escapes), and `track_eta_s` is an exact passenger (momenta and positions bit-identical with it
   on and off, max |Δ| = **0.000e+00**). The 0.2.1 hot-loop rewrite has held: **0 bytes per
   particle-step** across CPU × N ∈ {2·10⁴, 10⁵} × pdim ∈ {2, 3} × {`:langevin`, `:rta`}.
+
+#### THE DIAGNOSTICS THAT COULD NOT BE HEARD (found 2026-09-15, all FIXED in 0.2.4)
+
+0.2.3 asked what the engine does at a limit. This pass asked the next question — whether the
+warnings it added can actually be *heard* in the way the engine is really driven, which is a
+campaign of many runs in one session. Three defects, none of which moves a number: all ten corpus
+CPU hashes reproduce bit for bit and the GPU moments match.
+
+- 🔴 **The dropped-history warning carried `maxlog = 1`, so only the FIRST affected run in a session
+  said anything.** `maxlog` is keyed by source location — exactly the reason the 0.2.3 window and
+  escaped-particle warnings were deliberately written without it. Losing history silently is the one
+  thing this warning exists to prevent, and it prevented it once per session. Measured: five
+  consecutive `_snapshot_times` calls at t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 each
+  returned history only out to **0.9 fm of a requested 1.4 fm — half the evolution — and four of the
+  five were silent.** The `maxlog` is gone, and the message now names `requested_final_time` and
+  `last_snapshot` so the size of the loss is in the warning itself. Guarded in `runtests.jl`: five
+  calls must yield five warnings. The guard was falsified against the old behaviour (it sees one).
+- **`_to_cdf!`'s tie-breaking nudge was an absolute `eps(Float64)` and did nothing above a
+  cumulative of ≈10³.** `c[k-1] + 2.2e-16` is not representable next to a value of 10³, so `max`
+  returned `c[k-1]` and the CDF came out flat exactly where the guard was meant to bite — while the
+  docstring promised "strictly increasing". Measured: **149 tied knots at every overall scale ≥ 10³,
+  0 at scale 1**, on a FONLL-shaped density with a hard cutoff over 300 nodes. No result moved (the
+  ties fall in the zero-density tail and the sampled ⟨p⟩ was bit-identical from scale 1 to 10⁹),
+  which is why nothing caught it; a tie in a populated region would not have been harmless. Now
+  `nextfloat`, the representable step at any magnitude.
+- 🔴 **`bench_physics_gates.jl` gate (b) is labelled "tail after 10 τ_drag" and measured the tail
+  after 5.0.** These gates take `tfinal` from a physical time (`10/η_D` = 3.826 fm), so `tfinal/Δt`
+  is an arbitrary real, `steps % save_every ≠ 0`, and with `save = tfinal/2` the whole trailing save
+  interval went: last snapshot **1.914 fm, exactly half the window**. Gate (a) lost 12.4 % of its
+  diffusive window at T = 0.45 and 0.30. **Both gates still passed** — (b) starts in equilibrium, so
+  what it measures is stationary — so nothing announced it except the warning that the defect above
+  had silenced. `box_run` now snaps `tfinal` to an exact multiple of the save interval; all 18 gates
+  still pass, over the windows their labels claim.
 
 #### What regenerates
 

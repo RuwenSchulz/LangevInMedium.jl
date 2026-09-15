@@ -17,7 +17,7 @@ carry, kept out of the way so each example is only about the engine.
 |---|---|---|
 | `01_uniform_bath.jl` | a box at fixed `T`, no flow, a δ-function initial momentum | ⟨p²⟩ → the Jüttner value, the ℓ=1 current decaying at exactly `(K₂/K₃)η_D`, the MSD slope = `2·d·D_s`, and the final `\|p\|` histogram on top of the exact Jüttner. Everything here has a closed form — if the engine breaks, it breaks here first |
 | `02_bjorken_fireball.jl` | a cooling, radially expanding fireball; the engine samples from a FONLL-shaped density; `DsT_linear`; freeze-out read off the snapshots | the radial flow picking the `p_T` spectrum up, and the freeze-out/initial ratio. Also the cost of doing freeze-out from snapshots: it is resolved to the save cadence, not to `Δt` |
-| `03_four_limits.jl` | Langevin, RTA, `DsT = 0`, `DsT → 0⁺` and `collision_mode = :none`, on one background | **the example to read if you read one.** `DsT = 0` is the *comoving* limit (`p = m·γ·v`, no thermal width), `DsT → 0⁺` is a different limit again (thermal comoving, ≈ 20 % higher `⟨p_x⟩`), and free streaming is `:none`. Three places in this repository had those confused |
+| `03_four_limits.jl` | Langevin, RTA, `DsT = 0`, `DsT → 0⁺` and `collision_mode = :none`, on one background | **the example to read if you read one.** The three weak-coupling settings are three different limits: `DsT = 0` is *comoving* (`p = m·γ·v`, no thermal width), `DsT → 0⁺` is *thermal* comoving (23 % higher `⟨p_x⟩` in this setup), and free streaming is `:none` |
 | `04_pz_and_rapidity.jl` | `momentum_dimensions = 3`, both `pz_init` modes, the Bjorken redshift, `track_eta_s` | what row 3 *means* (`p_z* = m_T sinh(y − η_s)`, not a lab `p_z`), how fast the two initialisations are forgotten, and the `dN/dy` kernel `P(K)` that makes `dN/dy = ρ(η_s) ⊛ P(K)` exact |
 | `05_gpu_freezeout.jl` | the GPU path with `freezeout_capture` | the production pattern: memory ∝ `N` instead of `N·(saves+1)` (≈ 500× here), the crossing resolved to `Δt`, and the fact that the run does **not** stop at freeze-out. Falls back to the CPU without CUDA |
 
@@ -30,8 +30,8 @@ carry, kept out of the way so each example is only about the engine.
   and the hydro coefficients are matched in the 3-D theory. `momentum_dimensions = 3` with
   `dimensions = 2` is the combination that removes that offset.
 - **One transport coefficient, not two.** `D_sT` fixes `τ_drag = m·D_sT/T²`, and `τ_n = τ_drag·K₃/K₂`
-  is *derived*. Building the drag from `tau_n_main3` applies `K₃/K₂` once too often — it was the
-  state of every product in this repository before 2026-08-02.
+  is *derived*. Building the drag from `tau_n_main3` instead applies `K₃/K₂` once too often and
+  inflates the realised `D_s` by 1.26–1.74×.
 - **`proper_time_kicks = true` on any flowing background.** The undilated lab-`Δt` kick makes the
   stationary state `f_J/(γ(1+v·v_r))` instead of the boosted Jüttner, i.e. a spurious inward
   diffusion current. It defaults to `false` only so that older products stay bit-identical.

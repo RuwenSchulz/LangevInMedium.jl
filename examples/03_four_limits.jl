@@ -1,22 +1,22 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# 03 — THE FOUR LIMITS, ON ONE BACKGROUND
+# 03 — THE COLLISION SETTINGS, SIDE BY SIDE ON ONE BACKGROUND
 #
-# The engine can be asked for four qualitatively different things, and three of them were confused
-# with each other in this repository until 2026-09-02. Run them side by side and the distinctions
-# stop being abstract:
+# The engine can be asked for five qualitatively different things. Run them together and the
+# distinctions stop being abstract:
 #
 #   :langevin, D_sT > 0     the physics — drag + noise, relaxing towards the boosted Jüttner
 #   :rta,      D_sT > 0     BGK: the same τ_n, a different collision operator
 #   D_sT = 0                the COMOVING limit — every quark handed p = m·γ(r)·v(r) EXACTLY, with
 #                           no thermal spread at all. A cold, perfect blast wave.
+#   D_sT → 0⁺               THERMAL comoving — drag and noise stay in Einstein balance all the way
+#                           down, so the width is the full Jüttner one. 23 % above the line above.
 #   :none                   FREE STREAMING — no drag, no noise, momenta exactly constant.
 #
-# ⚠ THE TRAP THIS EXAMPLE EXISTS FOR. `D_sT = 0` is NOT free streaming; it is the opposite limit.
-# Nor is it the `D_sT → 0⁺` limit, which thermalises WITH the fluid and keeps the Jüttner width —
-# a ~20 % difference in ⟨p_x⟩ on the flow plateau below. Before 0.2.3 the only thing that actually
-# free-streamed was a NEGATIVE D_sT, by accident, and that is now refused. Ask for free streaming
-# with `collision_mode = :none`.
+# ⚠ THE THREE WEAK-COUPLING SETTINGS ARE THREE DIFFERENT LIMITS. `D_sT = 0` is not free streaming
+# and it is not `D_sT → 0⁺` either: the order in which the noise is switched off decides which one
+# you get, and the gap is 23 % in ⟨p_x⟩ on the flow plateau below. Ask for free streaming by name,
+# with `collision_mode = :none`. `m ≤ 0` and `D_sT < 0` are refused since 0.2.3.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/examples/03_four_limits.jl
 # ==============================================================================================

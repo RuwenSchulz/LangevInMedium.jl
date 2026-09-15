@@ -4,9 +4,11 @@
 Relativistic Langevin dynamics of heavy quarks in an evolving medium. An ensemble of particles
 is propagated on a tabulated background `T(r, τ)`, `v_r(r, τ)` (typically a hydro output): each
 step boosts the momenta into the local fluid rest frame, applies the exact Ornstein–Uhlenbeck
-propagator for the drag `η_D = T²/(M·D_sT)·(M/E)` with the matching Einstein noise `κ = 2MTη_D`,
-boosts back and streams the positions with `dx/dt = p/E`. CPU and CUDA backends run the same
-algorithm; the GPU path is attached at runtime by `using CUDA` (Requires.jl).
+propagator for the drag `η_D = T²/(M·D_sT)` with the matching Einstein noise `κ = 2MTη_D`, boosts
+back and streams the positions with `dx/dt = p/E`. With `relativistic = true` the propagator uses
+the energy-dependent `η_eff = η_D·M/E*`, which is what makes the stationary state the Jüttner.
+CPU and CUDA backends run the same algorithm; the GPU path is attached at runtime by `using CUDA`
+(Requires.jl).
 
 One public entry point, dispatched on the backend singleton:
 

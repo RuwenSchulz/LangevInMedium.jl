@@ -26,7 +26,19 @@ ds_fm(T) = (DST / T) * HBARC                        # fm — D_s = D_sT/T [GeV�
 K2K3(z) = Bessels.besselkx(2, z) / Bessels.besselkx(3, z)
 lam1(T, d) = jmean(p -> (M / sqrt(p^2 + M^2)) * p^2, M, T, d) / jmean(p -> p^2, M, T, d)
 
+# ⚠ `tfinal` IS SNAPPED SO THE SAVE INTERVAL DIVIDES THE EVOLUTION, and that is not cosmetic.
+# These gates pick `tfinal` from a physical time (`k/η_D`), so `tfinal/dt` is an arbitrary real and
+# `steps % save_every` is almost never 0 — and when it is not, `_snapshot_times` drops the ENTIRE
+# trailing save interval. Measured 2026-09-15 before this snap: gate (b) asked for 10 τ_drag with
+# `save = tf/2` and its last snapshot was at **5.0 τ_drag**, half the window, while the gate's own
+# label said 10; gate (a) lost 12.4 % of its diffusive window at T = 0.45 and 0.30. Both still
+# passed, so nothing announced it except the driver's warning — which carried `maxlog = 1` at the
+# time and therefore fired once for the whole suite.
 function box_run(backend, T; N, dt, tfinal, save, x0, p0, seed, kw...)
+    save_every = max(round(Int, save / dt), 1)
+    nsaves     = max(fld(round(Int, tfinal / dt), save_every), 1)
+    tfinal     = nsaves * save_every * dt          # an exact multiple of the save interval
+    save       = save_every * dt
     xg, tg, Tf, Vf = box_fields(T; tf = tfinal)
     run_fields(backend, xg, tg, Tf, Vf; M, DsT = DST, N, dt, tfinal, save, x0, p0, seed, kw...)
 end
