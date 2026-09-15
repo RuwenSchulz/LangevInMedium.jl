@@ -109,10 +109,7 @@ why two of the five are still a δ function at final time, and always will be:
 if plots_on()
     pa = plot(; xlabel = "τ [fm]", ylabel = "⟨p_x⟩ [GeV]",
               title = "how the current relaxes")
-    # ⚠ no :black — these figures have a TRANSPARENT ground and are read on a light OR a dark page.
-    # The comoving series gets its own hue rather than the neutral grey, which is reserved for
-    # the closed-form reference lines and the axes; grey-on-grey made the two indistinguishable.
-    cols = [:steelblue, :seagreen, :mediumpurple, :darkorange, :firebrick]
+    cols = [:steelblue, :seagreen, :black, :darkorange, :firebrick]
     for (k, (label, t, px, _)) in enumerate(results)
         plot!(pa, t, px; m = :circle, c = cols[k], label = label)
     end

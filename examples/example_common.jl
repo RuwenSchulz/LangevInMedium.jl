@@ -103,16 +103,8 @@ function plots_on()
     @eval Main begin
         using Plots
         gr()
-        # ⚠ TRANSPARENT BACKGROUND, deliberately. These figures are embedded in README.md, which
-        # GitHub renders in the VIEWER's theme — an opaque white canvas is a glaring white slab on
-        # a dark page. With a transparent ground the plot sits on whatever the page provides, so
-        # the axes, ticks, labels and legend frame are drawn in a mid grey that has contrast
-        # against both. The series colours are chosen to work on either, too.
         default(; fontfamily = "sans-serif", framestyle = :box, grid = true, legend = :best,
                 dpi = 150, lw = 2, ms = 4, size = (620, 440),
-                background_color = :transparent, background_color_legend = :transparent,
-                foreground_color = "#888888", foreground_color_text = "#888888",
-                titlefontcolor = "#888888",
                 left_margin = 6Plots.mm, bottom_margin = 6Plots.mm, top_margin = 3Plots.mm)
     end
     true

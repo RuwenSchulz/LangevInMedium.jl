@@ -124,7 +124,7 @@ if plots_on()
     c1, h1 = hist(pmag, edges); _, h2 = hist(ref, edges)
     pa = plot(t ./ τ_drag, p2; m = :circle, c = :steelblue, xlabel = "t / τ_drag",
               ylabel = "⟨p²⟩ [GeV²]", label = "engine", title = "isotropisation")
-    hline!(pa, [p2eq]; ls = :dash, c = "#9a9a9a", label = "Jüttner ⟨p²⟩")
+    hline!(pa, [p2eq]; ls = :dash, c = :black, label = "Jüttner ⟨p²⟩")
     # The current decays exponentially until it reaches the ensemble's own standard error on
     # ⟨p_x⟩ — below that band the points are noise, which is why the rate is fitted only over
     # `sel` (⟨p_x⟩ > 10 % of its initial value). Drawing the band keeps the flat tail from
@@ -137,19 +137,19 @@ if plots_on()
     pb = plot(t ./ τ_drag, max.(px, pxlo); m = :circle, c = :firebrick, yscale = :log10,
               xlabel = "t / τ_drag", ylabel = "⟨p_x⟩ [GeV]", label = "engine",
               title = "ℓ=1 current decay", ylims = (pxlo, 6 * px[1]), legend = :topright)
-    plot!(pb, t ./ τ_drag, sem_px; fillrange = pxlo, fillalpha = 0.16, fillcolor = "#9a9a9a",
-          lc = "#9a9a9a", ls = :dot, lw = 1, label = "noise floor (SEM, N = $N)")
+    plot!(pb, t ./ τ_drag, sem_px; fillrange = pxlo, fillalpha = 0.2, fillcolor = :gray,
+          lc = :gray, ls = :dot, lw = 1, label = "noise floor (SEM, N = $N)")
     vspan!(pb, [0.0, maximum(t[sel]) / τ_drag]; fillalpha = 0.10, fillcolor = :steelblue,
            lc = :transparent, label = "rate fitted here")
-    plot!(pb, t ./ τ_drag, px[1] .* exp.(-K2K3 * η_D .* t); ls = :dash, c = "#9a9a9a",
+    plot!(pb, t ./ τ_drag, px[1] .* exp.(-K2K3 * η_D .* t); ls = :dash, c = :black,
           label = "exp(−(K₂/K₃)η_D t)")
     pc = plot(c1, max.(h1, 1e-4); m = :circle, c = :steelblue, yscale = :log10,
               xlabel = "|p| [GeV]", ylabel = "density", label = "engine, final",
               title = "equilibrium shape", ylims = (1e-3, 3))
-    plot!(pc, c1, max.(h2, 1e-4); ls = :dash, c = "#9a9a9a", label = "exact Jüttner")
+    plot!(pc, c1, max.(h2, 1e-4); ls = :dash, c = :black, label = "exact Jüttner")
     pd = plot(t, msd; m = :circle, c = :seagreen, xlabel = "t [fm]", ylabel = "⟨Δx²⟩ [fm²]",
               label = "engine", title = "ballistic → diffusive")
-    plot!(pd, t[dif], cd[1] .+ cd[2] .* t[dif]; ls = :dash, c = "#9a9a9a",
+    plot!(pd, t[dif], cd[1] .+ cd[2] .* t[dif]; ls = :dash, c = :black,
           label = @sprintf("fit slope/4 = %.4f fm (D_s = %.4f)", cd[2] / 4, D_s))
     savefig_ex(plot(pa, pb, pc, pd; layout = (2, 2), size = (1150, 820)), "01_uniform_bath.png")
 end

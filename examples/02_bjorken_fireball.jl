@@ -112,7 +112,7 @@ if plots_on()
     plot!(pa, c, max.(h_f, 1e-6); m = :square, c = :firebrick, label = "at freeze-out")
     pb = plot(c, h_f ./ max.(h_i, 1e-12); m = :circle, c = :steelblue, xlabel = "p_T [GeV]",
               ylabel = "ratio", label = "", title = "freeze-out / initial")
-    hline!(pb, [1.0]; ls = :dash, c = "#9a9a9a", label = "")
+    hline!(pb, [1.0]; ls = :dash, c = :black, label = "")
     pc = histogram(τ_fo[frozen]; bins = 30, c = :seagreen, xlabel = "τ_fo [fm]",
                    ylabel = "particles", label = "", title = "freeze-out time")
     pd = plot(t, [mean(sqrt.(sum(abs2, x; dims = 1))) for x in pos]; m = :circle, c = :darkorange,
