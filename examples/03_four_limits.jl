@@ -94,36 +94,49 @@ read the table:
     different answer, because the width does not vanish as the drag time does;
   · free streaming keeps the boosted initial momentum forever and moves FASTER than the fluid;
   · Langevin and RTA both relax towards the boosted Jüttner and differ only in how — same τ_n,
-    different collision operator, which is the comparison the papers are about.""")
+    different collision operator, which is the comparison the papers are about.
+
+why two of the five are still a δ function at final time, and always will be:
+  comoving and free streaming carry NO collision term, so there is no mechanism in either that can
+  broaden a momentum — sd(p_x) = 0.00000 exactly, against 0.92–0.95 for the three that thermalise.
+  The initial condition here IS a δ (every particle at r = 8 fm with p_x = 1 GeV, all on the
+  v = 0.5 plateau), so :none simply keeps it for ever and DsT = 0 re-imposes m·γ(r)v(r) every step.
+  Running longer changes nothing. Equilibration is what the OTHER three have — which is why the
+  right-hand panel plots only those three: they are the ones that HAVE a final distribution, and
+  that all three land on ONE Jüttner from this IC is the point of it. The two fixed cases are in
+  the left panel, as the flat lines they are, and their exact values are in the table above.""")
 
 if plots_on()
     pa = plot(; xlabel = "τ [fm]", ylabel = "⟨p_x⟩ [GeV]",
               title = "how the current relaxes")
-    cols = [:steelblue, :seagreen, :black, :darkorange, :firebrick]
+    # ⚠ no :black — these figures have a TRANSPARENT ground and are read on a light OR a dark page.
+    # The comoving series gets its own hue rather than the neutral grey, which is reserved for
+    # the closed-form reference lines and the axes; grey-on-grey made the two indistinguishable.
+    cols = [:steelblue, :seagreen, :mediumpurple, :darkorange, :firebrick]
     for (k, (label, t, px, _)) in enumerate(results)
         plot!(pa, t, px; m = :circle, c = cols[k], label = label)
     end
     hline!(pa, [p_comov]; ls = :dash, c = :gray, label = "m·γ·v")
     hline!(pa, [p_free];  ls = :dot,  c = :gray, label = "boosted IC")
-    # ⚠ TWO OF THE FIVE HAVE NO WIDTH, and drawing them as histograms is what made this panel
-    # unreadable. `DsT = 0` and `:none` are single-valued — every particle carries exactly the same
-    # |p| — so a binned line plot renders them as a narrow triangle whose empty neighbouring bins
-    # were clamped BELOW the axis floor (`max.(h, 1e-4)` against `ylims` starting at 1e-3), and the
-    # connecting line dived out of the frame. They are drawn as what they are: a vertical line at
-    # the closed-form value. Only the three cases that actually have a distribution are binned.
+    # ⚠ ONLY THE THREE CASES THAT HAVE A COLLISION TERM ARE PLOTTED HERE. `DsT = 0` and `:none`
+    # carry none, so nothing in either can ever broaden a momentum: sd(p_x) = 0.00000 EXACTLY at
+    # final time, against 0.92–0.95 for the three below. The IC is a δ (every particle at r = 8 fm
+    # with p_x = 1 GeV, all on the v = 0.5 plateau) and those two still ARE that δ — `:none` keeps
+    # the boosted initial momentum for ever, `DsT = 0` re-imposes p = m·γ(r)v(r) every step. They
+    # are not distributions and never become any, so they have no place in a panel of final
+    # distributions; drawing them here only invited the reading that they had failed to
+    # equilibrate. The left panel already carries both, as the flat lines they are, and the table
+    # above prints their exact values. What is left is the actual result: three different
+    # collision operators, one Jüttner.
     edges = range(0.0, 4.0; length = 45)
     pb = plot(; xlabel = "|p| [GeV]", ylabel = "density", yscale = :log10,
-              title = "the final momentum distributions", ylims = (1e-3, 5),
-              legend = :bottomleft, legendfontsize = 7)
-    spikes = Dict(3 => p_comov, 5 => p_free)          # comoving and free streaming: δ functions
-    for (k, (label, _, _, mf)) in enumerate(results)
-        if haskey(spikes, k)
-            vline!(pb, [spikes[k]]; c = cols[k], lw = 2.5, label = "$label — a δ function")
-        else
-            c, h = hist(vec(sqrt.(sum(abs2, mf; dims = 1))), edges)
-            keep = h .> 0                              # never draw an empty bin on a log axis
-            plot!(pb, c[keep], h[keep]; c = cols[k], lw = 2, label = label)
-        end
+              title = "the final |p|: three collision operators, one Jüttner",
+              titlefontsize = 10, ylims = (1e-3, 5), legend = :bottomleft, legendfontsize = 7)
+    for k in (1, 2, 4)                                 # Langevin, RTA, DsT → 0⁺
+        label, _, _, mf = results[k]
+        c, h = hist(vec(sqrt.(sum(abs2, mf; dims = 1))), edges)
+        keep = h .> 0                                  # never draw an empty bin on a log axis
+        plot!(pb, c[keep], h[keep]; c = cols[k], lw = 2, label = label)
     end
     savefig_ex(plot(pa, pb; layout = (1, 2), size = (1200, 460)), "03_four_limits.png")
 end

@@ -49,8 +49,14 @@ if !NOPLOT
     ENV["GKSwstype"] = get(ENV, "GKSwstype", "100")
     using Plots
     gr()
+    # ⚠ TRANSPARENT background: these figures are embedded in README.md, which GitHub renders in
+    # the VIEWER's theme. An opaque white canvas is a white slab on a dark page. Mid-grey axes and
+    # text read against both grounds. (Same setting in examples/example_common.jl.)
     default(; fontfamily = "sans-serif", framestyle = :box, grid = true, legend = :best,
             dpi = 150, lw = 2, ms = 4, size = (560, 420),
+            background_color = :transparent, background_color_legend = :transparent,
+            foreground_color = "#888888", foreground_color_text = "#888888",
+            titlefontcolor = "#888888",
         left_margin = 6Plots.mm, bottom_margin = 6Plots.mm, top_margin = 3Plots.mm)
 end
 const PANELS = Any[]
@@ -112,9 +118,9 @@ let N = QUICK ? 100_000 : 400_000
         p = plot(ηt, sxx ./ e_xx[end]; m = :circle, c = :steelblue, label = "σ_xx  measured",
                  xlabel = "η_D t", ylabel = "covariance / its own late value",
                  title = "(S1) OU phase space: exact vs engine")
-        plot!(p, ηt, e_xx ./ e_xx[end]; ls = :dash, c = :black, label = "σ_xx  exact")
+        plot!(p, ηt, e_xx ./ e_xx[end]; ls = :dash, c = "#9a9a9a", label = "σ_xx  exact")
         plot!(p, ηt, sxp ./ e_xp[end]; m = :square, c = :firebrick, label = "σ_xp  measured")
-        plot!(p, ηt, e_xp ./ e_xp[end]; ls = :dashdot, c = :black, label = "σ_xp  exact")
+        plot!(p, ηt, e_xp ./ e_xp[end]; ls = :dashdot, c = "#9a9a9a", label = "σ_xp  exact")
         plot!(p, ηt, spp ./ e_pp[end]; m = :diamond, c = :seagreen, label = "σ_pp  measured")
         hline!(p, [1.0]; ls = :dot, c = :gray, label = "σ_pp  exact (= mT)")
         savefig(stash!(p), joinpath(FIGDIR, "semianalytic_S1_ou_covariance.png"))
@@ -173,15 +179,19 @@ let N = QUICK ? 100_000 : 300_000
         for (i, (dt, tt, m_p2, _)) in enumerate(curves)
             scatter!(pa, tt, m_p2; m = :circle, ms = 4, c = cols[mod1(i, 4)], label = "engine Δt = $dt")
         end
-        hline!(pa, [p2eq]; ls = :dot, c = :black, label = "Jüttner ⟨p²⟩")
+        hline!(pa, [p2eq]; ls = :dot, c = "#9a9a9a", label = "Jüttner ⟨p²⟩")
         # the residual is where the fix is visible: pre-0.2.3 the Δt = 0.2 curve sat ~20 % low here
         pb = plot(; xlabel = "t [fm]", ylabel = "⟨p²⟩ engine / exact − 1",
                   title = "(S2) residual — no Δt trend left", ylims = (-0.06, 0.06))
         for (i, (dt, tt, m_p2, e_p2)) in enumerate(curves)
             plot!(pb, tt, m_p2 ./ e_p2 .- 1; m = :circle, c = cols[mod1(i, 4)], label = "Δt = $dt")
         end
-        hline!(pb, [0.0]; ls = :dash, c = :black, label = "")
-        hspan!(pb, [-0.03, 0.03]; c = :gray90, alpha = 0.5, label = "gate band (3 %)")
+        hline!(pb, [0.0]; ls = :dash, c = "#9a9a9a", label = "")
+        # ⚠ a mid grey at LOW alpha, not :gray90. gray90 is nearly white: on the transparent
+        # ground these figures now carry it read as a bright slab on a dark page, swamping the
+        # residuals it is meant to sit behind.
+        hspan!(pb, [-0.03, 0.03]; c = "#9a9a9a", alpha = 0.16, lc = :transparent,
+               label = "gate band (3 %)")
         savefig(stash!(plot(pa, pb; layout = (1, 2), size = (1150, 430))),
                 joinpath(FIGDIR, "semianalytic_S2_bgk_moment_law.png"))
     end
@@ -241,10 +251,10 @@ let N = 20_000, τ0 = 0.4, τf = 6.0, pT = 1.2
         pa = plot(tt, pz2 ./ pz2[1]; m = :circle, c = :steelblue, yscale = :log10,
                   xlabel = "τ [fm]", ylabel = "⟨p_z*²⟩(τ) / ⟨p_z*²⟩(τ₀)",
                   label = "engine", title = "(S3) Bjorken redshift, free streaming")
-        plot!(pa, tt, (τ0 ./ tt) .^ 2; ls = :dash, c = :black, label = "exact (τ₀/τ)²")
+        plot!(pa, tt, (τ0 ./ tt) .^ 2; ls = :dash, c = "#9a9a9a", label = "exact (τ₀/τ)²")
         pb = plot(tt, xm; m = :circle, c = :firebrick, xlabel = "τ [fm]", ylabel = "⟨x_⊥⟩ [fm]",
                   label = "engine", title = "(S3) transverse streaming with a redshifting E")
-        plot!(pb, tt, xe; ls = :dash, c = :black, label = "per-particle closed form")
+        plot!(pb, tt, xe; ls = :dash, c = "#9a9a9a", label = "per-particle closed form")
         plot!(pb, tt, 8.0 .+ (pT / mT) .* (tt .- τ0); ls = :dot, c = :gray,
               label = "p_z* = 0 branch (x₀ + p_⊥τ/m_T)")
         savefig(stash!(plot(pa, pb; layout = (1, 2), size = (1100, 420))),
@@ -297,7 +307,7 @@ let N = QUICK ? 60_000 : 200_000
             ctr = (edges[1:end-1] .+ edges[2:end]) ./ 2
             plot!(p, ctr, max.(h(meas), 1e-5); m = :circle, c = k == 1 ? :steelblue : :firebrick,
                   label = "engine, $d rows")
-            plot!(p, ctr, max.(h(ref), 1e-5); ls = :dash, c = :black,
+            plot!(p, ctr, max.(h(ref), 1e-5); ls = :dash, c = "#9a9a9a",
                   label = k == 1 ? "exact Jüttner p^{d−1}e^{−(E−m)/T}" : "")
         end
         savefig(stash!(p), joinpath(FIGDIR, "semianalytic_S4_juttner_shape.png"))
@@ -374,14 +384,14 @@ let N = QUICK ? 20_000 : 60_000
                   c = :steelblue, alpha = 0.4, label = "per particle (Δt = $(last(dts)) fm)",
                   xlabel = "r [fm]", ylabel = "p_meas − m·γ(r)v(r)  [MeV]",
                   title = "(S5) comoving blast wave, particle by particle")
-        plot!(pa, rline, 1e3 .* lag.(rline); ls = :dash, c = :black, lw = 2,
+        plot!(pa, rline, 1e3 .* lag.(rline); ls = :dash, c = "#9a9a9a", lw = 2,
               label = "predicted one-step lag  −m·d(γv)/dr·v·Δt")
         hline!(pa, [0.0]; c = :gray, ls = :dot, lw = 1, label = "")
         pb = plot(collect(dts), worsts; m = :circle, c = :steelblue,
                   xscale = :log10, yscale = :log10, xlabel = "Δt [fm]",
                   ylabel = "worst |p_meas − m·γ(r)v(r)| [GeV]",
                   label = "measured", title = "(S5) ... and it vanishes as Δt (order $(fmt(ord; d = 2)))")
-        plot!(pb, collect(dts), worsts[1] .* (collect(dts) ./ dts[1]); ls = :dash, c = :black,
+        plot!(pb, collect(dts), worsts[1] .* (collect(dts) ./ dts[1]); ls = :dash, c = "#9a9a9a",
               label = "slope 1")
         savefig(stash!(plot(pa, pb; layout = (1, 2), size = (1150, 430))),
                 joinpath(FIGDIR, "semianalytic_S5_blastwave_vs_free.png"))
