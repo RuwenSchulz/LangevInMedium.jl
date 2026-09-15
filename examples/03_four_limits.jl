@@ -97,7 +97,8 @@ read the table:
     different collision operator, which is the comparison the papers are about.""")
 
 if plots_on()
-    pa = plot(; xlabel = "τ [fm]", ylabel = "⟨p_x⟩ [GeV]", title = "the four limits")
+    pa = plot(; xlabel = "τ [fm]", ylabel = "⟨p_x⟩ [GeV]",
+              title = "how the current relaxes")
     cols = [:steelblue, :seagreen, :black, :darkorange, :firebrick]
     for (k, (label, t, px, _)) in enumerate(results)
         plot!(pa, t, px; m = :circle, c = cols[k], label = label)
@@ -106,7 +107,7 @@ if plots_on()
     hline!(pa, [p_free];  ls = :dot,  c = :gray, label = "boosted IC")
     edges = range(0.0, 4.0; length = 45)
     pb = plot(; xlabel = "|p| [GeV]", ylabel = "density", yscale = :log10,
-              title = "final |p| distributions", ylims = (1e-3, 30))
+              title = "the final momentum distributions", ylims = (1e-3, 30))
     for (k, (label, _, _, mf)) in enumerate(results)
         c, h = hist(vec(sqrt.(sum(abs2, mf; dims = 1))), edges)
         plot!(pb, c, max.(h, 1e-4); c = cols[k], label = label)

@@ -117,18 +117,9 @@ LIM_NOPLOT=1 julia --project=Julia .../examples/03_four_limits.jl     # numbers 
 |---|---|---|
 | [**01**](examples/01_uniform_bath.jl) `uniform_bath` | a box at fixed `T`, no flow, a δ-function initial momentum | what `D_sT` actually sets; that ⟨p²⟩ → the Jüttner value, the current decays at `(K₂/K₃)η_D`, and the MSD slope is `2·d·D_s`. **Everything here has a closed form** — if the engine breaks, it breaks here first |
 | [**02**](examples/02_bjorken_fireball.jl) `bjorken_fireball` | a cooling, expanding fireball; the engine samples a FONLL-shaped density; freeze-out off the snapshots | the production shape of a real run, and the radial flow lifting the `p_T` spectrum (⟨p_T⟩ 1.586 → 1.318 GeV) |
-| [**03**](examples/03_four_limits.jl) `four_limits` | `:langevin`, `:rta`, `DsT = 0`, `DsT → 0⁺`, `:none` on one background | **read this one before choosing a collision setting.** The three weak-coupling settings are three *different* limits, and the figure separates them |
+| [**03**](examples/03_four_limits.jl) `four_limits` (five, since `:none` was added in 0.2.3) | `:langevin`, `:rta`, `DsT = 0`, `DsT → 0⁺`, `:none` on one background | **read this one before choosing a collision setting.** The three weak-coupling settings are three *different* limits, and the figure separates them |
 | [**04**](examples/04_pz_and_rapidity.jl) `pz_and_rapidity` | `momentum_dimensions = 3`, both `pz_init` modes, `track_eta_s` | what row 3 *means* (`p_z* = m_T sinh(y − η_s)`, not a lab `p_z`), and the kernel that makes `dN/dy = ρ(η_s) ⊛ P(K)` exact |
 | [**05**](examples/05_gpu_freezeout.jl) `gpu_freezeout` | the GPU path with `freezeout_capture` | the production pattern: memory ∝ `N` instead of `N·(saves+1)`, the crossing resolved to `Δt`, and the fact that the run does **not** stop at freeze-out |
-
-<table>
-<tr>
-<td width="25%"><a href="examples/02_bjorken_fireball.jl"><img src="examples/figures/02_bjorken_fireball.png" alt="02"></a><br><sub><b>02</b> a heavy-ion run: the radial flow lifting the charm p_T spectrum, the freeze-out time distribution, the radial expansion</sub></td>
-<td width="25%"><a href="examples/04_pz_and_rapidity.jl"><img src="examples/figures/04_pz_and_rapidity.png" alt="04"></a><br><sub><b>04</b> the two p_z* initialisations being forgotten, and the dN/dy kernel P(K) they leave behind</sub></td>
-<td width="25%"><a href="examples/05_gpu_freezeout.jl"><img src="examples/figures/05_gpu_freezeout.png" alt="05"></a><br><sub><b>05</b> the GPU freeze-out latch: spectrum, crossing time resolved to Δt, and the freeze-out surface</sub></td>
-<td width="25%"><a href="examples/03_four_limits.jl"><img src="examples/figures/03_four_limits.png" alt="03"></a><br><sub><b>03</b> the five collision settings on one background: which of them thermalise, which stay glued to the flow, and which do nothing at all</sub></td>
-</tr>
-</table>
 
 ### The weak-coupling limits
 
