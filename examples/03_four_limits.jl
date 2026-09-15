@@ -105,12 +105,25 @@ if plots_on()
     end
     hline!(pa, [p_comov]; ls = :dash, c = :gray, label = "m·γ·v")
     hline!(pa, [p_free];  ls = :dot,  c = :gray, label = "boosted IC")
+    # ⚠ TWO OF THE FIVE HAVE NO WIDTH, and drawing them as histograms is what made this panel
+    # unreadable. `DsT = 0` and `:none` are single-valued — every particle carries exactly the same
+    # |p| — so a binned line plot renders them as a narrow triangle whose empty neighbouring bins
+    # were clamped BELOW the axis floor (`max.(h, 1e-4)` against `ylims` starting at 1e-3), and the
+    # connecting line dived out of the frame. They are drawn as what they are: a vertical line at
+    # the closed-form value. Only the three cases that actually have a distribution are binned.
     edges = range(0.0, 4.0; length = 45)
     pb = plot(; xlabel = "|p| [GeV]", ylabel = "density", yscale = :log10,
-              title = "the final momentum distributions", ylims = (1e-3, 30))
+              title = "the final momentum distributions", ylims = (1e-3, 5),
+              legend = :bottomleft, legendfontsize = 7)
+    spikes = Dict(3 => p_comov, 5 => p_free)          # comoving and free streaming: δ functions
     for (k, (label, _, _, mf)) in enumerate(results)
-        c, h = hist(vec(sqrt.(sum(abs2, mf; dims = 1))), edges)
-        plot!(pb, c, max.(h, 1e-4); c = cols[k], label = label)
+        if haskey(spikes, k)
+            vline!(pb, [spikes[k]]; c = cols[k], lw = 2.5, label = "$label — a δ function")
+        else
+            c, h = hist(vec(sqrt.(sum(abs2, mf; dims = 1))), edges)
+            keep = h .> 0                              # never draw an empty bin on a log axis
+            plot!(pb, c[keep], h[keep]; c = cols[k], lw = 2, label = label)
+        end
     end
     savefig_ex(plot(pa, pb; layout = (1, 2), size = (1200, 460)), "03_four_limits.png")
 end
