@@ -11,6 +11,7 @@
   <img alt="julia"    src="https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia&logoColor=white">
   <img alt="backends" src="https://img.shields.io/badge/backends-CPU%20%2B%20CUDA-76B900">
   <img alt="gates"    src="https://img.shields.io/badge/closed--form%20gates-9%20%2B%2018-brightgreen">
+  <a href="https://doi.org/10.5281/zenodo.22791006"><img alt="DOI" src="https://zenodo.org/badge/DOI/10.5281/zenodo.22791006.svg"></a>
 </p>
 
 <p align="center">
@@ -549,5 +550,25 @@ bench/                    bench_common.jl, bench_semianalytic.jl (closed forms +
 
 ---
 
-<sub>Apache-2.0 licensed. Changes that move a number are recorded in
-[`CHANGELOG.md`](CHANGELOG.md) with the measurement that found them.</sub>
+## Licence and citation
+
+© 2026 Ruwen Schulz. Released under the **Apache License 2.0** — [`LICENSE`](LICENSE) for the terms,
+[`NOTICE`](NOTICE) for the attribution notice to carry with redistributions. The code contains no
+third-party source.
+
+**If you use this engine in work that is published, please cite it.** The licence does not require
+it; it is the normal scientific courtesy, and [`CITATION.cff`](CITATION.cff) makes it one click —
+GitHub renders a *"Cite this repository"* button from it, and it exports BibTeX and APA. Please say
+which version you ran: the numbers on this page are tied to one, and the engine has had corrections
+that move results (see [`CHANGELOG.md`](CHANGELOG.md), where every entry marked ⚠ changed the
+dynamics or the meaning of a label).
+
+Each release is archived on Zenodo and carries a DOI:
+
+| | DOI |
+|---|---|
+| **cite this one** — always resolves to the newest version | [10.5281/zenodo.22791006](https://doi.org/10.5281/zenodo.22791006) |
+| v0.2.4, this exact version | [10.5281/zenodo.22791456](https://doi.org/10.5281/zenodo.22791456) |
+
+<sub>Changes that move a number are recorded in [`CHANGELOG.md`](CHANGELOG.md) with the measurement
+that found them.</sub>

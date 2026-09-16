@@ -8,8 +8,16 @@ authors:
     email: ruwen-schulz@hotmail.de
 repository-code: "https://github.com/RuwenSchulz/LangevInMedium.jl"
 license: Apache-2.0
+doi: "10.5281/zenodo.22791006"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22791006"
+    description: "The concept DOI: always resolves to the latest version."
+  - type: doi
+    value: "10.5281/zenodo.22791456"
+    description: "The DOI of this exact version."
 version: "0.2.4"
-date-released: "2026-09-15"
+date-released: "2026-09-16"
 abstract: >-
   LangevInMedium.jl propagates an ensemble of heavy quarks through a tabulated
   hydrodynamic background using relativistic Langevin dynamics. Each step boosts
