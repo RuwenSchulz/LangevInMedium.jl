@@ -6,6 +6,7 @@ authors:
   - given-names: Ruwen
     family-names: Schulz
     email: ruwen-schulz@hotmail.de
+    orcid: "https://orcid.org/0009-0007-8789-7234"
 repository-code: "https://github.com/RuwenSchulz/LangevInMedium.jl"
 license: Apache-2.0
 doi: "10.5281/zenodo.22791006"
