@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: "LangevInMedium.jl — relativistic Langevin dynamics of heavy quarks in an evolving medium"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - given-names: Ruwen
+    family-names: Schulz
+    email: ruwen-schulz@hotmail.de
+repository-code: "https://github.com/RuwenSchulz/LangevInMedium.jl"
+license: MIT
+version: "0.2.4"
+date-released: "2026-09-15"
+abstract: >-
+  LangevInMedium.jl propagates an ensemble of heavy quarks through a tabulated
+  hydrodynamic background using relativistic Langevin dynamics. Each step boosts
+  every particle into the local fluid rest frame, applies the exact
+  Ornstein-Uhlenbeck propagator for the drag together with the matching Einstein
+  noise, boosts back, and streams the positions. Because the propagator is the
+  exact OU solution rather than an Euler step, the stationary variance is
+  realised at any step size. The drag and the noise are tied by the
+  fluctuation-dissipation relation, and the effective rate carries the
+  relativistic factor m/E* that makes the stationary state Juettner rather than
+  Maxwellian. It runs on CPU and CUDA, and its gates are judged against closed
+  forms - the Juettner second moment, the l=1 decay rate, the exact Juettner
+  momentum distribution, and the spatial diffusion constant from the
+  mean-square displacement - not against the code itself.
+keywords:
+  - heavy-quark diffusion
+  - relativistic Langevin dynamics
+  - quark-gluon plasma
+  - Ornstein-Uhlenbeck
+  - heavy-ion collisions
+  - Julia
+  - CUDA
