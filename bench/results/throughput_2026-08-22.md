@@ -1,4 +1,4 @@
-# LangevInMedium throughput — ruwen-MS-7D75, 2026-08-22 00:20
+# LangevInMedium throughput — 2026-08-22
 
 Julia 1.12.6, threads 1, CPU AMD Ryzen 9 9900X 12-Core Processor, GPU NVIDIA GeForce RTX 5070
 

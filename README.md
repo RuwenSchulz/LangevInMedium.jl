@@ -58,6 +58,10 @@ backends are pinned against each other **per particle at 1e-12**, not through an
 
 ## Install
 
+⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
+package is developed in. They are cited for provenance — so a number can be traced to the script
+that produced it — and are not links you can follow from a clone of this package.
+
 The package is used from a monorepo environment; it is not registered.
 
 ```julia

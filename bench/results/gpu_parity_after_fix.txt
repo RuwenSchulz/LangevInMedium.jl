@@ -1,6 +1,6 @@
 ── nominal backgrounds ──
 ┌ Warning: save_interval does not divide the evolution: the last 124 step(s) (0.248 fm) are not in the returned history; time_points reflect the snapshots actually taken
-└ @ LangevInMedium.SimulateCPU ~/Desktop/phd-git/Julia/LangevInMedium.jl/src/simulate_cpu.jl:25
+└ @ LangevInMedium.SimulateCPU src/simulate_cpu.jl:25
   PASS flow, 2 momentum rows: CPU and GPU report the same snapshot times
     flow, 2 momentum rows              CPU ⟨p²⟩=1.4193 ⟨x²⟩=18.50  GPU ⟨p²⟩=1.4139 ⟨x²⟩=18.51  non-finite CPU/GPU 0/0
   PASS flow, 2 momentum rows: CPU result finite

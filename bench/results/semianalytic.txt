@@ -50,6 +50,6 @@ LangevInMedium — semi-analytic benchmarks   (m = 1.5 GeV, T = 0.3 GeV, D_sT = 
   ⟨|p|⟩ comoving = 0.78714 GeV   vs free streaming (:none) = 0.92435 GeV   (ratio 0.852)
   PASS (S5) the glued momentum is m·γ(r)·v(r) up to the O(Δt) streaming lag (order 1.00)
 
-  figures → /home/ruwen/Desktop/phd-git/Julia/LangevInMedium.jl/bench/results/figures
+  figures → bench/results/figures
 
 [PASS] bench_semianalytic: 9 gates

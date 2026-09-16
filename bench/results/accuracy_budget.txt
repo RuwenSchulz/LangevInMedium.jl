@@ -1,4 +1,4 @@
-# bench_accuracy.jl — run 2026-09-02 on ruwen-MS-7D75 (RTX 5070, Julia 1.12.6), LangevInMedium 0.2.3.
+# bench_accuracy.jl — run 2026-09-02 (Ryzen 9 9900X, RTX 5070, Julia 1.12.6), LangevInMedium 0.2.3.
 # ACCURACY, not speed: every number is a systematic error against a closed form or a quadrature,
 # so machine load cannot move it. Re-run with:
 #   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_accuracy.jl

@@ -5,7 +5,8 @@
 # Particle-steps per second for the CPU and GPU paths over the production kwarg axes, plus the
 # three HOST-side phases that the campaign notes blame for most of a batch (the FONLL rejection
 # sampler, the per-step Gaussian draw, the snapshot save). No BenchmarkTools: min of 3 `@elapsed`
-# after one warm-up. Writes a markdown table to bench/results/throughput_<host>_<date>.md.
+# after one warm-up. Writes a markdown table to bench/results/throughput_<date>.md.
+# The CPU/GPU model is recorded (it is what the numbers mean); the machine NAME is not.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_throughput.jl           (LIM_NOGPU=1 to skip the GPU)
 #   LIM_BENCH_QUICK=1 ...                                                               (N ≤ 1e5 only)
@@ -83,9 +84,9 @@ let N = 100_000
     end
 end
 
-out = joinpath(RESULTS, "throughput_$(gethostname())_$(Dates.format(now(), "yyyy-mm-dd")).md")
+out = joinpath(RESULTS, "throughput_$(Dates.format(now(), "yyyy-mm-dd")).md")
 open(out, "w") do io
-    println(io, "# LangevInMedium throughput — $(gethostname()), $(Dates.format(now(), "yyyy-mm-dd HH:MM"))\n")
+    println(io, "# LangevInMedium throughput — $(Dates.format(now(), "yyyy-mm-dd"))\n")
     println(io, "Julia $(VERSION), threads $(Threads.nthreads()), CPU $(Sys.cpu_info()[1].model)",
             HAVE_GPU ? ", GPU $(Base.invokelatest(() -> CUDA.name(CUDA.device())))" : ", no GPU", "\n")
     println(io, "Engine: $(STEPS[1]) and $(STEPS[2]) steps at dt = 2e-3 on a flowing Gaussian fireball, two snapshots, particles injected (no sampler). ",

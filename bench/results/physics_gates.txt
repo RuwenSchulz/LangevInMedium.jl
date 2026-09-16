@@ -1,6 +1,11 @@
+# ⚠ STALE — this log was taken on 0.2.3, BEFORE the 0.2.4 window fix (CHANGELOG 0.2.4, defect 2).
+# Gate (a) here lost part of its diffusive window, so its D_s numbers are the PRE-FIX ones
+# (0.9896 / 0.9956 / 0.9975 on CPU). The current values are 0.9975 / 0.9969 / 0.9975, which is
+# what README.md quotes. Re-run bench_physics_gates.jl (needs CUDA for the GPU rows) to refresh.
+#
 ── (a) MSD slope = 2·d·D_s ──
 ┌ Warning: save_interval does not divide the evolution: the last 499 step(s) (0.998 fm) are not in the returned history; time_points reflect the snapshots actually taken
-└ @ LangevInMedium.SimulateCPU ~/Desktop/phd-git/Julia/LangevInMedium.jl/src/simulate_cpu.jl:25
+└ @ LangevInMedium.SimulateCPU src/simulate_cpu.jl:25
   PASS (a) CPUBackend z=3.33: D_s measured/nominal = 0.9896
   PASS (a) GPUBackend z=3.33: D_s measured/nominal = 1.0099
   PASS (a) CPUBackend z=5.00: D_s measured/nominal = 0.9956
