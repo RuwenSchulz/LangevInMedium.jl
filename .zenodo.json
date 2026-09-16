@@ -2,7 +2,7 @@
   "title": "LangevInMedium.jl — relativistic Langevin dynamics of heavy quarks in an evolving medium",
   "description": "<p>LangevInMedium.jl propagates an ensemble of heavy quarks through a tabulated hydrodynamic background <code>T(r, &tau;)</code>, <code>v_r(r, &tau;)</code> using relativistic Langevin dynamics.</p><p>Each step boosts every particle into the local fluid rest frame, applies the <strong>exact Ornstein&ndash;Uhlenbeck propagator</strong> for the drag together with the matching Einstein noise, boosts back, and streams the positions. Because the propagator is the exact OU solution rather than an Euler step, there is no stability limit on the step size and the stationary variance is realised at any &Delta;t. The drag and the noise are tied by the fluctuation&ndash;dissipation relation, and the effective rate carries the relativistic factor m/E*, which makes the stationary state J&uuml;ttner rather than Maxwellian.</p><p>It runs on CPU and CUDA from the same source. Its validation gates are judged against <strong>closed forms, not against the code itself</strong>: the J&uuml;ttner second moment, the &ell;=1 decay rate (K&#8322;/K&#8323;)&middot;&eta;_D, the exact J&uuml;ttner momentum distribution, and the spatial diffusion constant recovered from the mean-square displacement.</p><p>The collision model is explicit: <code>collision_mode = :none</code> is free streaming, <code>D_sT = 0</code> is the cold comoving limit, and <code>D_sT &rarr; 0&#8314;</code> is the thermal comoving limit &mdash; three distinct physical settings that earlier versions conflated.</p>",
   "upload_type": "software",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "access_right": "open",
   "creators": [
     {

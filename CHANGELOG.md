@@ -3,6 +3,14 @@
 Entries marked ⚠ changed the default dynamics or the meaning of a label: outputs produced
 before them are not comparable to outputs produced after.
 
+## Unreleased
+
+### Changed
+- **Licence: MIT → Apache-2.0.** Both are permissive and the change adds no restriction on use;
+  Apache-2.0 additionally carries an express patent grant and a NOTICE file, and it is what
+  FiVoHydro.jl already uses, so the two packages published together now carry one licence. The
+  copyright holder is unchanged and holds all of the code (no third-party source is vendored).
+
 ## 0.2.4 — 2026-09-15  (the dropped-history warning could not be heard, and a gate measured half its window)
 
 No change to the dynamics: all ten `regression_corpus.jl` CPU hashes reproduce bit for bit and the

@@ -7,7 +7,7 @@
 
 <p align="center">
   <img alt="version"  src="https://img.shields.io/badge/version-0.2.4-blue">
-  <img alt="license"  src="https://img.shields.io/badge/license-MIT-green">
+  <img alt="license"  src="https://img.shields.io/badge/license-Apache--2.0-blue">
   <img alt="julia"    src="https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia&logoColor=white">
   <img alt="backends" src="https://img.shields.io/badge/backends-CPU%20%2B%20CUDA-76B900">
   <img alt="gates"    src="https://img.shields.io/badge/closed--form%20gates-9%20%2B%2018-brightgreen">
@@ -545,5 +545,5 @@ bench/                    bench_common.jl, bench_semianalytic.jl (closed forms +
 
 ---
 
-<sub>MIT licensed. Changes that move a number are recorded in
+<sub>Apache-2.0 licensed. Changes that move a number are recorded in
 [`CHANGELOG.md`](CHANGELOG.md) with the measurement that found them.</sub>

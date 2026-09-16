@@ -7,7 +7,7 @@ authors:
     family-names: Schulz
     email: ruwen-schulz@hotmail.de
 repository-code: "https://github.com/RuwenSchulz/LangevInMedium.jl"
-license: MIT
+license: Apache-2.0
 version: "0.2.4"
 date-released: "2026-09-15"
 abstract: >-
