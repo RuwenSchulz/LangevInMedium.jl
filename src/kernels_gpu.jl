@@ -440,7 +440,7 @@ Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest f
 carries the particle's own energy, so `κ/(2η_eff) = 2MTη_D/(2η_D M/E) = T·E_LRF` — the relativistic
 equipartition ⟨p_i²⟩ = T⟨E⟩ of the Jüttner, not the Maxwell `MT`. And it is exact only at FROZEN E:
 E is re-read at the START of each step while the true process changes it during the step, which is
-where the pre-point O(ηΔt) bias on ⟨p²⟩ documented in README "Known biases and limits" (≈ −1 % at
+where the pre-point O(ηΔt) bias on ⟨p²⟩ documented in docs/NOTES.md "Known biases and limits" (≈ −1 % at
 ηΔt = 0.1, measured by `bench_physics_gates.jl` gate (d)) comes from. The Galilean branch has no
 such bias because η_eff is momentum-independent there — the propagator is genuinely exact.
 

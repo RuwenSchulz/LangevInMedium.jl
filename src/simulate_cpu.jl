@@ -201,7 +201,7 @@ function simulate_ensemble_bulk_cpu(
     # `DsT = 0` is the COMOVING limit (p = m·γ·v) and `momentum_langevin = false` is the same limit,
     # while the only thing that actually free-streamed was a NEGATIVE DsT — by accident, through
     # `tau_drag ≤ 0 ⇒ η_D = κ = 0`, which is now refused. Three call sites in the tree asked for
-    # "free streaming" and got the comoving limit; see README "The LIMITS and the INPUT CONTRACT".
+    # "free streaming" and got the comoving limit; see docs/NOTES.md "The LIMITS and the INPUT CONTRACT".
     free_stream = collision_mode === :none
 
     # --- BACKGROUND GEOMETRY: dispatched on what was handed in, never on a flag ---

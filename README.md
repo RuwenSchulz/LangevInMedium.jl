@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>Relativistic Langevin dynamics of heavy quarks in an evolving medium.</b><br>
-  <sub>Exact Ornstein–Uhlenbeck propagator · CPU and CUDA · validated against closed forms, not against itself.</sub>
+  <sub>Exact Ornstein–Uhlenbeck propagator · CPU and CUDA</sub>
 </p>
 
 <p align="center">
@@ -19,10 +19,10 @@
 </p>
 <p align="center">
   <sub>
-    <b>Everything above is produced by a single example script</b> (<a href="examples/01_uniform_bath.jl"><code>examples/01_uniform_bath.jl</code></a>)
-    and every dashed line is a closed form, not a fit: the Jüttner ⟨p²⟩, the ℓ=1 decay rate
-    <code>(K₂/K₃)·η_D</code>, the exact Jüttner momentum distribution, and <code>D_s = D_sT/T·ħc</code>
-    from the mean-square displacement (measured −0.45 %).
+    From <a href="examples/01_uniform_bath.jl"><code>examples/01_uniform_bath.jl</code></a>. The dashed
+    lines are closed forms: the Jüttner ⟨p²⟩, the ℓ=1 decay rate <code>(K₂/K₃)·η_D</code>, the Jüttner
+    momentum distribution, and <code>D_s = D_sT/T·ħc</code> from the mean-square displacement
+    (measured −0.45 %).
   </sub>
 </p>
 
@@ -31,9 +31,8 @@
 ## What it computes
 
 An ensemble of heavy quarks on a tabulated hydrodynamic background `T(r, τ)`, `v_r(r, τ)`. Each
-step boosts every particle into the **local fluid rest frame**, applies the **exact
-Ornstein–Uhlenbeck propagator** for the drag with the matching Einstein noise, boosts back, and
-streams the positions:
+step boosts every particle into the local fluid rest frame, applies the exact Ornstein–Uhlenbeck
+propagator for the drag with the matching Einstein noise, boosts back, and streams the positions:
 
 ```
 p*(t+Δt) = a·p*(t) + √(κ (1−a²)/(2η_eff)) · ξ ,     a = e^{−η_eff Δt} ,   ξ ~ N(0, 1)
@@ -42,37 +41,31 @@ p*(t+Δt) = a·p*(t) + √(κ (1−a²)/(2η_eff)) · ξ ,     a = e^{−η_eff 
    η_eff = η_D·m/E*   (relativistic ⇒ Jüttner equilibrium)     dx/dt = p/E
 ```
 
-The propagator is the exact OU solution, not an Euler step, so there is no stability limit on `Δt`.
-⚠ That it realises the stationary variance **at any Δt** is the *Galilean* statement
-(`relativistic = false`, where `η_eff` is momentum-independent). With `relativistic = true` the
-drag carries the particle's own energy, `η_eff = η_D·m/E*`, and the step is exact only at *frozen*
-`E` — `E` is re-read at the start of each step while the true process changes it during the step.
-That is precisely where the pre-point O(ηΔt) bias comes from, and
-[`bench/bench_accuracy.jl`](bench/bench_accuracy.jl) measures it: `≈ 12.0 %·(η_DΔt)^0.94`.
+There is no stability limit on `Δt`. In the Galilean case (`relativistic = false`) the step is exact
+at any `Δt`. With `relativistic = true` the drag depends on the particle's energy, which is read at
+the start of the step. That gives an O(ηΔt) bias, measured in
+[`bench/bench_accuracy.jl`](bench/bench_accuracy.jl) as `≈ 12.0 %·(η_DΔt)^0.94`.
 
-One free coefficient goes in (`D_sT`) and **both** hydrodynamic coefficients come out: the
-Navier–Stokes `D_s`, and the Israel–Stewart current time `τ_n = τ_drag·K₃/K₂` as a *derived*
-consequence, not a second input.
+One coefficient goes in (`D_sT`) and both hydrodynamic coefficients come out: the Navier–Stokes
+`D_s` and the Israel–Stewart current time `τ_n = τ_drag·K₃/K₂`.
 
-The same algorithm runs on the CPU (bit-reproducible under `Random.seed!`) and on CUDA, and the two
-backends are pinned against each other **per particle at 1e-12**, not through an ensemble moment.
+The same algorithm runs on the CPU (bit-reproducible under `Random.seed!`) and on CUDA. The two
+backends agree per particle to 1e-12.
 
 ## Install
 
-⚠ Paths beginning `Julia/Projects/…` or `Tex/…` name the **private research repository** this
-package is developed in. They are cited for provenance — so a number can be traced to the script
-that produced it — and are not links you can follow from a clone of this package.
-
-The package is used from a monorepo environment; it is not registered.
-
-```julia
-julia --project=Julia            # the environment that has CUDA, Plots, QuadGK, Bessels…
+```sh
+git clone https://github.com/RuwenSchulz/LangevInMedium.jl.git
+cd LangevInMedium.jl
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
 ```julia
-using CUDA               # optional — attaches the GPU backend via Requires.jl
+using CUDA               # optional, attaches the GPU backend via Requires.jl
 using LangevInMedium
 ```
+
+The examples also need `Plots` (or run them with `LIM_NOPLOT=1`).
 
 ## Quick start
 
@@ -107,24 +100,23 @@ t, mom, pos = simulate_ensemble_bulk(CPUBackend(), r_grid, p_grid, density,
 
 Swap `CPUBackend()` for `GPUBackend()` and nothing else changes.
 
-## Tutorial: read the examples in order
+## Examples
 
-[`examples/`](examples) holds five runnable setups, smallest first. Each prints measured numbers
-**next to the closed form or expectation they should match**, and writes its figure. Start at 01
-and stop when you have what you need.
+[`examples/`](examples) holds five runnable setups, smallest first. Each prints the measured numbers
+next to the closed form they should match, and writes its figure.
 
 ```sh
-julia --project=Julia Julia/LangevInMedium.jl/examples/01_uniform_bath.jl
-LIM_NOPLOT=1 julia --project=Julia .../examples/03_four_limits.jl     # numbers only, no Plots
+julia --project=. examples/01_uniform_bath.jl
+LIM_NOPLOT=1 julia --project=. examples/03_four_limits.jl     # numbers only, no Plots
 ```
 
-| | setup | what you learn |
+| | setup | what it shows |
 |---|---|---|
-| [**01**](examples/01_uniform_bath.jl) `uniform_bath` | a box at fixed `T`, no flow, a δ-function initial momentum | what `D_sT` actually sets; that ⟨p²⟩ → the Jüttner value, the current decays at `(K₂/K₃)η_D`, and the MSD slope is `2·d·D_s`. **Everything here has a closed form** — if the engine breaks, it breaks here first |
-| [**02**](examples/02_bjorken_fireball.jl) `bjorken_fireball` | a cooling, expanding fireball; the engine samples a FONLL-shaped density; freeze-out off the snapshots | the production shape of a real run, and the radial flow lifting the `p_T` spectrum (⟨p_T⟩ 1.586 → 1.318 GeV) |
-| [**03**](examples/03_four_limits.jl) `four_limits` (five, since `:none` was added in 0.2.3) | `:langevin`, `:rta`, `DsT = 0`, `DsT → 0⁺`, `:none` on one background | **read this one before choosing a collision setting.** The three weak-coupling settings are three *different* limits, and the figure separates them |
-| [**04**](examples/04_pz_and_rapidity.jl) `pz_and_rapidity` | `momentum_dimensions = 3`, both `pz_init` modes, `track_eta_s` | what row 3 *means* (`p_z* = m_T sinh(y − η_s)`, not a lab `p_z`), and the kernel that makes `dN/dy = ρ(η_s) ⊛ P(K)` exact |
-| [**05**](examples/05_gpu_freezeout.jl) `gpu_freezeout` | the GPU path with `freezeout_capture` | the production pattern: memory ∝ `N` instead of `N·(saves+1)`, the crossing resolved to `Δt`, and the fact that the run does **not** stop at freeze-out |
+| [**01**](examples/01_uniform_bath.jl) `uniform_bath` | a box at fixed `T`, no flow, a δ-function initial momentum | what `D_sT` sets: ⟨p²⟩ → the Jüttner value, the current decays at `(K₂/K₃)η_D`, and the MSD slope is `2·d·D_s` |
+| [**02**](examples/02_bjorken_fireball.jl) `bjorken_fireball` | a cooling, expanding fireball; the engine samples a FONLL-shaped density; freeze-out off the snapshots | a realistic run, and the radial flow lifting the `p_T` spectrum (⟨p_T⟩ 1.586 → 1.318 GeV) |
+| [**03**](examples/03_four_limits.jl) `four_limits` | `:langevin`, `:rta`, `DsT = 0`, `DsT → 0⁺`, `:none` on one background | the weak-coupling settings are three different limits |
+| [**04**](examples/04_pz_and_rapidity.jl) `pz_and_rapidity` | `momentum_dimensions = 3`, both `pz_init` modes, `track_eta_s` | what row 3 means (`p_z* = m_T sinh(y − η_s)`, not a lab `p_z`), and the kernel that makes `dN/dy = ρ(η_s) ⊛ P(K)` exact |
+| [**05**](examples/05_gpu_freezeout.jl) `gpu_freezeout` | the GPU path with `freezeout_capture` | memory ∝ `N` instead of `N·(saves+1)`, the crossing resolved to `Δt`; the run does not stop at freeze-out |
 
 ### The weak-coupling limits
 
@@ -132,49 +124,38 @@ LIM_NOPLOT=1 julia --project=Julia .../examples/03_four_limits.jl     # numbers 
   <img src="examples/figures/03_four_limits.png" alt="The collision settings side by side" width="94%">
 </p>
 
-Three settings sit near zero coupling and none of them is the same limit.
+Three settings sit near zero coupling, and they are different limits.
 
-`D_sT = 0` is the **comoving** limit: every quark is handed `p = m·γ(r)v(r)` at its own radius, with
-no thermal width at all — `⟨p_x⟩ = 0.86603 GeV` and `sd(p_x) = 0` exactly (the black spike).
-`D_sT → 0⁺` is a **different** limit: the quark thermalises *with* the fluid and keeps the full
-Jüttner width, landing on `γ·v·⟨E*⟩ = 1.068 GeV`, **23 % higher** (orange). **Free streaming** is
-neither, and is `collision_mode = :none` (red spike): no drag, no noise, no frame change, so the
-momenta are exactly constant — the boosted initial momentum, 2.196 GeV, forever.
+- `D_sT = 0` is the **comoving** limit: every quark gets `p = m·γ(r)v(r)` at its own radius, with no
+  thermal width. `⟨p_x⟩ = 0.86603 GeV` and `sd(p_x) = 0` exactly (black spike).
+- `D_sT → 0⁺` is thermal comoving: the quark keeps the full Jüttner width and lands on
+  `γ·v·⟨E*⟩ = 1.068 GeV`, 23 % higher (orange).
+- **Free streaming** is `collision_mode = :none` (red spike): no drag, no noise, no frame change. The
+  momenta stay at the boosted initial momentum, 2.196 GeV.
 
-The two zero-coupling limits differ because the order of limits matters. At `D_sT = 0` the noise is
-switched off before the drag has anywhere to relax to, so the particle *is* the fluid element. At
-`D_sT → 0⁺` drag and noise stay in Einstein balance all the way down, so the equilibrium is the
-local Jüttner however small the coefficient gets. `:none` removes the collision term itself, which
-is a third thing again.
-
-`m ≤ 0` and `D_sT < 0` are refused since v0.2.3; before that they degraded silently to free
-streaming (CHANGELOG 0.2.3).
+`m ≤ 0` and `D_sT < 0` are refused.
 
 ## Validation
 
-The engine is checked against **closed forms**, not against other implementations of the same
-formula. Two suites, 27 gates, all passing:
+The engine is checked against closed forms. Two suites, 27 gates, all passing:
 
 ```sh
-julia --project=Julia Julia/LangevInMedium.jl/bench/bench_semianalytic.jl   # 9 gates, with plots
-julia --project=Julia Julia/LangevInMedium.jl/bench/bench_physics_gates.jl  # 18 gates, physical units
+julia --project=. bench/bench_semianalytic.jl   # 9 gates, with plots
+julia --project=. bench/bench_physics_gates.jl  # 18 gates, physical units
 ```
 
 <p align="center">
   <img src="bench/results/figures/semianalytic_S2_bgk_moment_law.png" alt="Exact BGK moment law" width="94%">
 </p>
 
-In a uniform bath a BGK particle either has not collided (probability `e^{−t/τ_n}`, so it still
-carries its initial momentum) or has, and is then equilibrium-distributed. So for **any** observable
+In a uniform bath a BGK particle has either not collided yet (probability `e^{−t/τ_n}`, it still
+carries its initial momentum) or has, and is then equilibrium-distributed. So for any observable
 
 ```
 ⟨g⟩(t) = e^{−t/τ_n}·⟨g⟩₀ + (1 − e^{−t/τ_n})·⟨g⟩_eq        exact, at all t
 ```
 
-Four step sizes spanning 100× collapse onto that curve with no residual Δt trend. This is also the
-gate on the v0.2.3 fix that made the per-step collision probability `−expm1(−Δt/τ_n)` instead of the
-linearised `Δt/τ_n`: with the old form the `Δt = 0.2` curve was a visibly wrong exponential (the
-realised rate was 22 % too fast).
+Four step sizes spanning 100× fall on that curve with no Δt trend.
 
 | gate | target | measured |
 |---|---|---|
@@ -182,338 +163,129 @@ realised rate was 22 % too fast).
 | exact BGK moment law | the whole `⟨p²⟩(t)` curve, Δt spanning 100× | 0.5 % worst, no Δt trend |
 | Bjorken redshift | `⟨p_z*²⟩ ∝ 1/τ²` telescopes | **2.9e-13** |
 | free streaming + redshift | per-particle closed form for `x_⊥(τ)` | converges at order **1.00** |
-| equilibrium **shape** | two-sample KS vs the exact Jüttner, 2 and 3 rows | 0.0019 / 0.0039 (95 % critical 0.0043) |
-| comoving blast wave | `p = m·γ(r)v(r)`, **per particle**, and the residual's shape in `r` | the predicted one-step lag `−m·d(γv)/dr·v·Δt`, order **1.00** |
+| equilibrium shape | two-sample KS vs the exact Jüttner, 2 and 3 rows | 0.0019 / 0.0039 (95 % critical 0.0043) |
+| comoving blast wave | `p = m·γ(r)v(r)`, per particle, and the residual's shape in `r` | the predicted one-step lag `−m·d(γv)/dr·v·Δt`, order **1.00** |
 | MSD slope | `2·d·D_s` at three `z` | 0.9975 / 0.9969 / 0.9975 (CPU) |
 | ℓ=1 rate | `η_D·K₂/K₃` (3 rows), `λ₁(2D)·η_D` (2 rows) | 0.6364 vs 0.6403 · 0.6952 vs 0.6977 |
 
-`σ_xp` is the sharp one: it is built from the momentum update and the position update *together*,
-so an operator-split error shows there while `σ_pp` and `σ_xx` can each look right on their own.
+`σ_xp` combines the momentum and the position update, so it is the one that shows an operator-split
+error.
 
 <p align="center">
   <img src="bench/results/figures/semianalytic_S1_ou_covariance.png" alt="OU phase-space covariance" width="70%">
 </p>
 
-The comoving limit is checked the same way — per particle, not through a moment. Every quark must
-carry exactly `p = m·γ(r)v(r)` at its own radius, and the residual left over is not merely small but
-*predicted*: the momentum is written at the radius the particle has just left, so it lags by
-`−m·d(γv)/dr·v·Δt`, and it vanishes identically beyond `r = 8 fm` where the flow profile saturates
-and `dv/dr = 0`.
+The comoving limit is checked per particle: every quark must carry `p = m·γ(r)v(r)` at its own
+radius. The residual is the one-step lag `−m·d(γv)/dr·v·Δt`, and it vanishes beyond `r = 8 fm`, where
+the flow profile saturates and `dv/dr = 0`.
 
 <p align="center">
   <img src="bench/results/figures/semianalytic_S5_blastwave_vs_free.png" alt="Comoving blast wave, per particle" width="94%">
 </p>
 
-### How wrong is it at a given Δt?
+### Step size
 
 [`bench/bench_accuracy.jl`](bench/bench_accuracy.jl) turns a required accuracy into a required step
-size. The pre-point relativistic drag gives an O(ηΔt) bias on ⟨p²⟩; measured, with the Galilean
-branch as an unbiased-measurement control:
+size. The pre-point relativistic drag gives an O(ηΔt) bias on ⟨p²⟩:
 
 ```
 |⟨p²⟩ bias| ≈ 12.0 % · (η_D Δt)^0.94      ⇒  0.046 % at the production η_D Δt ≈ 2.6·10⁻³
 D_s is unbiased to ≲1 % for η_D Δt ≤ 0.08
 ```
 
-## Three conventions that bite
+## Conventions
 
-**1. One transport coefficient, not two.**
-
+**1. One transport coefficient.**
 `tau_drag(T, m, DsT) = m·DsT/T²` is what the kernel uses (`η_D = 1/τ_drag`, `κ = 2mT/τ_drag`).
-`tau_n_main3(T, m, DsT) = D_s·z·K₃/K₂` is the **diffusion-current** relaxation time — the
-Israel–Stewart τ_n that Fluidum's `τ_diffusion_hadron` evaluates. For a Fokker–Planck process
-with drag η_D the ℓ=1 mode decays at `η_D·K₂/K₃` (an exact 3-D identity), so a Langevin built
-from `tau_drag` reproduces **both** hydro coefficients, D_s and τ_n. Building the drag from
-`tau_n_main3` instead applies K₃/K₂ once too often and inflates the realised D_s by 1.26–1.74×.
-The BGK (`:rta`) path needs τ_n, not the drag (`build_taun_current_spline`).
-`test/runtests.jl` guards the ratio pointwise.
+`tau_n_main3(T, m, DsT) = D_s·z·K₃/K₂` is the diffusion-current relaxation time, the Israel–Stewart
+τ_n (Fluidum's `τ_diffusion_hadron`). For a Fokker–Planck process with drag η_D the ℓ=1 mode decays
+at `η_D·K₂/K₃`, so a Langevin built from `tau_drag` reproduces both D_s and τ_n. Building the drag
+from `tau_n_main3` instead inflates the realised D_s by 1.26–1.74×. The BGK (`:rta`) path uses τ_n
+(`build_taun_current_spline`).
 
-`LV_TAUN_SCALE` (env var, default 1) rescales **both** splines — diagnostic only; it moves D_s
-too. The bench suite refuses to run under any other value.
+`LV_TAUN_SCALE` (env var, default 1) rescales both splines. It is a diagnostic and moves D_s too;
+the bench suite refuses to run with any other value.
 
-**2. `dimensions` sets the positions; `momentum_dimensions` sets the momenta.**
-A 2-D momentum run relaxes to the 2-D Jüttner, whose ℓ=1 rate differs from the 3-D `K₂/K₃·η_D` by
-**5–12 %** over `z = 3.5–10` — and the hydrodynamic coefficients are matched in the 3-D theory.
-`dimensions = 2, momentum_dimensions = 3` is the combination that removes that offset: three
-momentum components on a two-dimensional transverse plane.
+**2. `dimensions` sets the positions, `momentum_dimensions` the momenta.**
+2-D momenta relax to the 2-D Jüttner, whose ℓ=1 rate differs from the 3-D `K₂/K₃·η_D` by 5–12 % over
+`z = 3.5–10`. The hydrodynamic coefficients are the 3-D ones, so use `dimensions = 2,
+momentum_dimensions = 3`: three momentum components on the transverse plane.
 
 **3. `D_sT = 0`, `D_sT → 0⁺` and `:none` are three different limits.** See
-["The weak-coupling limits"](#the-weak-coupling-limits) above. `m ≤ 0` and `D_sT < 0` are refused
-since v0.2.3; before that they degraded silently to free streaming.
-
+["The weak-coupling limits"](#the-weak-coupling-limits).
 
 ## CPU vs GPU
 
-Same algorithm, same kwargs, same return shape. The CPU path is bit-reproducible under
-`Random.seed!`; the GPU draws from CURAND and is reproducible in ensemble moments only. The
-host does the sampling and the p_z completion on both paths, so the t0 snapshot is identical
-to float rounding (the parity bench checks it). The GPU interpolant, boosts and T-guards mirror
-the CPU's clamps since 0.2.0 — a particle leaving the table or a `|v| > 1` cell used to NaN the
-whole GPU ensemble.
+Same algorithm, same keywords, same return shape. The CPU path is bit-reproducible under
+`Random.seed!`; the GPU draws from CURAND and is reproducible in ensemble moments only. The host does
+the sampling and the p_z completion on both paths, so the t0 snapshot is identical up to rounding.
 
 ## Tests and benchmarks
 
 ```
-LIM_FAST=1 julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl    # transport + unit + time-convention (≈30 s)
-           julia --project=Julia Julia/LangevInMedium.jl/test/runtests.jl    # + relativistic switch, momentum_dims3, CPU/GPU kernel parity, GPU-only paths (≈10 min, GPU halves if CUDA works)
-           julia --project=Julia Julia/LangevInMedium.jl/test/regression_corpus.jl   # bit-identity vs the committed baseline (CPU hashes, GPU moments)
+LIM_FAST=1 julia --project=. test/runtests.jl      # transport + unit + time-convention (≈30 s)
+           julia --project=. test/runtests.jl      # + relativistic switch, momentum_dims3, CPU/GPU kernel parity, GPU-only paths (≈10 min)
+           julia --project=. test/regression_corpus.jl   # bit-identity vs the committed baseline (CPU hashes, GPU moments)
 ```
 
-**CPU ↔ GPU is pinned deterministically, not statistically.** `test_kernel_parity.jl` drives each
-kernel pair with the same inputs *and the same injected noise arrays* (the GPU kernels take their
-randomness pre-generated), so the two backends are compared per particle at 1e-12 or tighter
-instead of through a 3 % ensemble moment. Exact equality is not attainable and is not asked for:
-the device contracts multiply-adds into FMA and the host does not, so any expression with a
-multiply-add differs by an ulp by construction. Measured agreement: the interpolant and the spline
-evaluator sub-ulp in range, the boosts 1–2 ulps, the force kernel ≈1.6e-14 relative to each term's
-own scale. Two divergences are deliberate and recorded there rather than reconciled (see
-`@testset "D1"`).
+`test_kernel_parity.jl` gives each CPU/GPU kernel pair the same inputs and the same noise arrays, so
+the backends are compared per particle, at 1e-12 or tighter. The device uses FMA and the host does
+not, so they differ at the ulp level: the interpolant and spline evaluator sub-ulp, the boosts 1–2
+ulps, the force kernel ≈1.6e-14 relative.
 
-`test/regression_corpus_baseline.txt` holds SHA-256 hashes of ten seeded runs spanning the
-kwarg surface (Galilean, p_z + redshift, DsT_quad/linear, RTA, position diffusion, both sampler
-modes, radial mode). A change that keeps the default dynamics must reproduce every hash;
-regenerate with `LIM_CORPUS_WRITE=1` **only** for a deliberate change and say so in the CHANGELOG.
-Regenerated once, at 0.2.3, for the four cases the FONLL-trapezoid and RTA-`expm1` fixes move
-(`sampler_cart`, `sampler_polar`, `radial_dim1`, `rta_flow`); the other six reproduced and that is
-what says the fixes are scoped to the sampler and the BGK step and nothing else.
-Its GPU half is a *statistical* check and its ⟨p_x⟩ gate is a ~2σ test against a single seeded CPU
-draw, so it fails roughly one run in twenty on that field alone (CHANGELOG 0.2.1) — the CPU hashes
-are the deterministic part, and `LIM_CORPUS_NOGPU=1` runs only those.
-
-
-The engine is wired into the repo gate as `programme.jl check` → `engine`
-(`Julia/Projects/test_langevinmedium_engine.jl`), which runs the deterministic half only:
-`LIM_FAST=1 runtests.jl` plus the CPU bit-identity corpus.
+`test/regression_corpus_baseline.txt` holds SHA-256 hashes of ten seeded runs across the keywords.
+A change that keeps the dynamics must reproduce every hash. Regenerate with `LIM_CORPUS_WRITE=1` only
+for a deliberate change, and note it in the CHANGELOG. The GPU half is statistical (its ⟨p_x⟩ check
+fails about one run in twenty); `LIM_CORPUS_NOGPU=1` runs the CPU hashes only.
 
 `bench/` (results in `bench/results/`):
 
-| script | what it pins |
+| script | what it checks |
 |---|---|
-| `bench_physics_gates.jl` | quantities in physical units the engine cannot fake: MSD slope = 2·d·D_s at three z (CPU and GPU); the Jüttner tail p > 3 GeV at the Poisson floor; the ℓ=1 rate = λ₁η_D for 3 and 2 momentum rows; Δt bias of the propagator (none for Galilean, ≤ 1.5 % at ηΔt ≤ 0.1 relativistic); the Galilean MSD(t) curve at all t; `DsT_quad` ⇒ T-independent drag |
-| `bench_gpu_parity.jl` | CPU ↔ GPU **moments** on four nominal backgrounds and on the adversarial inputs (outside the table, `\|v\| > 1` cell) that separated them before 0.2.0, plus a `freezeout_capture` self-consistency case. The *exact* backend comparison is `test/test_kernel_parity.jl`; this one asks the different question "do two full runs with different RNG streams land in the same place" |
-| `bench_semianalytic.jl` | the engine against CLOSED FORMS, with plots: the full Uhlenbeck–Ornstein phase-space covariance including the `σ_xp` cross-correlation nothing else tests; the exact BGK moment law `⟨g⟩(t) = e^{−t/τ_n}⟨g⟩₀ + (1−e^{−t/τ_n})⟨g⟩_eq` at four Δt spanning 100×; free streaming with the Bjorken redshift against its closed form (and the scheme's measured first order); the equilibrium *shape* by two-sample KS in 2 and 3 momentum rows; the comoving blast wave checked PER PARTICLE. Figures in `bench/results/figures/` |
-| `bench_accuracy.jl` | the Δt accuracy budget: `\|⟨p²⟩ bias\| ≈ 12.0 %·(ηΔt)^0.94`, the Galilean branch as an unbiased-measurement control, `D_s` unbiased to ≲1 % for ηΔt ≤ 0.08, and the RTA Δt ceilings. Accuracy, not speed — valid on a loaded machine |
-| `bench_throughput.jl` | marginal ns per particle-step and fixed per-call overhead for CPU/GPU × N × momentum rows × relativistic × collision mode, plus the host-side phases (sampler, `randn!`, copies) |
+| `bench_physics_gates.jl` | MSD slope = 2·d·D_s at three z (CPU and GPU); the Jüttner tail p > 3 GeV at the Poisson floor; the ℓ=1 rate = λ₁η_D for 3 and 2 momentum rows; the Δt bias (none for Galilean, ≤ 1.5 % at ηΔt ≤ 0.1 relativistic); the Galilean MSD(t) at all t; `DsT_quad` ⇒ T-independent drag |
+| `bench_gpu_parity.jl` | CPU ↔ GPU moments on four backgrounds and on inputs outside the table or with `\|v\| > 1`, plus a `freezeout_capture` case. The per-particle comparison is `test/test_kernel_parity.jl` |
+| `bench_semianalytic.jl` | closed forms, with plots: the Uhlenbeck–Ornstein phase-space covariance including `σ_xp`; the exact BGK moment law at four Δt spanning 100×; free streaming with the Bjorken redshift; the equilibrium shape by two-sample KS in 2 and 3 momentum rows; the comoving blast wave per particle. Figures in `bench/results/figures/` |
+| `bench_accuracy.jl` | the Δt budget: `\|⟨p²⟩ bias\| ≈ 12.0 %·(ηΔt)^0.94`, `D_s` unbiased to ≲1 % for ηΔt ≤ 0.08, and the RTA Δt ceilings |
+| `bench_throughput.jl` | ns per particle-step and per-call overhead for CPU/GPU × N × momentum rows × relativistic × collision mode, plus the host-side phases (sampler, `randn!`, copies) |
 
-All of them end in a top-level `[PASS]`/`[FAIL]` line and a non-zero exit on failure.
+Each ends in a `[PASS]`/`[FAIL]` line and exits non-zero on failure.
 
 ## Reference
 
 <details>
-<summary><b>The entry point and the full keyword surface</b> (click to expand)</summary>
+<summary><b>The entry point and the keywords</b> (click to expand)</summary>
 
-### The one entry point
+### The entry point
 
-`simulate_ensemble_bulk(backend, …)` dispatches on the backend singleton:
+`simulate_ensemble_bulk(backend, …)` dispatches on the backend:
 
 | method | what it does |
 |---|---|
-| `(CPUBackend(), r_grid, p_grid, f, T_field, v_field, (xgrid, tgrid); kw...)` | the workhorse, ≈35 call sites in `Projects/` |
-| `(GPUBackend(), …same…; kw...)` | CUDA twin; exists only after `using CUDA` |
+| `(CPUBackend(), r_grid, p_grid, f, T_field, v_field, (xgrid, tgrid); kw...)` | the main entry |
+| `(GPUBackend(), …same…; kw...)` | CUDA version; exists only after `using CUDA` |
 | `(CPUBackend(), T::Float64; kw...)` | homogeneous box, momenta only (toy: fixed `κ = 2.5T³`, ignores `DsT`) |
 
-Returns `(time_points, momenta_snapshots, position_snapshots)`. `?simulate_ensemble_bulk` has
-the full keyword table; the ones that decide the physics:
+Returns `(time_points, momenta_snapshots, position_snapshots)`. `?simulate_ensemble_bulk` has the full
+keyword table; the ones that set the physics:
 
 | keyword | default | meaning |
 |---|---|---|
-| `m`, `DsT` | 1.0, 0.2 | quark mass [GeV]; `D_s·T` label. The drag is the Einstein relation `1/η_D = tau_drag = m·DsT/T²` |
+| `m`, `DsT` | 1.0, 0.2 | quark mass [GeV]; `D_s·T`. The drag is the Einstein relation `1/η_D = tau_drag = m·DsT/T²` |
 | `DsT_linear, DsT_slope, DsT_offset, Tfo` | off | `DsT(T) = slope·max(T, Tfo) + offset` |
-| `DsT_quad, DsT_Tref` | off | `DsT(T) = DsT·(T/Tref)²` ⇒ a T-independent drag time (the uniform-drag member; the Galilean solvable class closes only here) |
+| `DsT_quad, DsT_Tref` | off | `DsT(T) = DsT·(T/Tref)²` ⇒ a T-independent drag time |
 | `dimensions` | 3 (**pass 2**) | 2 = transverse plane (x, y); 1 = radial mode (r, p_r) |
 | `momentum_dimensions` | 0 (= `dimensions`) | 3 with `dimensions = 2`: a longitudinal `p_z` row (thermal conditional at t0). 2-D momenta relax to the 2-D Jüttner, whose current rate λ₁η_D differs from the 3-D `K₂/K₃·η_D` by 5–12 % over z = 3.5–10 |
 | `bjorken_redshift` | false | `dp_z/dτ = −p_z/τ` between kicks (needs `momentum_dimensions = 3`, `initial_time > 0`) |
-| `relativistic` | true | true: Jüttner kinematics — drag `η_D·m/E`, streaming `p/E`, Lorentz boosts. false: the exactly solvable **Galilean** process — drag `η_D`, streaming `p/m`, boosts `p∥ ∓ m·v` |
-| `collision_mode` | `:langevin` | `:rta`: BGK re-draw from the local Jüttner with probability `1 − e^{−Δt/τ_n}`, τ_n the **current** time `tau_n_main3`. `:none`: FREE STREAMING — no drag, no noise, no frame change (the Bjorken redshift still applies). ⚠ `:none` is the only way to ask for free streaming; `DsT = 0` is the *comoving* limit |
+| `relativistic` | true | true: Jüttner kinematics, drag `η_D·m/E`, streaming `p/E`, Lorentz boosts. false: the exactly solvable Galilean process, drag `η_D`, streaming `p/m`, boosts `p∥ ∓ m·v` |
+| `collision_mode` | `:langevin` | `:rta`: BGK re-draw from the local Jüttner with probability `1 − e^{−Δt/τ_n}`, τ_n the current time `tau_n_main3`. `:none`: free streaming, no drag, no noise, no frame change (the Bjorken redshift still applies). `DsT = 0` is the comoving limit, not free streaming |
 | `x_init, p_init` | sampler | `(2, N)` lab positions and **rest-frame** momenta (the t0 lab boost is applied inside) |
 | `cartesian_spatial_sampling`, `antithetic_momenta` | auto, false | sampler mode (disc rejection vs polar inverse-CDF); (p, −p) pairs |
 | `position_diffusion`, `reflecting_boundary` | false | extra overdamped position kicks (double-counts vs hydro); reflect at `r = xgrid[end]` |
-| `momentum_langevin` | true | false (or `DsT = 0`): particles glued to the flow, `p = m·γ·v`, with every momentum row beyond the spatial ones set to zero |
+| `momentum_langevin` | true | false (or `DsT = 0`): particles move with the flow, `p = m·γ·v`, every momentum row beyond the spatial ones set to zero |
 | `V2Evolutionn, psi2` | — | elliptic modulation `v → v(1 + 2v₂cos 2(φ−Ψ₂))` |
-| GPU only: `freezeout_capture, freezeout_interp` | false | latch each particle's `T = Tfo` crossing; returns a NamedTuple `(pos, mom, tau, flag)` instead of histories. The run does **not** stop at freeze-out |
-| GPU only: `integrator_mode` | 0 | 1 = drift-midpoint drag. 🔴 **Measured to roughly DOUBLE the Δt bias it was meant to remove** — see "Known biases" below. The CPU refuses 1 |
+| GPU only: `freezeout_capture, freezeout_interp` | false | latch each particle's `T = Tfo` crossing; returns a NamedTuple `(pos, mom, tau, flag)` instead of histories. The run does not stop at freeze-out |
+| GPU only: `integrator_mode` | 0 | 1 = drift-midpoint drag. It roughly doubles the Δt bias instead of removing it; the CPU refuses 1 |
 | GPU only: `verbose` | false | print device + memory status at entry |
-
-</details>
-
-<details>
-<summary><b>Known biases, limits, and the defect ledger</b> — every one measured, dated and gated (click to expand)</summary>
-
-### Known biases and limits
-
-- **Pre-point relativistic drag**: `η_D·m/E` is evaluated at the start of the step ⇒ an O(ηΔt)
-  bias on ⟨p²⟩, ≈ −1 % at ηΔt = 0.1 and below resolution at production ηΔt ≈ 3·10⁻³. The
-  Galilean propagator is exact at any Δt.
-- 🔴 **`integrator_mode = 1` makes that bias WORSE, not better** (measured 2026-08-31, N = 10⁶,
-  SEM 0.14 %, uniform bath against the 2-D Jüttner ⟨p²⟩):
-
-  | ηΔt | mode 0 | mode 1 | ratio |
-  |---|---|---|---|
-  | 0.05 | −1.03 % | −1.74 % | 1.70 |
-  | 0.10 | −1.36 % | −3.49 % | 2.57 |
-  | 0.20 | −3.23 % | −6.53 % | 2.02 |
-  | 0.30 | −4.26 % | −9.19 % | 2.16 |
-
-  Same sign, roughly double, and still linear in Δt — so it is O(ε), not the advertised O(ε²).
-  The predictor is a *noise-free* drag half-step `p_mid = e^{−η_eff Δt/2}·p`, which can only shrink
-  |p|; so `E_mid < E` always and the midpoint drag is always *larger* than the pre-point one. A
-  genuine midpoint would have the noise raising ⟨p²⟩ as much as the drag lowers it — that is what
-  stationarity means — so the correct midpoint energy is ≈ the pre-point one. Dropping the noise
-  (deliberately, to stop `η_eff` correlating with ξ) trades a correlation error for a one-sided
-  drift of the same order and sign as the error it targets. **No product is affected**: every
-  driver maps its `integrator` option with `== "mid" ? 1 : 0` and no recipe passes `"mid"`.
-  Gated in `test_gpu_only_paths.jl` `@testset "F5"`; not fixed, because a fix changes what mode 1
-  computes.
-- 🔴 **`eval_tau_n_spline` extrapolates outside its table** and can return a NEGATIVE time, which
-  every kernel reads as `η_D = κ = 0` — silent free streaming with neither drag nor noise. Not
-  reachable through the drivers (they span the spline over the whole `T` table and the background
-  interpolant clamps into it); reachable by any external caller, and this function is exported.
-  Full account, measurements and the one-line fix in its docstring; gated with `@test_broken` in
-  `test_kernel_units.jl` `@testset "U2"`.
-- **The boosts are not exactly Lorentz**: `γ = 1/√(1 − v² + 1e-10)`. The regularisation biases γ
-  low by ≈ ½·1e-10/(1−v²) (1.4e-10 at v = 0.8), and because `γ²(1−v²) ≠ 1` the lab→LRF→lab round
-  trip is not an involution — it contracts momenta by ≈ 1e-10/(1−v²) per step, ≈ 9e-7 over a
-  5 800-step run at v = 0.6. It also overrides the `|v| ≤ √(1−1e-12)` clamp, capping γ at ≈1e5
-  rather than 1e6. Pinned in `test_kernel_units.jl` `@testset "U3b"`/`"U3c"`.
-- **2-D momenta** relax to the 2-D Jüttner; compare against 3-D hydro coefficients with
-  `momentum_dimensions = 3` or budget the 5–12 % λ₁ offset.
-- **`save_interval` should divide the evolution**; otherwise the trailing steps are not in the
-  history (the returned `time_points` are the true snapshot times; a warning says how much was dropped).
-- A background table with `T ≤ 0` anywhere is refused by the spline builder on both backends.
-- The FONLL sampler's acceptance in `cartesian_spatial_sampling = true` mode is the fireball's
-  area fraction of the disc — a few % for Pb+Pb in a 20 fm disc; it is host-side and serial.
-- GPU: the methods exist only after `using CUDA` (Requires.jl, not precompiled); `:rta` and
-  `:langevin` only; the momentum history for `N·(saves+1)` lives on the device until the end.
-
-#### The LIMITS and the INPUT CONTRACT (found 2026-09-02, all FIXED in 0.2.3)
-
-The 0.2.1 audit covered every function and 0.2.2 the p_z frame. Neither asked what the engine does
-when it is asked for a *limit*, or handed an input outside its assumptions. Seven defects came out
-of that question. All are fixed; each is gated in `test/test_limits_and_contracts.jl` (41 assertions)
-with the pre-fix measurement in the comment, so a regression has something specific to fail against.
-⚠ **Three of the seven move numbers** — see "What regenerates" below.
-
-- 🔴🔴 **`sample_particles_from_FONLL` assumed a UNIFORM grid, and was FIRST ORDER even there.**
-  Its inverse CDF was `cumsum(w) * mean(diff(grid))` — a right-Riemann sum with one constant
-  spacing. Now a cumulative trapezoid on the actual nodes (`Utils._cumtrapz`). Against the exact
-  ⟨p⟩ of `P(p) ∝ p·f(p)` on the same range, FONLL-like `(1+(p/2.1)²)^(−3.1)`, 12 independent seeds:
-
-  | p grid over [0, 10] | before | after |
-  |---|---|---|
-  | uniform, np = 100 | −3.14 % | −0.01 ± 0.05 % |
-  | uniform, np = **300 (production)** | **−1.08 %** | **−0.08 ± 0.05 %** |
-  | uniform, np = 1200 | −0.29 % | −0.09 ± 0.05 % |
-  | log-spaced, 300 | **−44.6 %** | −0.07 ± 0.05 % |
-
-  Two separate errors were in there. On a uniform grid the old rule converged (O(Δp)), so the
-  production np = 300 cost ≈ −1 % on ⟨p_T⟩ and −1 % on ⟨p_T²⟩ of every FONLL initial condition —
-  partly cancelling in a ratio carrying the same IC top and bottom. On a NON-uniform grid it was
-  simply the wrong quadrature and refinement did not help (−25.7 % at 160 log-spaced points, still
-  −24.7 % at 1600). The residual is now grid-INDEPENDENT, which is the signature that the
-  quadrature is right, and sits at the measurement's own resolution.
-- 🔴 **The glued-to-the-flow limit forgot the `p_z` row.** `kernel_set_to_fluid_velocity_*` wrote
-  momentum rows 1–2 only, on both backends, so with `momentum_dimensions = 3` row 3 kept whatever
-  the IC put there and still entered `E = √(m² + p_⊥² + p_z*²)`: the particle that is supposed to
-  *be* the fluid element streamed slower than it. Measured at v = 0.5, T = 0.30, τ ∈ [0.4, 2.4]:
-  ⟨v_x⟩ = **0.4645 against the fluid's 0.5000, −7.10 %** (CPU and GPU to six digits), ⟨p_z*²⟩ =
-  0.596 GeV² alive at the end. Both kernels now zero every row beyond the spatial ones — the fluid
-  is longitudinally comoving in Milne by construction. Measured after: **0.500000, deficit 0.0000 %,
-  ⟨p_z*²⟩ = 0**. The old gate could not see it: `test_momentum_dims3.jl` "(R)" uses a ZERO-flow box.
-- 🔴 **`D_sT` had three limits and no way to name the third.** `DsT == 0.0` branches into the glue
-  kernel: `p = m·γ·v`, the **cold comoving** limit (measured 0.86603 = m·γ·v exactly). `DsT → 0⁺` is
-  a *different* limit — thermal comoving, ⟨p_x⟩ = γv⟨E*⟩ = **1.0350**, 19.5 % higher. Free streaming
-  was neither, and was reachable only through a **negative** `DsT`, by accident. Three places in the
-  tree called `DsT = 0` "free streaming" (this README's trap list, `CLAUDE.md`,
-  `Projects/SpectraDiagnostic/plot_dst_sweep.jl`, and `AttractorPaper5/Code/run_langevin_kompost.jl`,
-  which *ran* it and labelled the curve). Now **`collision_mode = :none` is free streaming**, on both
-  backends: no drag, no noise, and no boost pair either, so the momenta are exactly constant (the
-  only residue is the documented γ regularisation in the single t0 lab boost, 6.7e-11 at v = 0.5).
-  The Bjorken redshift still applies under `:none`, being the longitudinal free-streaming law.
-- 🔴 **`m ≤ 0` and `DsT < 0` degraded SILENTLY to free streaming** — `tau_drag` returns 0.0 for any
-  non-positive argument and every kernel reads `τ ≤ 0` as `η_D = κ = 0`, so a mistyped mass gave a
-  free-streaming run indistinguishable from a Langevin run except by its numbers (measured: ⟨p²⟩
-  frozen to 1e-9, nothing said). Both are now refused with a message that names the alternative.
-  `DsT == 0` stays legal — it is the comoving limit, not an error.
-- 🔴 **The background table was never checked against the requested window.** `interpolate_2d_*`
-  clamps into the table — right for a particle at the rim, wrong for a run that outlives the hydro
-  output: past `tgrid[end]` the medium froze at its last slice and the run continued, silently, on
-  both backends. The clamping is KEPT (it is occasionally deliberate) and is now announced, by two
-  once-per-run warnings: the window check at entry, and an escaped-particle count at exit
-  (measured: on a table cut at r = 8 fm, **16.2 %** of a 20 000-particle ensemble finished outside
-  it, out to r = 15.2 fm, dragged at the rim `T` and `v` the whole way). Neither carries `maxlog`,
-  deliberately: `maxlog` is keyed by source location, so it would silence every call after the
-  first in a campaign that drives the engine many times — exactly the silence they exist to break.
-- **The step count is no longer `floor`ed on a quotient that is not exactly representable.**
-  `1.4 − 0.4 = 0.9999999999999999`, so `q = 999.9999999999999` and a whole step was lost. Usually
-  10⁻³ fm; the damage was that it also broke `steps % save_every == 0`, and `_snapshot_times` then
-  dropped the entire trailing save interval and blamed `save_interval` for "not dividing the
-  evolution". Measured worst case: t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 kept **501
-  of 1000 steps — half the requested history**. `_step_count` snaps within 64 ulps of the quotient,
-  which is ~4 orders above any representation error and ~3 below any shortfall a caller could mean
-  (gated both ways).
-- **The RTA/BGK collision probability is exponential**, `−expm1(−Δt·dil/τ_n)`, not the linearised
-  `Δt/τ_n`. The old form made the survival probability `1 − Δt/τ_n` and the realised rate
-  `−ln(1 − Δt/τ_n)/Δt`: always too fast. Measured ratio to the nominal `1/τ_n` at
-  Δt = 0.002 / 0.01 / 0.05 / 0.1 / 0.2 (τ_n = 0.5976 fm):
-
-  | | 0.002 | 0.01 | 0.05 | 0.1 | 0.2 |
-  |---|---|---|---|---|---|
-  | before | 1.0013 | 1.0069 | 1.0517 | 1.0936 | **1.2198** |
-  | after | 1.0049 | 1.0070 | 0.9970 | 1.0014 | **1.0006** |
-
-  The Δt-dependence is gone (the residual ±0.5 % is the ensemble's own noise at N = 2·10⁵), and with
-  it the step-size ceiling the RTA used to carry.
-- Two things checked and found **correct**, pinned so a later change has something to fail against:
-  `reflecting_boundary` preserves the uniform disc measure (⟨r⟩ and ⟨r²⟩ within 0.11 % over 20 fm,
-  no escapes), and `track_eta_s` is an exact passenger (momenta and positions bit-identical with it
-  on and off, max |Δ| = **0.000e+00**). The 0.2.1 hot-loop rewrite has held: **0 bytes per
-  particle-step** across CPU × N ∈ {2·10⁴, 10⁵} × pdim ∈ {2, 3} × {`:langevin`, `:rta`}.
-
-#### THE DIAGNOSTICS THAT COULD NOT BE HEARD (found 2026-09-15, all FIXED in 0.2.4)
-
-0.2.3 asked what the engine does at a limit. This pass asked the next question — whether the
-warnings it added can actually be *heard* in the way the engine is really driven, which is a
-campaign of many runs in one session. Three defects, none of which moves a number: all ten corpus
-CPU hashes reproduce bit for bit and the GPU moments match.
-
-- 🔴 **The dropped-history warning carried `maxlog = 1`, so only the FIRST affected run in a session
-  said anything.** `maxlog` is keyed by source location — exactly the reason the 0.2.3 window and
-  escaped-particle warnings were deliberately written without it. Losing history silently is the one
-  thing this warning exists to prevent, and it prevented it once per session. Measured: five
-  consecutive `_snapshot_times` calls at t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 each
-  returned history only out to **0.9 fm of a requested 1.4 fm — half the evolution — and four of the
-  five were silent.** The `maxlog` is gone, and the message now names `requested_final_time` and
-  `last_snapshot` so the size of the loss is in the warning itself. Guarded in `runtests.jl`: five
-  calls must yield five warnings. The guard was falsified against the old behaviour (it sees one).
-- **`_to_cdf!`'s tie-breaking nudge was an absolute `eps(Float64)` and did nothing above a
-  cumulative of ≈10³.** `c[k-1] + 2.2e-16` is not representable next to a value of 10³, so `max`
-  returned `c[k-1]` and the CDF came out flat exactly where the guard was meant to bite — while the
-  docstring promised "strictly increasing". Measured: **149 tied knots at every overall scale ≥ 10³,
-  0 at scale 1**, on a FONLL-shaped density with a hard cutoff over 300 nodes. No result moved (the
-  ties fall in the zero-density tail and the sampled ⟨p⟩ was bit-identical from scale 1 to 10⁹),
-  which is why nothing caught it; a tie in a populated region would not have been harmless. Now
-  `nextfloat`, the representable step at any magnitude.
-- 🔴 **`bench_physics_gates.jl` gate (b) is labelled "tail after 10 τ_drag" and measured the tail
-  after 5.0.** These gates take `tfinal` from a physical time (`10/η_D` = 3.826 fm), so `tfinal/Δt`
-  is an arbitrary real, `steps % save_every ≠ 0`, and with `save = tfinal/2` the whole trailing save
-  interval went: last snapshot **1.914 fm, exactly half the window**. Gate (a) lost 12.4 % of its
-  diffusive window at T = 0.45 and 0.30. **Both gates still passed** — (b) starts in equilibrium, so
-  what it measures is stationary — so nothing announced it except the warning that the defect above
-  had silenced. `box_run` now snaps `tfinal` to an exact multiple of the save interval; all 18 gates
-  still pass, over the windows their labels claim.
-
-#### What regenerates
-
-The corpus says it precisely: **6 of the 10 CPU hashes are unchanged**, and the 4 that moved are
-exactly `sampler_cart`, `sampler_polar`, `radial_dim1` (the trapezoid) and `rta_flow` (the
-exponential). Nothing leaked into the injected-particle (`x_init`/`p_init`) Langevin path. So:
-
-| fix | what it touches | who |
-|---|---|---|
-| FONLL trapezoid | every run that lets the engine sample (`heavy_quark_density`, no `x_init`) | **LP1, O+O, AM, KA — every FONLL IC in the tree**; ⟨p_T⟩ of the IC moves ≈ +1 % |
-| RTA `−expm1` | `collision_mode = :rta` only | LP1's two RTA cells; < 0.1 % at production Δt |
-| step count | windows whose `(tf − t0)/Δt` was mis-floored | **AttractorHydro's portrait** (0.4 → 13.0 at Δt = 10⁻⁴): 125 999 → 126 000 steps, 1260 → 1261 snapshots. LP1's 12.6 fm and O+O's 7.6 fm divide exactly and are untouched |
-| glue `p_z`, validation, warnings, `:none` | nothing in production | no driver passes `momentum_langevin = false`, `m ≤ 0` or `DsT < 0`; `:none` is new |
 
 </details>
 
@@ -528,19 +300,19 @@ src/transport.jl          tau_drag, tau_n_main3, effective_DsT, the two spline b
 src/kernels_cpu.jl        per-step CPU kernels (boosts, forces, momentum/position updates, RTA, saves)
 src/simulate_cpu.jl       CPU driver (+ _snapshot_times)
 src/simulate.jl           public dispatch + the Requires hook
-src/kernels_gpu.jl        CUDA kernels — line-for-line twins of the CPU ones (keep them in step; bench_gpu_parity.jl is the check)
+src/kernels_gpu.jl        CUDA kernels, line-for-line twins of the CPU ones (bench_gpu_parity.jl checks them)
 src/simulate_gpu.jl       GPU driver (freeze-out capture, RTA inverse-CDF table)
 src/simulate_gpu_wrapper.jl   the GPU method, included by the hook
 examples/                 five runnable setups + example_common.jl (background builders) and a README
-src/data/Fluidum_MIS_HQ.jld2  a Fluidum MIS background (23 MB) — NOT read by the package; FokkerPlank1D/2D, FiVoHydro/main2.jl and CompareBoltzmannHQ load it from here
+src/data/Fluidum_MIS_HQ.jld2  a Fluidum MIS background (23 MB), not read by the package
 test/                     runtests.jl (drives everything below), regression_corpus.jl (+ baseline)
   test_kernel_units.jl        every primitive against an independent construction (interpolant, spline
                               evaluator, both boosts, the two Jüttner samplers, FONLL fidelity, the box path)
-  test_kernel_parity.jl       DETERMINISTIC CPU↔GPU, kernel by kernel, same injected noise, ≤1e-12
+  test_kernel_parity.jl       CPU↔GPU, kernel by kernel, same injected noise, ≤1e-12
   test_gpu_only_paths.jl      freezeout_capture and integrator_mode = 1
   test_time_convention.jl     which step time each kernel reads the background at
-  test_limits_and_contracts.jl the LIMITS (D_sT → 0, glued to the flow, free streaming) and the INPUT
-                              CONTRACT (a table that ends before final_time, a non-uniform grid, m ≤ 0)
+  test_limits_and_contracts.jl the limits (D_sT → 0, comoving, free streaming) and the input
+                              contract (a table that ends before final_time, a non-uniform grid, m ≤ 0)
   test_relativistic_switch.jl, test_momentum_dims3.jl, test_proper_time_kicks.jl,
   test_rta_proper_time.jl, test_bjorken_redshift_exact.jl
 bench/                    bench_common.jl, bench_semianalytic.jl (closed forms + plots), bench_accuracy.jl
@@ -552,23 +324,13 @@ bench/                    bench_common.jl, bench_semianalytic.jl (closed forms +
 
 ## Licence and citation
 
-© 2026 Ruwen Schulz. Released under the **Apache License 2.0** — [`LICENSE`](LICENSE) for the terms,
-[`NOTICE`](NOTICE) for the attribution notice to carry with redistributions. The code contains no
-third-party source.
+© 2026 Ruwen Schulz. Apache License 2.0, see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
 
-**If you use this engine in work that is published, please cite it.** The licence does not require
-it; it is the normal scientific courtesy, and [`CITATION.cff`](CITATION.cff) makes it one click —
-GitHub renders a *"Cite this repository"* button from it, and it exports BibTeX and APA. Please say
-which version you ran: the numbers on this page are tied to one, and the engine has had corrections
-that move results (see [`CHANGELOG.md`](CHANGELOG.md), where every entry marked ⚠ changed the
-dynamics or the meaning of a label).
-
-Each release is archived on Zenodo and carries a DOI:
+If you use this engine in published work, please cite it ([`CITATION.cff`](CITATION.cff), or GitHub's
+"Cite this repository" button) and say which version you ran. Changes that move results are listed
+in [`CHANGELOG.md`](CHANGELOG.md).
 
 | | DOI |
 |---|---|
-| **cite this one** — always resolves to the newest version | [10.5281/zenodo.22791006](https://doi.org/10.5281/zenodo.22791006) |
-| v0.2.4, this exact version | [10.5281/zenodo.22791456](https://doi.org/10.5281/zenodo.22791456) |
-
-<sub>Changes that move a number are recorded in [`CHANGELOG.md`](CHANGELOG.md) with the measurement
-that found them.</sub>
+| all versions (resolves to the newest) | [10.5281/zenodo.22791006](https://doi.org/10.5281/zenodo.22791006) |
+| v0.2.4 | [10.5281/zenodo.22791456](https://doi.org/10.5281/zenodo.22791456) |
