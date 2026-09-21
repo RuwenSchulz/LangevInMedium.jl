@@ -4,8 +4,8 @@ Five runnable setups, smallest first. Each is standalone, prints measured number
 closed form or the expectation they should match, and writes a figure to `examples/figures/`.
 
 ```sh
-julia --project=Julia Julia/LangevInMedium.jl/examples/01_uniform_bath.jl
-LIM_NOPLOT=1 julia --project=Julia Julia/LangevInMedium.jl/examples/01_uniform_bath.jl   # numbers only
+julia --project=. examples/01_uniform_bath.jl
+LIM_NOPLOT=1 julia --project=. examples/01_uniform_bath.jl   # numbers only
 ```
 
 They share `example_common.jl`, which holds the two background builders (`uniform_bath`,
