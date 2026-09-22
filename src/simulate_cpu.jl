@@ -168,6 +168,12 @@ function simulate_ensemble_bulk_cpu(
     momentum_dimensions::Int = 0,
     # dp_z/dτ = −p_z/τ between kicks (Bjorken longitudinal free-streaming); needs momentum_dimensions=3.
     bjorken_redshift::Bool = false,
+    # WHERE the Bjorken redshift acts (2026-09-22). `:lrf` (default, every shipped product) scales p_z
+    # AFTER the boost to the rest frame; the back-boost then uses the reduced E*, so the LAB transverse
+    # momentum falls by γ·v·δE* every step — a spurious force −u^r p_z²/(τE*) in the fluid frame whose
+    # current is −n D_s κ₂ u^r/τ, κ₂ = ⟨p_x²p_z²/E²⟩/T² (≈0.9). Free streaming conserves the lab p_T,
+    # which `:lab` does: p_z is scaled on the LAB momenta before the boost. Identical with no flow.
+    bjorken_frame::Symbol = :lrf,
     # kick per the particle's proper time (Δt* = Δt·E*/E_lab) — removes the lab-simultaneity
     # ν^r artifact on flowing backgrounds; default false = production byte-identical.
     proper_time_kicks::Bool = false,
@@ -184,6 +190,7 @@ function simulate_ensemble_bulk_cpu(
     # 🔴 2026-09-02: refuse the inputs that used to degrade to silent free streaming, and say so
     # when the requested window leaves the background table (both are new; see the helpers above).
     _validate_transport_inputs(m, DsT)
+    bjorken_frame in (:lrf, :lab) || error("simulate_ensemble_bulk: bjorken_frame must be :lrf or :lab, got $(bjorken_frame)")
     # SpaceTimeGrid[end], not [2]: on a 3-element (x, y, t) grid the second entry is the Y AXIS,
     # and checking the run window against it is silently vacuous whenever the box happens to
     # bracket the times.
@@ -423,6 +430,12 @@ function simulate_ensemble_bulk_cpu(
         # only consumer of randomness is the initial sampler.
         free_stream || randn!(ξ)
 
+        # 0. Bjorken redshift on the LAB momenta (bjorken_frame = :lab): lab p_T is conserved, as in
+        #    free streaming; the boost below then sees the reduced E_lab.
+        if bjorken_redshift && bjorken_frame === :lab
+            kernel_bjorken_redshift_cpu!(momenta, 3, step, Δt, initial_time, N_particles)
+        end
+
         # 1. Boost momenta to local rest frame.
         # `collision_mode = :none` is FREE STREAMING (added 2026-09-02): no drag, no noise, and no
         # frame change either — the lab momenta are constant, so the boost pair would be a round
@@ -435,10 +448,11 @@ function simulate_ensemble_bulk_cpu(
                 V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         end
 
-        # 1b. Longitudinal redshift of p_z in the LRF (p_z is invariant under the transverse boost,
-        # so it is the same operation with or without the boost pair — and dp_z/dτ = −p_z/τ IS the
-        # longitudinal free-streaming law, so it belongs in the :none path too).
-        if bjorken_redshift
+        # 1b. Longitudinal redshift of p_z in the LRF (bjorken_frame = :lrf, the shipped ordering).
+        # p_z itself is invariant under the transverse boost, but E* is not held by the back-boost:
+        # this ordering lowers the LAB p_T by γ·v·δE* per step (see the bjorken_frame note above).
+        # dp_z/dτ = −p_z/τ IS the longitudinal free-streaming law, so it belongs in the :none path too.
+        if bjorken_redshift && bjorken_frame === :lrf
             kernel_bjorken_redshift_cpu!(momenta, 3, step, Δt, initial_time, N_particles)
         end
 

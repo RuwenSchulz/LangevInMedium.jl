@@ -109,6 +109,7 @@ function simulate_ensemble_bulk(
     relativistic::Bool = true,    # p_z on the transverse plane (3 with dimensions=2) and its Bjorken redshift — utils.jl note.
     momentum_dimensions::Int = 0,
     bjorken_redshift::Bool = false,
+    bjorken_frame::Symbol = :lrf,     # where the redshift acts: :lrf (shipped) | :lab (lab p_T conserved) — simulate_cpu.jl note
     proper_time_kicks::Bool = false,  # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl); false = production
     pz_init::Symbol = :thermal,   # p_z row at t0: :thermal (shipped) | :comoving (p_z* = 0) — see append_pz
     track_eta_s::Bool = false,    # also return the η_s history (a FOURTH element); see kernel_accumulate_eta_s_cpu!
@@ -139,6 +140,7 @@ function simulate_ensemble_bulk(
         relativistic = relativistic,
         momentum_dimensions = momentum_dimensions,
         bjorken_redshift = bjorken_redshift,
+        bjorken_frame = bjorken_frame,
         proper_time_kicks = proper_time_kicks,
         pz_init = pz_init,
         track_eta_s = track_eta_s,

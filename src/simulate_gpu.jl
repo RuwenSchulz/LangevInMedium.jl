@@ -59,6 +59,7 @@ function simulate_ensemble_bulk_gpu(
     relativistic::Bool = true,  # true = drag ·m/E (Jüttner); false = ηD (Maxwell)
     momentum_dimensions::Int = 0,   # 0 ⇒ = dimensions; 3 with dimensions=2 adds p_z (utils.jl note)
     bjorken_redshift::Bool = false, # dp_z/dτ = −p_z/τ between kicks; needs momentum_dimensions=3
+    bjorken_frame::Symbol = :lrf,   # :lrf (shipped) | :lab (lab p_T conserved) — see the simulate_cpu.jl note
     proper_time_kicks::Bool = false, # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl note)
     pz_init::Symbol = :thermal,     # :thermal (shipped) | :comoving (p_z* = 0); see append_pz
     track_eta_s::Bool = false,      # accumulate η_s and return its history as a FOURTH element
@@ -66,6 +67,7 @@ function simulate_ensemble_bulk_gpu(
 )
     CUDA.reclaim()  # Free any unused GPU memory
     verbose && print_cuda_status()
+    bjorken_frame in (:lrf, :lab) || error("simulate_ensemble_bulk: bjorken_frame must be :lrf or :lab, got $(bjorken_frame)")
 
     try
         # === Derived parameters ===
@@ -369,6 +371,12 @@ function simulate_ensemble_bulk_gpu(
                 end
             end
 
+            # Step 0: Bjorken redshift on the LAB momenta (bjorken_frame = :lab) — lab p_T conserved.
+            if bjorken_redshift && bjorken_frame === :lab
+                @cuda threads=threads blocks=blocks kernel_bjorken_redshift_gpu!(
+                    momenta, 3, step, Δt, initial_time, N_particles)
+            end
+
             # Step 1: Transform momenta to local rest frame (LRF). Skipped under `:none`, where the
             # lab momenta are constant and the boost pair would only apply the γ regularisation's
             # ≈1e-10 contraction per step (see the CPU twin).
@@ -379,8 +387,9 @@ function simulate_ensemble_bulk_gpu(
                     relativistic, ygrid, VxField, VyField)
             end
 
-            # Step 1b: Bjorken redshift of p_z in the LRF (invariant under the transverse boost)
-            if bjorken_redshift
+            # Step 1b: Bjorken redshift of p_z in the LRF (bjorken_frame = :lrf, the shipped ordering;
+            # the back-boost then lowers the lab p_T by γ·v·δE* per step — see the simulate_cpu.jl note)
+            if bjorken_redshift && bjorken_frame === :lrf
                 @cuda threads=threads blocks=blocks kernel_bjorken_redshift_gpu!(
                     momenta, 3, step, Δt, initial_time, N_particles)
             end

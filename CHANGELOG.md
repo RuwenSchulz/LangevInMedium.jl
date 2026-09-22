@@ -5,6 +5,21 @@ before them are not comparable to outputs produced after.
 
 ## Unreleased
 
+### Added
+- **`bjorken_frame = :lab | :lrf` — where the Bjorken redshift acts.** With `bjorken_redshift = true`
+  the engine has always scaled `p_z` on the REST-FRAME momenta, between the boost to the rest frame
+  and the boost back. `p_z` is invariant under the transverse boost, but `E*` is not, and the
+  back-boost reads it: with transverse flow every step lowered the LAB `p_⊥` by `γ·v·δE*`, which free
+  streaming conserves. In the fluid frame that is a spurious force `−u^r p_z²/(τE*)`; its first-order
+  diffusion current `−n D_s κ₂ u^r/τ` (κ₂ = ⟨p_x²p_z²/E²⟩/T² ≈ 0.9) was the unexplained ~15 % excess of
+  the tracer current over consistent hydrodynamics in AttractorHydro (fitted −0.96 … −1.02 of it on
+  the stored ensembles, prediction −1; with `:lab` the current meets hydro). `:lab` applies the
+  redshift to the lab momenta before the boost. The DEFAULT stays `:lrf` so every existing output
+  reproduces bit for bit; new runs should pass `:lab`. Without flow the two agree. CPU and GPU.
+  Gate: `test/test_bjorken_frame.jl` (free streaming in a v = 0.5 flow: `:lab` conserves p_⊥ to the
+  γ-regularisation floor, `:lrf` drains 13 % of it over τ = 0.4 → 2.4). ⚠ `test_bjorken_redshift_exact.jl`
+  claimed to catch a wrong-frame redshift; it has no flow and could not — corrected in its header.
+
 ### Changed
 - **Licence: MIT → Apache-2.0.** Both are permissive and the change adds no restriction on use;
   Apache-2.0 additionally carries an express patent grant and a NOTICE file, and it is what

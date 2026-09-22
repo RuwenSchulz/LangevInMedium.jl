@@ -23,10 +23,13 @@
 
    THE TEST. Free-stream a DELIBERATELY NON-THERMAL p_z distribution (a bimodal ±p₀ plus a broad
    uniform pedestal — nothing Gaussian, nothing thermal, and asymmetric so a sign flip shows) and
-   demand the whole distribution rescale by exactly τ₀/τ. A wrong POWER of τ, a wrong SIGN, a
-   redshift applied to the wrong momentum row, or one applied in the wrong frame each break a
-   different gate below; a formula that merely reproduced ⟨p_z²⟩ ∝ τ^{-2} on a thermal ensemble would
-   still fail R3 and R4.
+   demand the whole distribution rescale by exactly τ₀/τ. A wrong POWER of τ, a wrong SIGN, or a
+   redshift applied to the wrong momentum row each break a different gate below; a formula that
+   merely reproduced ⟨p_z²⟩ ∝ τ^{-2} on a thermal ensemble would still fail R3 and R4.
+   ⚠ 2026-09-22: this file said a redshift "applied in the wrong frame" would break a gate too. It
+   cannot: the background below has NO FLOW, where the rest frame and the lab coincide. The engine
+   WAS applying it in the wrong frame (rest-frame p_z inside the boost pair, draining the lab p_⊥ by
+   γvδE* per step) and every gate here passed. `test_bjorken_frame.jl` is the test with flow.
 
    Gates:  R1  ⟨p_z^k⟩ scales as (τ₀/τ)^k for k = 1, 2, 3, 4 — pins the POWER, not just the variance
            R2  the transverse sector is UNTOUCHED: ⟨p_⊥²⟩ ratio = 1 — pins the ROW

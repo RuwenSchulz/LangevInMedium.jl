@@ -93,6 +93,7 @@ t, mom, pos = simulate_ensemble_bulk(CPUBackend(), r_grid, p_grid, density,
     dimensions = 2,                 # positions: the transverse plane
     momentum_dimensions = 3,        # momenta: THREE rows (see "conventions" below)
     bjorken_redshift  = true,       # dp_z/dτ = −p_z/τ between kicks
+    bjorken_frame     = :lab,       # ... applied to the LAB momenta (see the keyword table)
     proper_time_kicks = true)       # kick per the particle's proper time, not the lab step
 
 # mom[k] :: (momentum rows, N) at t[k];   pos[k] :: (dimensions, N)
@@ -276,6 +277,7 @@ keyword table; the ones that set the physics:
 | `dimensions` | 3 (**pass 2**) | 2 = transverse plane (x, y); 1 = radial mode (r, p_r) |
 | `momentum_dimensions` | 0 (= `dimensions`) | 3 with `dimensions = 2`: a longitudinal `p_z` row (thermal conditional at t0). 2-D momenta relax to the 2-D Jüttner, whose current rate λ₁η_D differs from the 3-D `K₂/K₃·η_D` by 5–12 % over z = 3.5–10 |
 | `bjorken_redshift` | false | `dp_z/dτ = −p_z/τ` between kicks (needs `momentum_dimensions = 3`, `initial_time > 0`) |
+| `bjorken_frame` | `:lrf` | where the redshift acts. `:lab`: on the lab momenta, so the lab `p_⊥` is conserved as in free streaming — use this. `:lrf` (default, reproduces every earlier output): on the rest-frame momenta inside the boost pair, which drains the lab `p_⊥` by `γ·v·δE*` per step when there is transverse flow — a spurious force `−u^r p_z²/(τE*)`. Identical without flow |
 | `relativistic` | true | true: Jüttner kinematics, drag `η_D·m/E`, streaming `p/E`, Lorentz boosts. false: the exactly solvable Galilean process, drag `η_D`, streaming `p/m`, boosts `p∥ ∓ m·v` |
 | `collision_mode` | `:langevin` | `:rta`: BGK re-draw from the local Jüttner with probability `1 − e^{−Δt/τ_n}`, τ_n the current time `tau_n_main3`. `:none`: free streaming, no drag, no noise, no frame change (the Bjorken redshift still applies). `DsT = 0` is the comoving limit, not free streaming |
 | `x_init, p_init` | sampler | `(2, N)` lab positions and **rest-frame** momenta (the t0 lab boost is applied inside) |

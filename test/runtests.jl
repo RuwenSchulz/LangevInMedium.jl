@@ -229,6 +229,11 @@ else
     # Cartesian lab coordinates with an explicit z and compares distributions. It also gates the
     # two 2026-09-01 additions: pz_init (:thermal | :comoving) and the η_s accumulator.
     run_suite("test_pz_lab_rapidity.jl")
+    # ── WHERE the Bjorken redshift acts, with a transverse flow ─────────────────────────────────────
+    # The redshift on the rest-frame momenta (bjorken_frame = :lrf, the shipped default) drains the lab
+    # p_⊥ through the back-boost; :lab conserves it. The two gates above run without flow and cannot
+    # see the difference. 2026-09-22 (AttractorHydro I-43).
+    run_suite("test_bjorken_frame.jl")
     # ── CPU ↔ GPU, deterministically ────────────────────────────────────────────────
     # The ONLY exact comparison of the two backends: same inputs, same injected noise, per particle,
     # at 1e-12 or tighter. Everything else in the tree compares ensemble moments at 3 %, which is a
