@@ -74,6 +74,28 @@ conventions drifting apart across the six kernels that read a background.
     return sqrt(vx*vx + vy*vy)
 end
 
+"""
+    _proper_time_dil_2d(xgrid, ygrid, tgrid, VxField, VyField, x, y, t, k1, k2, Estar)
+
+The proper-time dilation E*/E_lab = 1/(γ(1 + v⃗·k⃗/E*)) on a 2-D background: the flow is the VECTOR
+(v^x, v^y) at the particle, (k1, k2) the rest-frame transverse momentum, `Estar` the full rest-frame
+energy. The radial path keeps its |v|·k·r̂ form, which is this quantity when the flow points along r̂.
+|v| is clamped at 0.999999 by scaling the vector, as the radial path clamps the magnitude.
+Added 2026-09-24 (IDEAS I-64); the GPU twin is `_proper_time_dil_2d_cuda`.
+"""
+@inline function _proper_time_dil_2d(xgrid, ygrid, tgrid, VxField, VyField, x, y, t, k1, k2, Estar)
+    vx = interpolate_3d_cpu(xgrid, ygrid, tgrid, VxField, x, y, t)
+    vy = interpolate_3d_cpu(xgrid, ygrid, tgrid, VyField, x, y, t)
+    v2 = vx * vx + vy * vy
+    if v2 > 0.999999 * 0.999999
+        s = 0.999999 / sqrt(v2)
+        vx *= s; vy *= s; v2 = 0.999999 * 0.999999
+    end
+    γv = 1.0 / sqrt(1.0 - v2)
+    den = γv * (1.0 + (vx * k1 + vy * k2) / Estar)
+    return 1.0 / (den > 1e-6 ? den : 1e-6)
+end
+
 @inline function _bg_scalar(xgrid, ygrid, tgrid, field, x, y, r, t)
     return ygrid === nothing ? interpolate_2d_cpu(xgrid, tgrid, field, r, t) :
                                interpolate_3d_cpu(xgrid, ygrid, tgrid, field, x, y, t)
@@ -487,7 +509,20 @@ function kernel_compute_all_forces_cpu!(
         # proper-time dilation of the kick: Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)).
         # k_r is the LRF radial momentum (p_z ⊥ the transverse boost), E* the full LRF energy.
         dil = 1.0
-        if proper_time_kicks
+        if proper_time_kicks && VxField !== nothing
+            # 🔴 FIXED 2026-09-24 — on a 2-D background the flow is the VECTOR (v^x, v^y), and
+            # E_lab/E* = γ(1 + v⃗·k⃗/E*). The radial branch below takes |v|·k·r̂, which is the same
+            # thing only where the flow points along r̂; on an azimuthal flow it lost the whole
+            # correction and made a spurious outward current (test_flow_direction2d.jl F2).
+            p2_all = 0.0
+            for d in 1:dimensions
+                p2_all += momenta[d, i]^2
+            end
+            dil = _proper_time_dil_2d(xgrid, ygrid, tgrid, VxField, VyField, positions[1, i],
+                                      size(positions,1) >= 2 ? positions[2, i] : 0.0, step * Δt + t0,
+                                      momenta[1, i], size(momenta,1) >= 2 ? momenta[2, i] : 0.0,
+                                      sqrt(p2_all + M^2))
+        elseif proper_time_kicks
             v = _bg_flowmag(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
                             size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0)
             v = clamp(float(v), -0.999999, 0.999999)
@@ -780,7 +815,18 @@ function kernel_rta_collision_cpu!(
         # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)), the SAME factor
         # kernel_compute_all_forces_cpu! applies to the OU step. DEFAULT OFF ⇒ literal 1.0.
         dil = 1.0
-        if proper_time_kicks && (Vfield !== nothing || VxField !== nothing)
+        if proper_time_kicks && VxField !== nothing
+            # 🔴 FIXED 2026-09-24 — the flow VECTOR on a 2-D background; see the same branch in
+            # kernel_compute_all_forces_cpu! (test_flow_direction2d.jl F3).
+            p2_all = 0.0
+            for d in 1:dimensions
+                p2_all += momenta[d, i]^2
+            end
+            dil = _proper_time_dil_2d(xgrid, ygrid, tgrid, VxField, VyField, positions[1, i],
+                                      size(positions,1) >= 2 ? positions[2, i] : 0.0, step * Δt + t0,
+                                      momenta[1, i], size(momenta,1) >= 2 ? momenta[2, i] : 0.0,
+                                      sqrt(p2_all + M * M))
+        elseif proper_time_kicks && (Vfield !== nothing || VxField !== nothing)
             v = float(_bg_flowmag(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
                                   size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0))
             v = clamp(v, -0.999999, 0.999999)

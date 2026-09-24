@@ -234,6 +234,11 @@ else
     # p_⊥ through the back-boost; :lab conserves it. The two gates above run without flow and cannot
     # see the difference. 2026-09-22 (AttractorHydro I-43).
     run_suite("test_bjorken_frame.jl")
+    # ── the flow DIRECTION on a 2-D background ──────────────────────────────────────────────────────
+    # proper_time_kicks (all four kick sites) and the GPU cold-comoving kernel took the flow along r̂,
+    # exact on every radial table and wrong on a 2-D one. An azimuthal flow is where they differ most.
+    # 2026-09-24 (IDEAS I-64). CPU always; the GPU halves skip themselves without CUDA.
+    run_suite("test_flow_direction2d.jl")
     # ── CPU ↔ GPU, deterministically ────────────────────────────────────────────────
     # The ONLY exact comparison of the two backends: same inputs, same injected noise, per particle,
     # at 1e-12 or tighter. Everything else in the tree compares ensemble moments at 3 %, which is a

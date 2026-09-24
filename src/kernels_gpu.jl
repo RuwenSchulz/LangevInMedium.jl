@@ -121,6 +121,21 @@ end
     return CUDA.sqrt(vx*vx + vy*vy)
 end
 
+# E*/E_lab = 1/(γ(1 + v⃗·k⃗/E*)) on a 2-D background, the flow taken as the VECTOR (v^x, v^y).
+# Line-for-line twin of `_proper_time_dil_2d` in kernels_cpu.jl (added 2026-09-24, IDEAS I-64).
+@inline function _proper_time_dil_2d_cuda(xgrid, ygrid, tgrid, VxField, VyField, x, y, t, k1, k2, Estar)
+    vx = interpolate_3d_cuda(xgrid, ygrid, tgrid, VxField, x, y, t)
+    vy = interpolate_3d_cuda(xgrid, ygrid, tgrid, VyField, x, y, t)
+    v2 = vx * vx + vy * vy
+    if v2 > 0.999999 * 0.999999
+        s = 0.999999 / CUDA.sqrt(v2)
+        vx *= s; vy *= s; v2 = 0.999999 * 0.999999
+    end
+    γv = 1.0 / CUDA.sqrt(1.0 - v2)
+    den = γv * (1.0 + (vx * k1 + vy * k2) / Estar)
+    return 1.0 / (den > 1e-6 ? den : 1e-6)
+end
+
 @inline function interpolate_2d_cuda(x, y, values, xi, yi)
     xi = xi < x[1] ? x[1] : (xi > x[length(x)] ? x[length(x)] : xi)
     yi = yi < y[1] ? y[1] : (yi > y[length(y)] ? y[length(y)] : yi)
@@ -499,7 +514,18 @@ because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go. On
 
         # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)); mirrors the CPU kernel.
         dil = 1.0
-        if proper_time_kicks
+        if proper_time_kicks && VxField !== nothing
+            # 🔴 FIXED 2026-09-24 — the flow VECTOR on a 2-D background (twin of the CPU branch;
+            # test_flow_direction2d.jl F2/F3). The radial branch below is unchanged.
+            p2_all = 0.0
+            for d in 1:dimensions
+                @inbounds p2_all += momenta[d, i]^2
+            end
+            dil = _proper_time_dil_2d_cuda(xgrid, ygrid, tgrid, VxField, VyField, positions[1, i],
+                                           size(positions,1) >= 2 ? positions[2, i] : 0.0, steps * Δt + initial_time,
+                                           momenta[1, i], size(momenta,1) >= 2 ? momenta[2, i] : 0.0,
+                                           CUDA.sqrt(p2_all + M * M))
+        elseif proper_time_kicks
             v = _bg_flowmag_cuda(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
                                  size(positions,1) >= 2 ? positions[2, i] : 0.0, r, steps * Δt + initial_time)
             v = v > 0.999999 ? 0.999999 : (v < -0.999999 ? -0.999999 : Float64(v))
@@ -952,7 +978,18 @@ Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-dr
         # τ_n it is matched to is a comoving quantity, so the elapsed time must be comoving too.
         # DEFAULT OFF ⇒ dil is the literal constant 1.0 and Pcol is bit-for-bit the old expression.
         dil = 1.0
-        if proper_time_kicks && (Vfield !== nothing || VxField !== nothing)
+        if proper_time_kicks && VxField !== nothing
+            # 🔴 FIXED 2026-09-24 — the flow VECTOR on a 2-D background (twin of the CPU branch;
+            # test_flow_direction2d.jl F2/F3). The radial branch below is unchanged.
+            p2_all = 0.0
+            for d in 1:dimensions
+                @inbounds p2_all += momenta[d, i]^2
+            end
+            dil = _proper_time_dil_2d_cuda(xgrid, ygrid, tgrid, VxField, VyField, positions[1, i],
+                                           size(positions,1) >= 2 ? positions[2, i] : 0.0, steps * Δt + initial_time,
+                                           momenta[1, i], size(momenta,1) >= 2 ? momenta[2, i] : 0.0,
+                                           CUDA.sqrt(p2_all + M * M))
+        elseif proper_time_kicks && (Vfield !== nothing || VxField !== nothing)
             v = _bg_flowmag_cuda(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
                                  size(positions,1) >= 2 ? positions[2, i] : 0.0, r, steps * Δt + initial_time)
             v = v > 0.999999 ? 0.999999 : (v < -0.999999 ? -0.999999 : Float64(v))
@@ -1066,8 +1103,12 @@ Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ
             if radial_mode
                 @inbounds momenta[1, idx] = m * v
             else
-                @inbounds momenta[1, idx] = m * v * (x / r)
-                @inbounds momenta[2, idx] = m * v * (y / r)
+                # 🔴 FIXED 2026-09-24 — along the FLOW (dirx, diry), as the CPU twin does. This wrote
+                # (x/r, y/r), which on a 2-D background is not the flow direction (uniform x-flow:
+                # ⟨p_x⟩ −0.0009 against 0.86603; test_flow_direction2d.jl F1). On a radial table
+                # dirx ≡ positions[1, idx]/r = x/r, so that path is bit-identical.
+                @inbounds momenta[1, idx] = m * v * dirx
+                @inbounds momenta[2, idx] = m * v * diry
             end
             return
         end
@@ -1087,9 +1128,9 @@ Glue the particle to the flow: set the rest-frame momentum to the fluid's `m·γ
             # =====================================
             # 🟢 Cartesian mode (2D, rotation invariant)
             # =====================================
-            # Set momentum along local radial direction
-            @inbounds momenta[1, idx] = m * γ * v * (x / r)
-            @inbounds momenta[2, idx] = m * γ * v * (y / r)
+            # Set momentum along the local FLOW direction (fixed 2026-09-24, see the Galilean branch)
+            @inbounds momenta[1, idx] = m * γ * v * dirx
+            @inbounds momenta[2, idx] = m * γ * v * diry
         end
     end
     return

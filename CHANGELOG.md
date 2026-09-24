@@ -26,6 +26,26 @@ before them are not comparable to outputs produced after.
   FiVoHydro.jl already uses, so the two packages published together now carry one licence. The
   copyright holder is unchanged and holds all of the code (no third-party source is vendored).
 
+### Fixed
+- 🔴 **The flow DIRECTION on a 2-D (x, y, τ) background.** Two kernels took the flow to point along
+  r̂. That is exact on every radial (r, τ) table, which is why no gate saw it, and wrong on a 2-D one,
+  where the flow points along û = (v^x, v^y)/|v|.
+  1. `proper_time_kicks` dilated the kick by 1/(γ(1 + |v|·k·r̂/E*)) instead of 1/(γ(1 + v⃗·k⃗/E*)), at
+     all four sites (CPU and GPU, OU and RTA). Measured on an azimuthal flow, |v| = 0.5, T = 0.3 GeV:
+     ⟨p·û⟩ = 1.1763 against the boosted Jüttner's 1.3529, so the correction was lost (the kicks-off
+     value is 1.1750), and a spurious outward ⟨p·r̂⟩ = +0.149 GeV appeared. On the real backgrounds
+     the flow leaves r̂ by a median 22° (Pb+Pb 20–30 % event) and 12° (O+O average).
+  2. The GPU cold-comoving kernel (literal `DsT == 0`) wrote m·γ·v along (x/r, y/r); the CPU twin
+     writes it along the flow. Uniform x-flow: GPU ⟨p_x⟩ = −0.0009 against 0.86603.
+
+  Both fixes touch only the 2-D-background branch; the radial branches are textually unchanged.
+  **No change to the radial path:** the ten `regression_corpus.jl` CPU hashes reproduce against the
+  committed baseline. `test/bitid_production_paths.jl` hashes 21 seeded CPU + GPU runs over the
+  production switches (`proper_time_kicks`, `bjorken_frame = :lab`, RTA, cold comoving, free
+  streaming, the freeze-out latch; GPU seeded with `CUDA.seed!`); its baseline was written at c1ca501
+  before the edit, and every hash reproduces. No DPM cell uses a 2-D background. Gate: `test/test_flow_direction2d.jl`, F1–F3, which failed 10 of its 18 checks before
+  the fix.
+
 ## 0.2.4 — 2026-09-15  (the dropped-history warning could not be heard, and a gate measured half its window)
 
 No change to the dynamics: all ten `regression_corpus.jl` CPU hashes reproduce bit for bit and the
