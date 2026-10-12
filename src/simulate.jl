@@ -60,6 +60,13 @@ Keywords (defaults in `simulate_cpu.jl`/`simulate_gpu.jl`):
 - `V2Evolutionn, psi2`: optional elliptic modulation `v → v(1 + 2v₂cos2(φ−Ψ₂))`.
 - `save_interval`: snapshot cadence; if it does not divide the evolution the trailing steps
   are not in the history and `time_points` says so (a warning is issued once).
+- `adaptive_dt = true`: a VARIABLE, global step built from the background before the run
+  (`adaptive_time_grid`): `η_D·h ≤ adaptive_drag_tol` in the hottest cell (the exact-OU step's
+  bias is ≈ 12 %·η_DΔt, bench/bench_accuracy.jl), `h·|∂τη_D| ≤ adaptive_bg_tol·η_max`, and
+  `dt_min ≤ h ≤ dt_max`. `time_grid = [t_0, …, t_n]` hands the step boundaries in directly. With
+  either, `Δt` is unused, snapshots land exactly on `initial_time + k·save_interval` and on
+  `final_time` (nothing is dropped), and `time_points` is a `Vector`. Off by default; the fixed-Δt
+  path is bit-identical to before.
 - GPU only: `freezeout_capture`/`freezeout_interp` (returns a NamedTuple of the T = Tfo crossing
   instead of histories), `integrator_mode = 1` (drift-midpoint drag), `verbose`.
 
@@ -114,6 +121,12 @@ function simulate_ensemble_bulk(
     pz_init::Symbol = :thermal,   # p_z row at t0: :thermal (shipped) | :comoving (p_z* = 0) — see append_pz
     track_eta_s::Bool = false,    # also return the η_s history (a FOURTH element); see kernel_accumulate_eta_s_cpu!
     verbose::Bool = false,        # accepted for signature parity with the GPU path (prints nothing on the CPU)
+    adaptive_dt::Bool = false,    # variable step from the background (timegrid.jl); Δt then unused
+    adaptive_drag_tol::Float64 = 0.01,   # η_D·h ≤ this in the hottest cell
+    adaptive_bg_tol::Float64 = 0.01,     # h·|∂τ η_D| ≤ this · η_max
+    dt_min::Float64 = 1e-5,
+    dt_max::Float64 = 0.1,
+    time_grid::Union{Nothing, AbstractVector} = nothing,   # explicit step boundaries; Δt then unused
 )
     integrator_mode == 0 ||
         error("simulate_ensemble_bulk(::CPUBackend): integrator_mode=$(integrator_mode) is not implemented on the CPU (only 0, the pre-point exact-OU step); the drift-midpoint variant (1) exists on the GPU path only.")
@@ -144,6 +157,12 @@ function simulate_ensemble_bulk(
         proper_time_kicks = proper_time_kicks,
         pz_init = pz_init,
         track_eta_s = track_eta_s,
+        adaptive_dt = adaptive_dt,
+        adaptive_drag_tol = adaptive_drag_tol,
+        adaptive_bg_tol = adaptive_bg_tol,
+        dt_min = dt_min,
+        dt_max = dt_max,
+        time_grid = time_grid,
     )
 end
 

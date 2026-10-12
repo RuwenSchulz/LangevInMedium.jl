@@ -194,6 +194,35 @@ size. The pre-point relativistic drag gives an O(ηΔt) bias on ⟨p²⟩:
 D_s is unbiased to ≲1 % for η_D Δt ≤ 0.08
 ```
 
+### Variable step
+
+`adaptive_dt = true` replaces the fixed `Δt` with a step built from the background before the run
+(`adaptive_time_grid`, exported, so the grid can be inspected first). The step is the same for every
+particle and does not depend on the particle state, so the CPU and GPU take the same steps for any
+seed. At each time it is the smallest of:
+
+```
+h ≤ adaptive_drag_tol / η_max(τ)                (default 0.01: η_D·h in the hottest cell)
+h ≤ adaptive_bg_tol · η_max / max|∂τ η_D|        (default 0.01: the drag changes ≤ 1 % per step; ≈ 1.5·tol·τ on a Bjorken centre)
+dt_min ≤ h ≤ dt_max                             (1e-5, 0.1 fm)
+```
+
+Free streaming and the comoving limit have no drag to resolve and take `dt_max`. Snapshots land
+exactly on `initial_time + k·save_interval` and on `final_time`. `time_grid = [t_0, …, t_n]` hands in
+the step boundaries directly; a snapshot time that is not on the grid is an error.
+
+On a Bjorken fireball (T₀ = 0.5 GeV at τ₀ = 0.4 fm, run to 10.4 fm, m = 1.5 GeV, D_sT = 0.116; [`bench/bench_adaptive.jl`](bench/bench_adaptive.jl)),
+the default tolerance takes 1729 steps where Δt = 10⁻³ takes 10 000. Both agree with a Δt = 2.5·10⁻⁴
+reference on ⟨p_T⟩, ⟨p_T²⟩, ⟨p·r̂⟩ and ⟨r²⟩ within the 0.05–0.2 % noise of 2·10⁶ particles. So does a
+uniform step of the same cost (Δt = 0.0058). On that fireball the saving comes from Δt = 10⁻³ being
+finer than needed, not from adapting. The variable step pays when the drag rate spans a wide range
+over the run: a hotter start, stronger coupling, or a long dilute tail.
+
+Check where a driver spends its time before switching. On an LP1 production cell (Pb+Pb, 125 k
+particles per chunk, snapshots every 0.025 fm, measured 2026-10-12 on an RTX 5070) the engine call
+went from 7.5 s (12 600 steps) to 3.3 s (2779 steps). The whole chunk takes ≈ 130 s, though: the
+driver's per-snapshot freeze-out and histogram accounting dominates, so the cell got ≈ 3 % faster.
+
 ## Conventions
 
 **1. One transport coefficient.**
@@ -247,6 +276,7 @@ fails about one run in twenty); `LIM_CORPUS_NOGPU=1` runs the CPU hashes only.
 | `bench_gpu_parity.jl` | CPU ↔ GPU moments on four backgrounds and on inputs outside the table or with `\|v\| > 1`, plus a `freezeout_capture` case. The per-particle comparison is `test/test_kernel_parity.jl` |
 | `bench_semianalytic.jl` | closed forms, with plots: the Uhlenbeck–Ornstein phase-space covariance including `σ_xp`; the exact BGK moment law at four Δt spanning 100×; free streaming with the Bjorken redshift; the equilibrium shape by two-sample KS in 2 and 3 momentum rows; the comoving blast wave per particle. Figures in `bench/results/figures/` |
 | `bench_accuracy.jl` | the Δt budget: `\|⟨p²⟩ bias\| ≈ 12.0 %·(ηΔt)^0.94`, `D_s` unbiased to ≲1 % for ηΔt ≤ 0.08, and the RTA Δt ceilings |
+| `bench_adaptive.jl` | the variable step on a fireball: steps, wall time and the deviation of four observables from a Δt = 2.5·10⁻⁴ reference, for Δt = 10⁻³, four tolerances and a cost-matched uniform step |
 | `bench_throughput.jl` | ns per particle-step and per-call overhead for CPU/GPU × N × momentum rows × relativistic × collision mode, plus the host-side phases (sampler, `randn!`, copies) |
 
 Each ends in a `[PASS]`/`[FAIL]` line and exits non-zero on failure.
@@ -285,6 +315,8 @@ keyword table; the ones that set the physics:
 | `position_diffusion`, `reflecting_boundary` | false | extra overdamped position kicks (double-counts vs hydro); reflect at `r = xgrid[end]` |
 | `momentum_langevin` | true | false (or `DsT = 0`): particles move with the flow, `p = m·γ·v`, every momentum row beyond the spatial ones set to zero |
 | `V2Evolutionn, psi2` | — | elliptic modulation `v → v(1 + 2v₂cos 2(φ−Ψ₂))` |
+| `adaptive_dt` | false | true: the variable step above; `Δt` unused. Tolerances `adaptive_drag_tol`, `adaptive_bg_tol` (0.01, 0.01), bounds `dt_min`, `dt_max` (1e-5, 0.1 fm) |
+| `time_grid` | — | explicit step boundaries `[initial_time, …, final_time]`; must contain every snapshot time; `Δt` unused |
 | GPU only: `freezeout_capture, freezeout_interp` | false | latch each particle's `T = Tfo` crossing; returns a NamedTuple `(pos, mom, tau, flag)` instead of histories. The run does not stop at freeze-out |
 | GPU only: `integrator_mode` | 0 | 1 = drift-midpoint drag. It roughly doubles the Δt bias instead of removing it; the CPU refuses 1 |
 | GPU only: `verbose` | false | print device + memory status at entry |
@@ -300,6 +332,7 @@ src/backends.jl           CPUBackend, GPUBackend
 src/utils.jl              sample_particles_from_FONLL, the p_z completion (append_thermal_pz), check_momentum_dims
 src/transport.jl          tau_drag, tau_n_main3, effective_DsT, the two spline builders, build_juttner_invcdf, LV_TAUN_SCALE
 src/kernels_cpu.jl        per-step CPU kernels (boosts, forces, momentum/position updates, RTA, saves)
+src/timegrid.jl           the variable step: adaptive_time_grid, check_time_grid
 src/simulate_cpu.jl       CPU driver (+ _snapshot_times)
 src/simulate.jl           public dispatch + the Requires hook
 src/kernels_gpu.jl        CUDA kernels, line-for-line twins of the CPU ones (bench_gpu_parity.jl checks them)
@@ -315,10 +348,11 @@ test/                     runtests.jl (drives everything below), regression_corp
   test_time_convention.jl     which step time each kernel reads the background at
   test_limits_and_contracts.jl the limits (D_sT → 0, comoving, free streaming) and the input
                               contract (a table that ends before final_time, a non-uniform grid, m ≤ 0)
+  test_adaptive_dt.jl         the variable step: a uniform time_grid ≡ fixed Δt (CPU and GPU), the grid contract
   test_relativistic_switch.jl, test_momentum_dims3.jl, test_proper_time_kicks.jl,
   test_rta_proper_time.jl, test_bjorken_redshift_exact.jl
 bench/                    bench_common.jl, bench_semianalytic.jl (closed forms + plots), bench_accuracy.jl
-                          (the Δt budget), bench_physics_gates.jl, bench_gpu_parity.jl, bench_throughput.jl,
+                          (the Δt budget), bench_adaptive.jl, bench_physics_gates.jl, bench_gpu_parity.jl, bench_throughput.jl,
                           results/ (+ results/figures/)
 ```
 

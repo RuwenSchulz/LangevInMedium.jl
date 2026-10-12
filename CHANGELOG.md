@@ -6,6 +6,26 @@ before them are not comparable to outputs produced after.
 ## Unreleased
 
 ### Added
+- **A variable time step: `adaptive_dt = true`, or `time_grid = [t_0, …, t_n]`.** Both backends. The
+  step is global (every particle takes the same h_k) and is fixed before the run from the background
+  and the transport parameters, never from the particle state, so the grid is the same on CPU and GPU
+  and for every seed. `adaptive_time_grid` (exported) builds it:
+  `η_D·h ≤ adaptive_drag_tol` in the hottest cell (default 0.01; the exact-OU step's bias is
+  ≈ 12 %·η_DΔt, `bench_accuracy.jl`), `h·|∂τη_D| ≤ adaptive_bg_tol·η_max` (default 0.01; on a Bjorken
+  centre, h ≤ 1.5·tol·τ), and `dt_min ≤ h ≤ dt_max` (1e-5, 0.1 fm). Free streaming and the comoving
+  limit have no drag to resolve and take `dt_max`. Snapshots land exactly on
+  `initial_time + k·save_interval` and on `final_time`; no history is dropped, and `time_points` is a
+  `Vector`. No kernel changed: every kernel reads time only as `t0 + step·Δt` (end of step) or
+  `t0 + (step−1)·Δt` (start), so the drivers pass each step as `(1, h_k, t_k)`. The fixed-Δt loop
+  passes `(step, Δt, initial_time)` exactly as before and is **bit-identical**: all ten
+  `regression_corpus.jl` hashes and all 21 `bitid_production_paths.jl` CPU + GPU hashes reproduce.
+  Gate: `test/test_adaptive_dt.jl` — a uniform `time_grid` reproduces the fixed-Δt run to rounding on
+  five kernel paths (CPU) and three (GPU under `CUDA.seed!`); the grid's own contract; `p_z·τ` exact
+  under free streaming on a geometric grid; a stationary bath holds the Jüttner ⟨p²⟩ at tol = 0.01
+  and visibly does not at 0.2. Cost and accuracy on a fireball, `bench/bench_adaptive.jl`: the
+  default takes 1729 steps where Δt = 10⁻³ takes 10 000, and both agree with a Δt = 2.5·10⁻⁴
+  reference within the 0.05–0.2 % noise at N = 2·10⁶. So does a UNIFORM step of the same cost: on
+  that fireball the saving is that 10⁻³ is finer than needed, not the adaptation itself.
 - **`bjorken_frame = :lab | :lrf` — where the Bjorken redshift acts.** With `bjorken_redshift = true`
   the engine has always scaled `p_z` on the REST-FRAME momenta, between the boost to the rest frame
   and the boost back. `p_z` is invariant under the transverse boost, but `E*` is not, and the

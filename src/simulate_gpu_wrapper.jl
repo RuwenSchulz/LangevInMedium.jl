@@ -57,6 +57,12 @@ function Simulate.simulate_ensemble_bulk(
     pz_init::Symbol = :thermal,
     track_eta_s::Bool = false,
     verbose::Bool = false,
+    adaptive_dt::Bool = false,
+    adaptive_drag_tol::Float64 = 0.01,
+    adaptive_bg_tol::Float64 = 0.01,
+    dt_min::Float64 = 1e-5,
+    dt_max::Float64 = 0.1,
+    time_grid::Union{Nothing, AbstractVector} = nothing,
 )
     (collision_mode == :langevin || collision_mode == :rta || collision_mode == :none) ||
         error("simulate_ensemble_bulk(::GPUBackend): collision_mode=$(collision_mode) is not supported on GPU (only :langevin, :rta and :none).")
@@ -91,5 +97,11 @@ function Simulate.simulate_ensemble_bulk(
         pz_init = pz_init,
         track_eta_s = track_eta_s,
         verbose = verbose,
+        adaptive_dt = adaptive_dt,
+        adaptive_drag_tol = adaptive_drag_tol,
+        adaptive_bg_tol = adaptive_bg_tol,
+        dt_min = dt_min,
+        dt_max = dt_max,
+        time_grid = time_grid,
     )
 end

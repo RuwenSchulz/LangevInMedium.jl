@@ -6,10 +6,11 @@ using Random: randn!
 using ..KernelsCPU
 using ..Utils
 using ..Transport
+using ..TimeGrid
 
 # === Exported Symbols ===
 export simulate_ensemble_bulk_cpu, _snapshot_times, _step_count, _check_time_window,
-       _warn_escaped_particles, _validate_transport_inputs
+       _warn_escaped_particles, _validate_transport_inputs, _variable_step_grid
 
 """
     _step_count(t0, tf, Δt) -> Int
@@ -135,6 +136,28 @@ function _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
     return range(t0, t0 + num_saves * save_every * Δt, length = num_saves + 1)
 end
 
+"""
+    _variable_step_grid(time_grid, adaptive_dt, T_field, tgrid; initial_time, final_time, save_interval, ...)
+        -> (grid, save_steps) | (nothing, nothing)
+
+`(nothing, nothing)` when neither a `time_grid` nor `adaptive_dt` was asked for — the fixed-Δt loop.
+Otherwise the step boundaries and the steps after which to snapshot (timegrid.jl). Shared by the
+CPU and GPU drivers so the two cannot build different grids from the same call.
+"""
+function _variable_step_grid(time_grid, adaptive_dt::Bool, T_field, tgrid;
+                             initial_time, final_time, save_interval, m, DsT, drag_active::Bool,
+                             adaptive_drag_tol, adaptive_bg_tol, dt_min, dt_max,
+                             DsT_linear, DsT_slope, DsT_offset, Tfo, DsT_quad, DsT_Tref)
+    if time_grid !== nothing
+        adaptive_dt && error("simulate_ensemble_bulk: pass time_grid OR adaptive_dt = true, not both")
+        return Float64.(collect(time_grid)), check_time_grid(time_grid, initial_time, final_time, save_interval)
+    end
+    adaptive_dt || return nothing, nothing
+    return adaptive_time_grid(T_field, tgrid; initial_time, final_time, save_interval, m, DsT,
+        drag_tol = adaptive_drag_tol, bg_tol = adaptive_bg_tol, dt_min, dt_max, drag_active,
+        DsT_linear, DsT_slope, DsT_offset, Tfo, DsT_quad, DsT_Tref)
+end
+
 function simulate_ensemble_bulk_cpu(
     r_grid_Langevin,p_grid_Langevin, heavy_quark_density,
     TemperatureEvolutionn, VelocityEvolutionn, SpaceTimeGrid;
@@ -184,7 +207,18 @@ function simulate_ensemble_bulk_cpu(
     # accumulate the spacetime rapidity η_s (dη_s/dτ = (1/τ)(p_z*/E*)) and return its history as a
     # FOURTH element. η_s is a passenger — nothing reads it — so this cannot move any other number;
     # with it, y_lab = η_s + atanh(p_z*/E*). Needs momentum_dimensions = 3 and initial_time > 0.
-    track_eta_s::Bool = false)
+    track_eta_s::Bool = false,
+    # VARIABLE TIME STEP (2026-10-12). `adaptive_dt = true` builds the step boundaries from the
+    # background with `adaptive_time_grid` (timegrid.jl: η_D·h ≤ adaptive_drag_tol in the hottest
+    # cell, h·|∂τ η_D| ≤ adaptive_bg_tol·η_max, dt_min ≤ h ≤ dt_max); `time_grid` hands them in
+    # directly. Either way `Δt` is unused and snapshots land exactly on t0 + k·save_interval and on
+    # final_time. Default: neither ⇒ the fixed-Δt loop, bit-identical to before.
+    adaptive_dt::Bool = false,
+    adaptive_drag_tol::Float64 = 0.01,
+    adaptive_bg_tol::Float64 = 0.01,
+    dt_min::Float64 = 1e-5,
+    dt_max::Float64 = 0.1,
+    time_grid::Union{Nothing, AbstractVector} = nothing)
 
     # === Setup and Preallocation ===
     # 🔴 2026-09-02: refuse the inputs that used to degrade to silent free streaming, and say so
@@ -196,20 +230,40 @@ function simulate_ensemble_bulk_cpu(
     # bracket the times.
     _check_time_window(initial_time, final_time, SpaceTimeGrid[end])
     total_time = final_time - initial_time
-    steps = _step_count(initial_time, final_time, Δt)     # ulp-tolerant; was a bare floor()
-    steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
-    # save_interval == total time can give round(save/Δt) = floor(total/Δt) + 1 ⇒ num_saves = 0 and a
-    # crash in `range(..., length = 1)`; clamp so that the last snapshot is always taken.
-    save_every = min(round(Int, save_interval / Δt), steps)
-    save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
-    num_saves = div(steps, save_every)
+    # `:none` = FREE STREAMING; see the note below where it is used.
+    free_stream = collision_mode === :none
+    # grid === nothing ⇒ the fixed-Δt loop. Otherwise step k runs from grid[k] to grid[k+1] and the
+    # snapshots are taken after the steps in save_steps (timegrid.jl).
+    grid, save_steps = _variable_step_grid(time_grid, adaptive_dt, TemperatureEvolutionn,
+        SpaceTimeGrid[end]; initial_time, final_time, save_interval, m, DsT,
+        drag_active = momentum_langevin && DsT > 0.0 && !free_stream,
+        adaptive_drag_tol, adaptive_bg_tol, dt_min, dt_max,
+        DsT_linear, DsT_slope, DsT_offset, Tfo, DsT_quad, DsT_Tref)
+    if grid === nothing
+        steps = _step_count(initial_time, final_time, Δt)     # ulp-tolerant; was a bare floor()
+        steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
+        # save_interval == total time can give round(save/Δt) = floor(total/Δt) + 1 ⇒ num_saves = 0 and a
+        # crash in `range(..., length = 1)`; clamp so that the last snapshot is always taken.
+        save_every = min(round(Int, save_interval / Δt), steps)
+        save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
+        num_saves = div(steps, save_every)
+        save_slot = Int[]
+    else
+        steps = length(grid) - 1
+        save_every = 0
+        num_saves = length(save_steps)
+        save_slot = zeros(Int, steps)          # save_slot[k] = history index written after step k (0 = none)
+        for (i, k) in enumerate(save_steps)
+            save_slot[k] = i + 1
+        end
+    end
 
     # `:none` = FREE STREAMING (2026-09-02). It exists because the tree had no way to ask for it:
     # `DsT = 0` is the COMOVING limit (p = m·γ·v) and `momentum_langevin = false` is the same limit,
     # while the only thing that actually free-streamed was a NEGATIVE DsT — by accident, through
     # `tau_drag ≤ 0 ⇒ η_D = κ = 0`, which is now refused. Three call sites in the tree asked for
     # "free streaming" and got the comoving limit; see docs/NOTES.md "The LIMITS and the INPUT CONTRACT".
-    free_stream = collision_mode === :none
+    # (`free_stream` itself is set above, before the time grid, which needs it.)
 
     # --- BACKGROUND GEOMETRY: dispatched on what was handed in, never on a flag ---
     # A 2-tuple (xgrid, tgrid) with a matrix T is the shipped RADIAL background. A 3-tuple
@@ -425,6 +479,15 @@ function simulate_ensemble_bulk_cpu(
 
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
+        # The step's own (kstep, h, tk), so that every kernel's `tk + kstep·h` is the END of the step
+        # and `tk + (kstep−1)·h` its START. Fixed Δt: exactly the old (step, Δt, initial_time), so the
+        # arithmetic — and every output — is bit-identical. Variable step: (1, t_{k+1} − t_k, t_k).
+        if grid === nothing
+            kstep = step; h = Δt; tk = initial_time
+        else
+            kstep = 1; tk = grid[step]; h = grid[step + 1] - grid[step]
+        end
+
         # ⚡ randn!(ξ) in place — `ξ .= randn(pdim, N)` allocated a fresh N×pdim matrix EVERY step.
         # Same RNG stream, same values, same order ⇒ bit-identical. Skipped under `:none`, whose
         # only consumer of randomness is the initial sampler.
@@ -433,7 +496,7 @@ function simulate_ensemble_bulk_cpu(
         # 0. Bjorken redshift on the LAB momenta (bjorken_frame = :lab): lab p_T is conserved, as in
         #    free streaming; the boost below then sees the reduced E_lab.
         if bjorken_redshift && bjorken_frame === :lab
-            kernel_bjorken_redshift_cpu!(momenta, 3, step, Δt, initial_time, N_particles)
+            kernel_bjorken_redshift_cpu!(momenta, 3, kstep, h, tk, N_particles)
         end
 
         # 1. Boost momenta to local rest frame.
@@ -444,7 +507,7 @@ function simulate_ensemble_bulk_cpu(
         if !free_stream
             kernel_boost_to_rest_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
-                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                VelocityEvolutionn, m, N_particles, kstep, h, tk,radial_mode = radial_mode,
                 V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         end
 
@@ -453,7 +516,7 @@ function simulate_ensemble_bulk_cpu(
         # this ordering lowers the LAB p_T by γ·v·δE* per step (see the bjorken_frame note above).
         # dp_z/dτ = −p_z/τ IS the longitudinal free-streaming law, so it belongs in the :none path too.
         if bjorken_redshift && bjorken_frame === :lrf
-            kernel_bjorken_redshift_cpu!(momenta, 3, step, Δt, initial_time, N_particles)
+            kernel_bjorken_redshift_cpu!(momenta, 3, kstep, h, tk, N_particles)
         end
 
         if free_stream
@@ -462,7 +525,7 @@ function simulate_ensemble_bulk_cpu(
         elseif !momentum_langevin || DsT == 0.0
             kernel_set_to_fluid_velocity_cpu!(
                 momenta, positions,  xgrid, tgrid,
-                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                VelocityEvolutionn, m, N_particles, kstep, h, tk,radial_mode = radial_mode,
                 relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         elseif collision_mode == :rta
             # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn.
@@ -473,7 +536,7 @@ function simulate_ensemble_bulk_cpu(
             kernel_rta_collision_cpu!(
                 TemperatureEvolutionn, xgrid, tgrid,
                 momenta, positions,
-                Δt, m, N_particles, step, initial_time, DsT;
+                h, m, N_particles, kstep, tk, DsT;
                 tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = taun_vals,
                 dimensions = pdim, radial_mode = radial_mode,
                 proper_time_kicks = proper_time_kicks, Vfield = Vfield_scalar, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
@@ -481,7 +544,7 @@ function simulate_ensemble_bulk_cpu(
             # Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
-                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                VelocityEvolutionn, m, N_particles, kstep, h, tk,radial_mode = radial_mode,
                 V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         else
 
@@ -491,8 +554,8 @@ function simulate_ensemble_bulk_cpu(
                 momenta, positions, p_mags, p_units,
                 ηD_vals, kL_vals, kT_vals,
                 ξ, deterministic_terms, stochastic_terms,
-                Δt, m, random_directions,
-                pdim, N_particles, step, initial_time,DsT,
+                h, m, random_directions,
+                pdim, N_particles, kstep, tk,DsT,
                 tau_Tmin = tau_Tmin,
                 tau_invdT = tau_invdT,
                 tau_vals = tau_vals,
@@ -504,18 +567,18 @@ function simulate_ensemble_bulk_cpu(
             # 3. Update momenta
             kernel_update_momenta_LRF_cpu!(
                 momenta, deterministic_terms, stochastic_terms,
-                Δt, pdim, N_particles)
+                h, pdim, N_particles)
 
             # 4. Boost updated momenta back to lab frame
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
-                VelocityEvolutionn, m, N_particles, step, Δt, initial_time,radial_mode = radial_mode,
+                VelocityEvolutionn, m, N_particles, kstep, h, tk,radial_mode = radial_mode,
                 V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         end
         # 5. Update positions
        
         kernel_update_positions_cpu!(
-                    positions, momenta, m, Δt, N_particles,step,initial_time,
+                    positions, momenta, m, h, N_particles,kstep,tk,
                     xgrid,tgrid, TemperatureEvolutionn,DsT;
                     dimensions,
                     momentum_dimensions = pdim,
@@ -529,9 +592,9 @@ function simulate_ensemble_bulk_cpu(
         # 5b. Spacetime rapidity: the third position row (see kernel_accumulate_eta_s_cpu!).
         # The 1/τ is integrated exactly across [τ_a, τ_b]; the log is hoisted out of the loop.
         if track_eta_s
-            τa_eta = initial_time + (step - 1) * Δt
+            τa_eta = tk + (kstep - 1) * h
             if τa_eta > 0
-                kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, log((τa_eta + Δt) / τa_eta),
+                kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, log((τa_eta + h) / τa_eta),
                                              N_particles, pdim)
             end
         end
@@ -549,8 +612,9 @@ function simulate_ensemble_bulk_cpu(
         end
 
         # 6. Save snapshots
-        if step % save_every == 0
-            save_idx = div(step, save_every) + 1
+        save_idx = grid === nothing ? (step % save_every == 0 ? div(step, save_every) + 1 : 0) :
+                                      save_slot[step]
+        if save_idx > 0
 
             kernel_save_momenta_cpu!(
                             momenta_history,momenta,save_idx, N_particles)
@@ -574,7 +638,10 @@ function simulate_ensemble_bulk_cpu(
     # the trailing partial interval is never saved, and claiming `final_time` for the last snapshot
     # stretches the whole axis (a 13 % error in an MSD slope was traced to exactly this, 2026-08-21).
     # Bit-identical to the old `range(t0, final_time, ...)` whenever the old axis was right.
-    time_points = _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves)
+    # Variable step: the snapshots sit exactly on the grid points after the steps in save_steps.
+    time_points = grid === nothing ?
+        _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves) :
+        grid[vcat(1, save_steps .+ 1)]
     position_history_vec = [position_history[:, :, i] for i in 1:size(position_history, 3)]
     momenta_history_vec  = [momenta_history[:, :, i] for i in 1:size(momenta_history, 3)]
     if track_eta_s

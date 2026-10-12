@@ -248,4 +248,9 @@ else
     # freezeout_capture (48 uses in Projects/) and integrator_mode = 1 (20 uses): both untested
     # until 2026-08-31, and the second does not do what it says. Skips itself without CUDA.
     run_suite("test_gpu_only_paths.jl")
+    # ── the variable time step (adaptive_dt / time_grid) ────────────────────────────────────────────
+    # A uniform time_grid reproduces the fixed-Δt run to rounding on every kernel path (CPU, and the
+    # GPU under CUDA.seed!); the adaptive grid lands on every snapshot and respects its tolerance; a
+    # coarse tolerance shows its bias. 2026-10-12. The GPU half skips itself without CUDA.
+    run_suite("test_adaptive_dt.jl")
 end

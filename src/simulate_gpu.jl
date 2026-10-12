@@ -7,7 +7,7 @@ using ...Utils
 using ...KernelsCPU: interpolate_2d_cpu, interpolate_3d_cpu   # host-side T lookups for the
                                                               # initial p_z draw (radial / 2-D)
 using ...SimulateCPU: _snapshot_times, _step_count, _check_time_window, _warn_escaped_particles,
-                      _validate_transport_inputs
+                      _validate_transport_inputs, _variable_step_grid
 using CUDA
 using ...Transport
 
@@ -64,6 +64,12 @@ function simulate_ensemble_bulk_gpu(
     pz_init::Symbol = :thermal,     # :thermal (shipped) | :comoving (p_z* = 0); see append_pz
     track_eta_s::Bool = false,      # accumulate η_s and return its history as a FOURTH element
     verbose::Bool = false,          # print device name + memory status at entry
+    adaptive_dt::Bool = false,      # variable step from the background (timegrid.jl); Δt then unused
+    adaptive_drag_tol::Float64 = 0.01,
+    adaptive_bg_tol::Float64 = 0.01,
+    dt_min::Float64 = 1e-5,
+    dt_max::Float64 = 0.1,
+    time_grid::Union{Nothing, AbstractVector} = nothing,
 )
     CUDA.reclaim()  # Free any unused GPU memory
     verbose && print_cuda_status()
@@ -77,17 +83,38 @@ function simulate_ensemble_bulk_gpu(
         _validate_transport_inputs(m, DsT)
         _check_time_window(initial_time, final_time, SpaceTimeGrid[end])
         total_time = final_time - initial_time
-        steps = _step_count(initial_time, final_time, Δt)
-        steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
-        save_every = min(round(Int, save_interval / Δt), steps)   # robust to binary roundoff; clamped as on the CPU path
-        save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
-        num_saves = steps ÷ save_every
+        # grid === nothing ⇒ the fixed-Δt loop; otherwise step k runs grid[k] → grid[k+1]. The SAME
+        # helper as the CPU driver, so both backends take the same steps from the same call.
+        grid, save_steps = _variable_step_grid(time_grid, adaptive_dt, TemperatureEvolutionn,
+            SpaceTimeGrid[end]; initial_time, final_time, save_interval, m, DsT,
+            drag_active = momentum_langevin && DsT > 0.0 && collision_mode !== :none,
+            adaptive_drag_tol, adaptive_bg_tol, dt_min, dt_max,
+            DsT_linear, DsT_slope, DsT_offset, Tfo, DsT_quad, DsT_Tref)
+        if grid === nothing
+            steps = _step_count(initial_time, final_time, Δt)
+            steps >= 1 || error("simulate_ensemble_bulk: final_time − initial_time = $total_time is shorter than Δt = $Δt (no step to take)")
+            save_every = min(round(Int, save_interval / Δt), steps)   # robust to binary roundoff; clamped as on the CPU path
+            save_every >= 1 || error("simulate_ensemble_bulk: save_interval = $save_interval is shorter than Δt = $Δt")
+            num_saves = steps ÷ save_every
+            save_slot = Int[]
+        else
+            steps = length(grid) - 1
+            save_every = 0
+            num_saves = length(save_steps)
+            save_slot = zeros(Int, steps)      # history index written after step k (0 = none)
+            for (i, k) in enumerate(save_steps)
+                save_slot[k] = i + 1
+            end
+        end
         # ON-THE-FLY FREEZE-OUT: no trajectory history is needed (memory ∝ N, VRAM-safe at any cadence);
         # each particle latches its own state the step it first crosses T=Tfo. Keep a trivial 1-snapshot
         # history so the existing allocation/return plumbing is untouched.
         if freezeout_capture
             num_saves = 1
             save_every = max(steps, 1)
+            if grid !== nothing
+                fill!(save_slot, 0); save_slot[end] = 2
+            end
         end
 
         threads = 256
@@ -345,6 +372,14 @@ function simulate_ensemble_bulk_gpu(
 
         # === Langevin dynamics loop ===
         @showprogress 10 "Running Langevin simulation GPU Cartesian..." for step in 1:steps
+            # The step's own (kstep, h, tk) — see the CPU driver. Fixed Δt: the old (step, Δt, initial_time),
+            # bit-for-bit the same arithmetic. Variable step: (1, t_{k+1} − t_k, t_k).
+            if grid === nothing
+                kstep = step; h = Δt; tk = initial_time
+            else
+                kstep = 1; tk = grid[step]; h = grid[step + 1] - grid[step]
+            end
+
             if rta_mode
                 # RTA/BGK noise: two uniforms (collision decision + inverse-CDF |p*| draw) and a RAW
                 # (un-normalized) Gaussian direction — the kernel normalizes it per particle.
@@ -374,7 +409,7 @@ function simulate_ensemble_bulk_gpu(
             # Step 0: Bjorken redshift on the LAB momenta (bjorken_frame = :lab) — lab p_T conserved.
             if bjorken_redshift && bjorken_frame === :lab
                 @cuda threads=threads blocks=blocks kernel_bjorken_redshift_gpu!(
-                    momenta, 3, step, Δt, initial_time, N_particles)
+                    momenta, 3, kstep, h, tk, N_particles)
             end
 
             # Step 1: Transform momenta to local rest frame (LRF). Skipped under `:none`, where the
@@ -383,7 +418,7 @@ function simulate_ensemble_bulk_gpu(
             if !free_stream
                 @cuda threads=threads blocks=blocks kernel_boost_to_rest_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
-                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                    m, N_particles, kstep, h, tk,radial_mode, use_v2, V2Evolution, psi2,
                     relativistic, ygrid, VxField, VyField)
             end
 
@@ -391,7 +426,7 @@ function simulate_ensemble_bulk_gpu(
             # the back-boost then lowers the lab p_T by γ·v·δE* per step — see the simulate_cpu.jl note)
             if bjorken_redshift && bjorken_frame === :lrf
                 @cuda threads=threads blocks=blocks kernel_bjorken_redshift_gpu!(
-                    momenta, 3, step, Δt, initial_time, N_particles)
+                    momenta, 3, kstep, h, tk, N_particles)
             end
 
             if free_stream
@@ -401,7 +436,7 @@ function simulate_ensemble_bulk_gpu(
 
                 @cuda threads=threads blocks=blocks kernel_set_to_fluid_velocity_gpu!(
                     momenta, positions, xgrid, tgrid,
-                    VelocityEvolution, m, N_particles, step, Δt, initial_time,radial_mode,
+                    VelocityEvolution, m, N_particles, kstep, h, tk,radial_mode,
                     relativistic, ygrid, VxField, VyField)
             elseif rta_mode
                 # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn in the LRF,
@@ -411,7 +446,7 @@ function simulate_ensemble_bulk_gpu(
                 # needs τ_n = τ_drag·K₃/K₂. The drag would relax it 1.26-1.74× too fast.
                 @cuda threads=threads blocks=blocks kernel_rta_collision_gpu!(
                     momenta, positions, xgrid, tgrid, TemperatureEvolution,
-                    Δt, m, N_particles, step, initial_time, DsT,
+                    h, m, N_particles, kstep, tk, DsT,
                     tau_Tmin, tau_invdT, taun_vals_d,
                     invcdf_d, invcdf_nU, invcdf_nT, invcdf_Tmin, invcdf_invdT,
                     pdim, radial_mode,
@@ -420,7 +455,7 @@ function simulate_ensemble_bulk_gpu(
 
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
-                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                    m, N_particles, kstep, h, tk,radial_mode, use_v2, V2Evolution, psi2,
                     relativistic, ygrid, VxField, VyField)
             else
                 # Step 2: Compute deterministic and stochastic terms in LRF
@@ -428,8 +463,8 @@ function simulate_ensemble_bulk_gpu(
                     TemperatureEvolution, xgrid, tgrid, momenta, positions,
                     p_mags, p_units, ηD_vals, kL_vals, kT_vals,
                     ξ_momentum, deterministic_terms, stochastic_terms,
-                    Δt, m, random_directions, pdim, N_particles,
-                    step, initial_time, DsT,
+                    h, m, random_directions, pdim, N_particles,
+                    kstep, tk, DsT,
                     tau_Tmin, tau_invdT, tau_vals_d,
                     radial_mode, Int32(integrator_mode), relativistic,
                     proper_time_kicks, VelocityEvolution, ygrid, VxField, VyField)
@@ -437,27 +472,27 @@ function simulate_ensemble_bulk_gpu(
                 # Step 3: Update momenta in LRF
                 @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
                     momenta, deterministic_terms, stochastic_terms,
-                    Δt, pdim, N_particles)
+                    h, pdim, N_particles)
 
                 # Step 4: Boost updated momenta back to lab frame
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
-                    m, N_particles, step, Δt, initial_time,radial_mode, use_v2, V2Evolution, psi2,
+                    m, N_particles, kstep, h, tk,radial_mode, use_v2, V2Evolution, psi2,
                     relativistic, ygrid, VxField, VyField)
             end
             # Step 5: Update particle positions based on momenta
             # IMPORTANT: pass the current time-step, not the total number of steps.
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
-                positions, momenta, m, Δt, N_particles, step, initial_time,
+                positions, momenta, m, h, N_particles, kstep, tk,
                 xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, position_diffusion, reflecting_boundary, ξ_position,
                 relativistic, pdim, ygrid, VxField, VyField)
 
             # Step 5a2: spacetime rapidity — the third position row (kernels_cpu.jl note).
             if track_eta_s
-                τa_eta = initial_time + (step - 1) * Δt
+                τa_eta = tk + (kstep - 1) * h
                 if τa_eta > 0
                     @cuda threads=threads blocks=blocks kernel_accumulate_eta_s_gpu!(
-                        eta_s_gpu, momenta, m, log((τa_eta + Δt) / τa_eta), N_particles, pdim)
+                        eta_s_gpu, momenta, m, log((τa_eta + h) / τa_eta), N_particles, pdim)
                 end
             end
 
@@ -467,12 +502,13 @@ function simulate_ensemble_bulk_gpu(
                     fo_pos_gpu, fo_mom_gpu, fo_tau_gpu, fo_flag_gpu,
                     last_pos_gpu, last_mom_gpu, last_tau_gpu, last_T_gpu,
                     positions, momenta, xgrid, tgrid, TemperatureEvolution, Tfo,
-                    N_particles, step, Δt, initial_time, dimensions, radial_mode, freezeout_interp, ygrid, VxField, VyField)
+                    N_particles, kstep, h, tk, dimensions, radial_mode, freezeout_interp, ygrid, VxField, VyField)
             end
 
             # Step 6: Save state if necessary
-            if step % save_every == 0
-                save_idx = div(step, save_every) + 1
+            save_idx = grid === nothing ? (step % save_every == 0 ? div(step, save_every) + 1 : 0) :
+                                          save_slot[step]
+            if save_idx > 0
                 @cuda threads=threads blocks=blocks kernel_save_momenta_gpu!(
                     momenta_history_gpu, momenta, save_idx, N_particles,pdim)
                 @cuda threads=threads blocks=blocks kernel_save_positions_gpu!(
@@ -498,7 +534,9 @@ function simulate_ensemble_bulk_gpu(
 
         # === Transfer saved histories back to CPU ===
         # 2D layout: (dimensions, N_particles * (num_saves+1)) — single cudaMemcpy, slice on CPU.
-        time_points = _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves)   # see simulate_cpu.jl
+        time_points = grid === nothing ?
+            _snapshot_times(initial_time, final_time, Δt, steps, save_every, num_saves) :   # see simulate_cpu.jl
+            grid[vcat(1, save_steps .+ 1)]
         full_mom_cpu = Array(momenta_history_gpu)
         full_pos_cpu = Array(position_history_gpu)
         momenta_history_vec  = [full_mom_cpu[:, (s-1)*N_particles+1 : s*N_particles] for s in 1:num_saves+1]
