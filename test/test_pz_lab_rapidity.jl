@@ -1,36 +1,36 @@
 # ==============================================================================================
 # test_pz_lab_rapidity.jl — the p_z row against a code that actually has z  (2026-09-01)
 #
-# WHY THIS EXISTS. Every other p_z gate in this package checks the engine against a FORMULA:
+# Why this exists. Every other p_z gate in this package checks the engine against a formula:
 # test_momentum_dims3.jl (R) checks ⟨p_z²⟩ ∝ (τ₀/τ)², test_bjorken_redshift_exact.jl checks the
 # whole distribution rescales by τ₀/τ. Both would pass just as happily if the frame convention
 # itself were wrong, because both are written in the same variables as the code under test.
 #
-# `momenta[3, :]` is NOT a lab p_z. It is p_z* = m_T sinh(y − η_s), the longitudinal momentum in
-# the frame comoving with the Bjorken fluid at the particle's OWN η_s — and the package stores no
+# `momenta[3, :]` is not a lab p_z. It is p_z* = m_T sinh(y − η_s), the longitudinal momentum in
+# the frame comoving with the Bjorken fluid at the particle's own η_s — and the package stores no
 # z and no η_s, so nothing in it can detect a mistake in that identification. This file supplies
-# the missing instrument: a second, independently written integrator in PLAIN CARTESIAN LAB
-# COORDINATES that carries (t, z, p_x, p_y, p_z), reads the fluid rapidity off the particle's own
+# the missing instrument: a second, independently written integrator in plain Cartesian lab
+# coordinates that carries (t, z, p_x, p_y, p_z), reads the fluid rapidity off the particle's own
 # position as η_s = artanh(z/t), boosts in and out explicitly, and streams z += (p_z/E)·dt. It
 # never uses τ_a/τ_b, never assumes a clock, and never assumes p_z* means anything.
 #
 # It also pins the two conventions that are easy to get wrong and that no other test touches:
-#   * the position kernel's E = √(m² + p_⊥,lab² + p_z*²) is a MIXED-frame energy, and that mixture
+#   * the position kernel's E = √(m² + p_⊥,lab² + p_z*²) is a mixed-frame energy, and that mixture
 #     is exactly the Milne streaming dx_⊥/dτ = p_⊥/E*;
-#   * dτ = cosh(η)dt − sinh(η)dz = dt* IDENTICALLY along any worldline, so the Milne step IS the
+#   * dτ = cosh(η)dt − sinh(η)dz = dt* identically along any worldline, so the Milne step IS the
 #     local-rest-frame time and no dilation factor is missing longitudinally. The reference steps
-#     in LAB time with dt* = (E*/E)·dt_lab; the engine steps in τ with no factor at all. If the
+#     in lab time with dt* = (E*/E)·dt_lab; the engine steps in τ with no factor at all. If the
 #     clocks disagreed the two would relax for different amounts of LRF time and C2 would fail.
 #
 # Gates
 #   C1  p_z* mean and width agree with the Cartesian reference within 3 s.e.
-#   C2  every decile of p_z* agrees (the SHAPE, not two moments)
+#   C2  every decile of p_z* agrees (the shape, not two moments)
 #   C3  two-sample Kolmogorov–Smirnov on the full distribution
 #   C4  p_z* is independent of η_s — boost invariance, measured rather than assumed
-#   P1  pz_init = :comoving puts EXACT zeros in row 3 (and the transverse boost leaves them there)
+#   P1  pz_init = :comoving puts exact zeros in row 3 (and the transverse boost leaves them there)
 #   P2  pz_init = :thermal is the default: passing it explicitly is bit-identical to omitting it
-#   E1  track_eta_s is a PASSENGER: momenta and positions are bit-identical with it on and off
-#   E2  under FREE STREAMING the reconstructed lab rapidity y = η_s + atanh(p_z*/E*) is CONSERVED
+#   E1  track_eta_s is a passenger: momenta and positions are bit-identical with it on and off
+#   E2  under free streaming the reconstructed lab rapidity y = η_s + atanh(p_z*/E*) is conserved
 #       — a parameter-free identity that pins the log factor, the sign, the energy and the clock
 #   E3  the on-the-fly η_s equals a post-hoc integral over the returned snapshot history
 #
@@ -61,7 +61,7 @@ pz_taudrag(T) = LangevInMedium.Transport.tau_drag(T, PZM, PZDST)
 end
 
 """
-THE REFERENCE. Cartesian lab frame with an explicit z: η_s is read off the particle's own
+The reference. Cartesian lab frame with an explicit z: η_s is read off the particle's own
 position, the boosts are written out, and the LRF time step is dt* = (E*/E)·dt_lab. Each particle
 runs on its own lab clock until its own Milne time sqrt(t²−z²) reaches PZTAUF.
 """
@@ -121,7 +121,7 @@ function pz_engine(; pz0, pT, dt = 2.0e-3, dsave = PZTAUF - PZTAU0, DsT = PZDST,
 end
 
 """
-The SAMPLER path (no `p_init`): this is the only way in, so it is the only place the p_z
+The sampler path (no `p_init`): this is the only way in, so it is the only place the p_z
 completion — and hence `pz_init` — actually runs.
 """
 function pz_sampler_run(; steps_to = PZTAU0 + 0.5, kw...)
@@ -159,10 +159,10 @@ end
     rng  = MersenneTwister(99)
     pT   = [0.5 + 2.5 * rand(rng) for _ in 1:PZN]
     mT   = sqrt.(PZM^2 .+ pT .^ 2)
-    # a BOX in y − η_s: nothing thermal, nothing Gaussian, so a wrong frame cannot hide in a shape
+    # a box in y − η_s: nothing thermal, nothing Gaussian, so a wrong frame cannot hide in a shape
     ystar0 = [(-0.8 + 1.6 * rand(rng)) for _ in 1:PZN]
     pz0    = mT .* sinh.(ystar0)
-    # η_s spread wide and INDEPENDENT of p_z*: a boost-invariant ensemble, so the reference must
+    # η_s spread wide and independent of p_z*: a boost-invariant ensemble, so the reference must
     # return the same p_z* distribution the engine does even though only it knows where things are
     eta0   = [(-1.5 + 3.0 * rand(rng)) for _ in 1:PZN]
 
@@ -201,11 +201,11 @@ end
         _, mc, _ = pz_sampler_run(pz_init = :comoving)
         @test all(mc[1][3, :] .== 0.0)
         @test !all(mc[end][3, :] .== 0.0)          # ... and the medium then does something to them
-        # the shipped default must NOT be zero, or P1 would pass for the wrong reason
+        # the shipped default must not be zero, or P1 would pass for the wrong reason
         _, mt, _ = pz_sampler_run()
         @test !any(mt[1][3, :] .== 0.0)
         @test_throws ErrorException pz_sampler_run(pz_init = :bogus)
-        # :comoving is a statement about the p_z ROW; it is meaningless without one
+        # :comoving is a statement about the p_z row; it is meaningless without one
         @test_throws ErrorException pz_sampler_run(pz_init = :comoving, momentum_dimensions = 2,
                                                   bjorken_redshift = false)
     end
@@ -230,11 +230,11 @@ end
 
     @testset "E2 free streaming conserves the reconstructed lab rapidity" begin
         # A huge DsT makes τ_drag ∝ DsT enormous, so η_D → 0 without taking the DsT == 0 branch
-        # (which glues momenta to the flow instead of leaving them alone). For a FREE particle the
+        # (which glues momenta to the flow instead of leaving them alone). For a free particle the
         # lab rapidity is a constant of the motion: η_s and p_z* both move, and their sum must not.
         #
-        # The engine splits the two — the redshift is applied at the START of the step, the η_s
-        # increment uses the END-of-step p_z*/E* — so both are consistent FIRST-ORDER rules and y
+        # The engine splits the two — the redshift is applied at the start of the step, the η_s
+        # increment uses the END-of-step p_z*/E* — so both are consistent first-order rules and y
         # is conserved to O(Δt), not exactly. That is what this gate tests. A wrong sign, a missing
         # log, the wrong energy or the wrong clock each break the identity at O(1) and would not
         # converge at all.

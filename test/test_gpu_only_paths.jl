@@ -8,11 +8,11 @@
 #   `integrator_mode=1`  — 20 uses. The README claims it "removes the O(ε) term" of the pre-point
 #                          relativistic drag. Nothing checked that it does anything at all.
 #
-# THE TRICK THAT MAKES FREEZE-OUT TESTABLE. Give the background a temperature that depends ONLY on
+# The trick that makes freeze-out testable. Give the background a temperature that depends only on
 # τ. Then the crossing time is the same for every particle no matter where it is or how it moves,
-# and it can be computed on the host to machine precision from the SAME interpolated field the
+# and it can be computed on the host to machine precision from the same interpolated field the
 # kernel reads — so `fo_tau` has an exact reference rather than a statistical one. Because the
-# kernel sees a bilinearly interpolated T, that reference is the crossing of the PIECEWISE-LINEAR
+# kernel sees a bilinearly interpolated T, that reference is the crossing of the piecewise-linear
 # T, which is what `freezeout_interp = true` claims to find exactly.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/test/test_gpu_only_paths.jl
@@ -74,7 +74,7 @@ else
         @test size(fo.pos) == (2, NP) && size(fo.mom) == (2, NP) && length(fo.tau) == NP
         @test all(==(1.0), fo.flag)                       # every particle crosses on this background
         @test all(isfinite, fo.pos) && all(isfinite, fo.mom)
-        # T(τ) has no radial dependence, so the crossing is the SAME for every particle and equal
+        # T(τ) has no radial dependence, so the crossing is the same for every particle and equal
         # to the host-computed crossing of the interpolated field. `interp = true` must find it to
         # far better than a step.
         @test maximum(abs, fo.tau .- TAUC) < 1e-6
@@ -82,10 +82,10 @@ else
     end
 
     @testset "F2 freezeout_interp removes the booking lag — the raw mode's lag is PREDICTED exactly" begin
-        # Because T depends on τ alone, EVERY particle crosses on the same step. That removes the
+        # Because T depends on τ alone, every particle crosses on the same step. That removes the
         # averaging one would normally rely on — the raw lag is not "≈ Δt/2 on average", it is one
         # deterministic offset — but it makes that offset exactly predictable, which is a sharper
-        # statement: the raw mode must book the FIRST SAMPLED TIME BELOW Tfo, and nothing else.
+        # statement: the raw mode must book the first sampled time below Tfo, and nothing else.
         "first τ = τ₀ + n·Δt at which the interpolated T drops below Tfo — what raw mode must book"
         function first_below(dt)
             n = 1
@@ -108,8 +108,8 @@ else
             push!(rawerr, want - TAUC)
             push!(interperr, maximum(abs, itp.tau .- TAUC))
         end
-        # The interpolated mode is better at EVERY step, by orders of magnitude, and its residual
-        # does NOT track Δt: it is the curvature of T across a tgrid node (the τ table is spaced
+        # The interpolated mode is better at every step, by orders of magnitude, and its residual
+        # does not track Δt: it is the curvature of T across a tgrid node (the τ table is spaced
         # 0.05 fm, so the two bracketing samples occasionally straddle a kink, and linear
         # interpolation in T is exact only within a cell). The raw error is O(Δt) by construction.
         @test all(interperr .< 1e-4)
@@ -126,7 +126,7 @@ else
         @test all(==(1.0), a.flag) && all(==(1.0), b.flag)
         @test maximum(abs, a.tau .- b.tau) < 1e-9
         # positions are re-sampled from the same seed, so they must agree to the noise the (tiny)
-        # drag adds — the point is that the LATER run did not overwrite the booking with a later state
+        # drag adds — the point is that the later run did not overwrite the booking with a later state
         @test isapprox(mean(sqrt.(sum(abs2, a.pos; dims = 1))), mean(sqrt.(sum(abs2, b.pos; dims = 1))); rtol = 1e-3)
         # a particle that never gets cold enough is left unflagged rather than booked at t_final
         cold = fo_run(; dt = 4e-3, interp = true, tf = 1.0, N = 20_000, Tfo = 0.01)
@@ -136,7 +136,7 @@ else
 
     @testset "F4 the booked position is the trajectory at the crossing" begin
         # With a drag time of ~10⁶ fm the particles free-stream, so x(τ_c) = x₀ + (p/E)(τ_c − τ₀)
-        # is known in closed form. This checks the kernel interpolates POSITION to the crossing too,
+        # is known in closed form. This checks the kernel interpolates position to the crossing too,
         # not just the time.
         Random.seed!(31)
         N = 40_000
@@ -154,7 +154,7 @@ else
     end
 
     @testset "F5 integrator_mode = 1 MAKES THE Δt BIAS WORSE — it does not remove it" begin
-        # 🔴🔴 THE DOCUMENTED CLAIM IS FALSE. `integrator_mode = 1` is described in the README as
+        # The documented claim is false. `integrator_mode = 1` is described in the README as
         # "drift-midpoint drag (O(ε²))" and in the kernel as removing the O(ε) term of the
         # pre-point drag. Measured at N = 10⁶ (SEM 0.14 %) on a uniform bath, against the 2-D
         # Jüttner ⟨p²⟩ the engine cannot fake:
@@ -165,18 +165,18 @@ else
         #     0.20    −3.23 %     −6.53 %      2.02
         #     0.30    −4.26 %     −9.19 %      2.16
         #
-        # Mode 1 roughly DOUBLES the bias, at every step, with the same sign, and still scales
+        # Mode 1 roughly doubles the bias, at every step, with the same sign, and still scales
         # linearly in Δt — so it is O(ε), not O(ε²).
         #
-        # WHY. The predictor is a NOISE-FREE drag half-step, p_mid = exp(−η_eff Δt/2)·p, so it can
-        # only SHRINK |p|. Hence E_mid < E always, hence η_eff = η_D·M/E_mid > the pre-point value
-        # ALWAYS: the correction is one-sided by construction. A true midpoint would have the noise
+        # Why. The predictor is a noise-free drag half-step, p_mid = exp(−η_eff Δt/2)·p, so it can
+        # only shrink |p|. Hence E_mid < E always, hence η_eff = η_D·M/E_mid > the pre-point value
+        # Always: the correction is one-sided by construction. A true midpoint would have the noise
         # pushing ⟨p²⟩ up as much as the drag pushes it down — that is what stationarity means — so
         # the correct midpoint energy is ≈ the pre-point energy. Dropping the noise (which the
         # kernel comment does deliberately, to stop η_eff correlating with ξ) trades a correlation
         # error for a systematic drift of the same order and the same sign as the error it targets.
         #
-        # NOT A PRODUCTION INCIDENT: every driver in Julia/Projects/ maps its "integrator" option
+        # Not a production incident: every driver in Julia/Projects/ maps its "integrator" option
         # with `== "mid" ? 1 : 0` and no recipe passes "mid", so every Langevin product ever made
         # used mode 0. Reported, not fixed — a fix changes what mode 1 computes. See CHANGELOG 0.2.1.
         using QuadGK
@@ -212,7 +212,7 @@ else
             b0, b1 = bias[(ed, 0)], bias[(ed, 1)]
             @test b0 < -4sem                        # the pre-point bias is real and negative
             @test b1 < -4sem                        # so is mode 1's
-            @test abs(b1) > abs(b0) + 4sem          # and mode 1's is BIGGER — the finding
+            @test abs(b1) > abs(b0) + 4sem          # and mode 1's is bigger — the finding
             @test 1.3 < b1/b0 < 3.5                 # by roughly a factor of two
             # what the README promises, pinned as expected-fail so a real fix turns this red
             @test_broken abs(b1) < abs(b0)

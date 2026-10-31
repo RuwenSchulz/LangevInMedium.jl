@@ -1,17 +1,17 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# 05 — THE GPU PATH AND ON-THE-FLY FREEZE-OUT (the production pattern)
+# 05 — the GPU PATH and on-the-fly freeze-out (the production pattern)
 #
 # The shape a real campaign takes. Two things this shows that no other example does:
 #
-#   · `freezeout_capture = true` (GPU only). Each particle LATCHES its own state the step its local
+#   · `freezeout_capture = true` (GPU only). Each particle latches its own state the step its local
 #     T first crosses Tfo, and the driver returns a NamedTuple `(pos, mom, tau, flag)` instead of
 #     histories. Memory is then ∝ N instead of ∝ N·(saves+1) — at N = 10⁶ with 500 snapshots the
 #     history alone is 24 GB on the device, which is why the latch exists — and the crossing is
 #     resolved to Δt rather than to the save cadence. `freezeout_interp = true` (the default) books
 #     the interpolated crossing, measured accurate to 2.7e-15; `false` books the first sampled step
 #     below Tfo, which is O(Δt) late and predictably so.
-#   · the run does NOT stop at freeze-out. The latch records; the particle keeps going. That is
+#   · the run does not stop at freeze-out. The latch records; the particle keeps going. That is
 #     deliberate — a Cooper–Frye surface can be crossed more than once — and worth knowing before
 #     you interpret `tau`.
 #
@@ -49,7 +49,7 @@ common = (; N_particles = N, Δt = 5e-3, initial_time = τ0, final_time = τf, s
 
 if have_gpu
     # ── the latch ──────────────────────────────────────────────────────────────────────────────
-    # Returns a NamedTuple, NOT (t, mom, pos). `flag[i] > 0` means particle i crossed; `tau[i]` is
+    # Returns a NamedTuple, not (t, mom, pos). `flag[i] > 0` means particle i crossed; `tau[i]` is
     # its crossing time, `pos[:, i]` / `mom[:, i]` its state there.
     Random.seed!(5)
     fo = Base.invokelatest(simulate_ensemble_bulk, GPUBackend(), r_grid, p_grid, density,
@@ -69,8 +69,8 @@ if have_gpu
     @printf("  device memory: full history ≈ %.2f GB   vs the latch ≈ %.2f MB   (%.0f×)\n",
             hist_bytes / 2^30, latch_bytes / 2^20, hist_bytes / latch_bytes)
     println("""
-  ⚠ the run does NOT stop at the crossing — the latch records and the particle keeps evolving.
-    `tau` is the FIRST crossing, which is what a Cooper–Frye surface wants, but a particle that
+  Note: the run does not stop at the crossing — the latch records and the particle keeps evolving.
+    `tau` is the first crossing, which is what a Cooper–Frye surface wants, but a particle that
     re-enters the hot region is still being propagated afterwards.""")
     if plots_on()
         edges = range(0.0, 6.0; length = 31)

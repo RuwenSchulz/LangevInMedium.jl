@@ -2,7 +2,7 @@
 # ==============================================================================================
 # regression_corpus.jl — the bit-identity gate for LangevInMedium.jl.
 #
-# Ten small, seeded runs through the PUBLIC entry point `simulate_ensemble_bulk`, spanning the
+# Ten small, seeded runs through the public entry point `simulate_ensemble_bulk`, spanning the
 # kwarg surface that production consumers use (default, Galilean, 3 momentum rows + Bjorken
 # redshift, DsT_quad, RTA, position diffusion + reflecting wall, the FONLL sampler in both its
 # spatial modes, the radial dimensions=1 mode, a flowing background). For each run the CPU
@@ -16,7 +16,7 @@
 #   check against it:                        julia --project=Julia Julia/LangevInMedium.jl/test/regression_corpus.jl
 #   skip the GPU half:    LIM_CORPUS_NOGPU=1 ...
 #
-# Baseline file: test/regression_corpus_baseline.txt (plain text, committed). Regenerate it ONLY
+# Baseline file: test/regression_corpus_baseline.txt (plain text, committed). Regenerate it only
 # for a deliberate, documented change of the default dynamics — and say so in CHANGELOG.md.
 # ==============================================================================================
 using Random, Statistics, SHA, Printf, LinearAlgebra

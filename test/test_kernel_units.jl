@@ -1,17 +1,17 @@
 # ==============================================================================================
-# test_kernel_units.jl — the functions the suite never touched, each against an INDEPENDENT
+# test_kernel_units.jl — the functions the suite never touched, each against an independent
 # construction rather than against a restatement of its own formula (2026-08-31 audit).
 #
-# WHAT WAS MISSING. Before this file, `runtests.jl` covered the transport times, `effective_DsT`,
+# What was MISSING. Before this file, `runtests.jl` covered the transport times, `effective_DsT`,
 # the FDR closure and the entry-point contract; `test_momentum_dims3.jl` and the bench gates covered
-# the ensemble-level physics. Nothing exercised the interpolant, the spline EVALUATOR, either boost
+# the ensemble-level physics. Nothing exercised the interpolant, the spline evaluator, either boost
 # kernel, the two Jüttner samplers, the FONLL sampler's fidelity, `LV_TAUN_SCALE`, or the
 # homogeneous-box entry point. Two of those had defects (see U2 and the CHANGELOG).
 #
-# THE RULE FOLLOWED HERE. A test that re-derives the kernel's own algebra passes whatever the
+# The rule followed here. A test that re-derives the kernel's own algebra passes whatever the
 # kernel does. So each block below is anchored on something the kernel cannot fake:
 #   · the interpolant on data whose exact value is known analytically;
-#   · the boosts on Lorentz INVARIANTS and on the 4-vector boost matrix, never on the kernel's
+#   · the boosts on Lorentz invariants and on the 4-vector boost matrix, never on the kernel's
 #     own parallel/perpendicular decomposition;
 #   · the samplers on χ² / KS against the distribution they are supposed to be drawing;
 #   · the spline evaluator against the closed-form transport time it is a spline OF.
@@ -24,14 +24,14 @@ const KC = LangevInMedium.KernelsCPU
 const TR = LangevInMedium.Transport
 const UT = LangevInMedium.Utils
 
-# ⚠ EVERY relativistic kernel builds its Lorentz factor as `1/sqrt(1 - v^2 + 1e-10)`, not
+# Every relativistic kernel builds its Lorentz factor as `1/sqrt(1 - v^2 + 1e-10)`, not
 # `1/sqrt(1 - v^2)` — a guard against a table cell with 1 - v^2 <= 0. Reference values below are
 # therefore built from γ_reg, and the size and consequences of the regularisation are pinned
 # separately in U3b (bias) and U3c (the round trip it stops being an involution).
 γ_reg(v) = 1.0/sqrt(1.0 - v*v + 1e-10)
 
 @testset "U1 interpolate_2d_cpu" begin
-    # EXACT on a bilinear field: v(x,y) = a + b·x + c·y + d·x·y is reproduced with NO error by
+    # Exact on a bilinear field: v(x,y) = a + b·x + c·y + d·x·y is reproduced with NO error by
     # bilinear interpolation, so any deviation is an indexing or weighting bug, not discretisation.
     x = collect(0.0:0.5:3.0); y = collect(-1.0:0.25:1.0)
     a, b, c, d = 0.7, -1.3, 2.1, 0.9
@@ -46,7 +46,7 @@ const UT = LangevInMedium.Utils
     for (i, xi) in enumerate(x), (j, yi) in enumerate(y)
         @test isapprox(KC.interpolate_2d_cpu(x, y, V, xi, yi), V[i, j]; rtol = 1e-12, atol = 1e-12)
     end
-    # CLAMPED outside the table, never extrapolated — this is the 0.2.0 GPU fix's CPU reference,
+    # Clamped outside the table, never extrapolated — this is the 0.2.0 GPU fix's CPU reference,
     # and the property the whole "a particle past the rim reads the edge value" contract rests on.
     for (xi, yi) in ((-5.0, 0.0), (99.0, 0.0), (1.0, -9.0), (1.0, 9.0), (-5.0, 9.0))
         @test isapprox(KC.interpolate_2d_cpu(x, y, V, xi, yi),
@@ -78,20 +78,20 @@ end
     @test eval_tau_n_spline(0.3, 0.0, 1.0, [2.5]) == 2.5          # degenerate table
 
     # ── the defect (2026-08-31), pinned as expected-fail ─────────────────────────────────────────
-    # Outside [Tmin, Tmax] the cell INDEX is clamped but the interpolation WEIGHT is not, so this
+    # Outside [Tmin, Tmax] the cell index is clamped but the interpolation weight is not, so this
     # extrapolates a convex 1/T² function and the extension crosses zero. A negative time is not a
     # NaN anyone would notice: every kernel guards `τ > 0 ? 1/τ : 0`, so the particle silently loses
-    # BOTH drag and noise. The one-line fix is `t = clamp(u - (i-1), 0.0, 1.0)`; it is not applied
+    # both drag and noise. The one-line fix is `t = clamp(u - (i-1), 0.0, 1.0)`; it is not applied
     # because it moves the last bits of 6 of the 10 regression-corpus hashes (⟨p²⟩ and ⟨x²⟩ stay
     # identical to 17 digits — it is a sub-ulp reordering, not a physics change). See the long
     # docstring on `Transport.eval_tau_n_spline` and CHANGELOG 0.2.1 "found, not fixed".
     #
-    # @test_broken, not @test_skip, ON PURPOSE: if someone applies the clamp these turn
+    # @test_broken, not @test_skip, on purpose: if someone applies the clamp these turn
     # "Unexpectedly passed" and point the reader straight at this comment.
     @test_broken eval_tau_n_spline(0.90, T0, invdT, vals) > 0
     @test_broken eval_tau_n_spline(0.90, T0, invdT, vals) == vals[end]
     @test_broken eval_tau_n_spline(0.05, T0, invdT, vals) == vals[1]
-    # what it does TODAY, measured — so the defect's size is recorded, not just its existence
+    # what it does today, measured — so the defect's size is recorded, not just its existence
     @test eval_tau_n_spline(0.90, T0, invdT, vals) < 0                       # ← −0.083 fm
     @test isapprox(eval_tau_n_spline(0.05, T0, invdT, vals), 5.168; atol = 0.01)
     @test tau_drag(0.05, M, DsT) / eval_tau_n_spline(0.05, T0, invdT, vals) > 2.6   # 2.7× off
@@ -112,8 +112,8 @@ function boost_setup(; N = 500, v = 0.45, r = 4.0, M = 1.5, pdim = 2, seed = 3)
 end
 
 @testset "U3 boosts — invariants, round trip, and the 4-vector boost matrix" begin
-    # ⚠ THE KERNEL'S γ IS REGULARISED: `γ = 1/sqrt(1 - v² + 1e-10)`, not `1/sqrt(1 - v²)`. So the
-    # boost is not EXACTLY a Lorentz transformation — γ comes out low by ≈ ½·1e-10/(1−v²), i.e.
+    # The kernel's γ is regularised: `γ = 1/sqrt(1 - v² + 1e-10)`, not `1/sqrt(1 - v²)`. So the
+    # boost is not exactly a Lorentz transformation — γ comes out low by ≈ ½·1e-10/(1−v²), i.e.
     # 6.3e-11 relative at v = 0.45 and 2.6e-10 at v = 0.9. That is far below anything the physics
     # can see, but it is a real property of the kernel and it sets the tolerance below; a test
     # written against the exact γ fails at 1e-11 (it did, which is how this got documented).
@@ -124,7 +124,7 @@ end
         KC.kernel_boost_to_rest_frame_cpu!(mom, pos, xg, tg, Vf, M, N, 1, 0.1, 0.0; relativistic = rel)
         p_lrf = copy(mom)
         KC.kernel_boost_to_lab_frame_cpu!(mom, pos, xg, tg, Vf, M, N, 1, 0.1, 0.0; relativistic = rel)
-        # LAB -> LRF -> LAB. EXACT in the Galilean branch (p∥ ∓ m·v is its own inverse). NOT exact
+        # Lab -> LRF -> lab. Exact in the Galilean branch (p∥ ∓ m·v is its own inverse). Not exact
         # in the relativistic one: Λ(v)Λ(−v) = 1 requires γ²(1−v²) = 1, and the regularised γ gives
         # γ²(1−v²) = (1−v²)/(1−v²+1e-10) = 1 − 1e-10/(1−v²) instead. See U3c for the measurement.
         if rel
@@ -140,20 +140,20 @@ end
                 r = hypot(pos[1, i], pos[2, i]); n = (pos[1, i]/r, pos[2, i]/r)
                 E = sqrt(M^2 + sum(abs2, view(p_lab, :, i)))
                 ppar = p_lab[1, i]*n[1] + p_lab[2, i]*n[2]
-                # Λ(v) acting on the 4-vector (E, p∥) — built here from the boost matrix, NOT from
-                # the kernel's parallel/perpendicular decomposition, so the STRUCTURE of the
+                # Λ(v) acting on the 4-vector (E, p∥) — built here from the boost matrix, not from
+                # the kernel's parallel/perpendicular decomposition, so the structure of the
                 # transformation (sign, E-dependence, which components move) is independently checked.
                 ppar2 = γ*(ppar - v*E)
                 E2    = γ*(E - v*ppar)
                 @test isapprox(p_lrf[1, i], p_lab[1, i] + (ppar2 - ppar)*n[1]; rtol = 1e-12, atol = 1e-13)
                 @test isapprox(p_lrf[2, i], p_lab[2, i] + (ppar2 - ppar)*n[2]; rtol = 1e-12, atol = 1e-13)
-                # THE MASS SHELL: E'² − |p'|² = M². Not a tautology — E2 is built by the boost
+                # The mass shell: E'² − |p'|² = M². Not a tautology — E2 is built by the boost
                 # matrix above and |p'| by the kernel, so this fails if either loses a γ or a v·E.
                 worst_shell = max(worst_shell, abs(E2^2 - sum(abs2, view(p_lrf, :, i)) - M^2))
             end
             # the residual is set by the 1e-10 γ regularisation, not by the algebra
             @test worst_shell < 1e-7
-            # p_z IS INVARIANT under the TRANSVERSE boost — the whole premise of pdim = 3
+            # p_z is invariant under the transverse boost — the whole premise of pdim = 3
             pdim == 3 && @test p_lrf[3, :] == p_lab[3, :]
         else
             # Galilean: exactly p∥ − m·v along r̂. No γ, no E, no regularisation ⇒ exact to 1e-15.
@@ -170,8 +170,8 @@ end
 @testset "U3b the γ regularisation, quantified" begin
     # `+1e-10` inside the square root is a guard against 1−v² ≤ 0 from a glitchy table cell. Pinned
     # here so its size is on record and a change to it is visible:
-    #   · at production flow (|v| ≤ 0.8) it biases γ LOW by ≤ 1.4e-10 relative — invisible;
-    #   · it also OVERRIDES the |v| clamp. The kernels clamp |v| ≤ √(1−1e-12), which alone would
+    #   · at production flow (|v| ≤ 0.8) it biases γ low by ≤ 1.4e-10 relative — invisible;
+    #   · it also overrides the |v| clamp. The kernels clamp |v| ≤ √(1−1e-12), which alone would
     #     admit γ ≈ 1e6; with the epsilon, γ saturates at ≈ 1e5 instead. The two guards disagree by
     #     an order of magnitude, and the epsilon is the one that binds.
     γ_exact(v) = 1.0/sqrt(1.0 - v*v)
@@ -185,9 +185,9 @@ end
 end
 
 @testset "U3c the boost round trip is not an identity — and by exactly the predicted amount" begin
-    # A CONSEQUENCE of the +1e-10 in γ, not an independent defect: one lab→LRF→lab round trip
-    # multiplies the momentum by ≈ γ²(1−v²) = 1 − 1e-10/(1−v²), so the error must GROW with the
-    # flow like 1/(1−v²). The driver does one round trip PER STEP, so this is a slow systematic
+    # A consequence of the +1e-10 in γ, not an independent defect: one lab→LRF→lab round trip
+    # multiplies the momentum by ≈ γ²(1−v²) = 1 − 1e-10/(1−v²), so the error must grow with the
+    # flow like 1/(1−v²). The driver does one round trip per step, so this is a slow systematic
     # contraction; at a production 5 800 steps and v = 0.6 it accumulates to ≈ 9e-7 relative, which
     # is why it has never mattered. Pinned so that it cannot grow unnoticed.
     drift = Float64[]
@@ -200,7 +200,7 @@ end
         push!(drift, maximum(abs, mom .- p0) / maximum(abs, p0))
     end
     @test all(0 .< drift .< 1e-8)                       # non-zero: the round trip really is not exact
-    # the ratio must track (1−0.30²)/(1−0.80²) = 2.53 — the SIGNATURE of the 1/(1−v²) law, which a
+    # the ratio must track (1−0.30²)/(1−0.80²) = 2.53 — the signature of the 1/(1−v²) law, which a
     # generic rounding artefact would not have
     @test 1.5 < drift[2]/drift[1] < 4.5
     # Galilean: an exact involution, to the last bit
@@ -212,7 +212,7 @@ end
 end
 
 @testset "U4 boosts — a particle comoving with the fluid is at rest in the LRF" begin
-    # The physical statement, checked WITHOUT reference to the kernel's algebra: give each particle
+    # The physical statement, checked without reference to the kernel's algebra: give each particle
     # exactly the fluid's own momentum m·γ·v·r̂ and demand the rest-frame momentum vanish.
     mom, pos, xg, tg, Vf, M, N, v = boost_setup(; N = 200)
     γ = γ_reg(v)
@@ -243,7 +243,7 @@ end
     for step in 1:nsteps
         KC.kernel_bjorken_redshift_cpu!(mom, 3, step, Δt, τ0, N)
     end
-    # p_z(τ) = p_z(τ₀)·τ₀/τ EXACTLY (the product telescopes), and rows 1,2 are untouched
+    # p_z(τ) = p_z(τ₀)·τ₀/τ exactly (the product telescopes), and rows 1,2 are untouched
     @test maximum(abs, mom[3, :] ./ pz0 .- τ0/(τ0 + nsteps*Δt)) < 1e-12
     @test all(mom[1, :] .== 1.0) && all(mom[2, :] .== 1.0)
     # τ_a ≤ 0 is a no-op, not a division by zero
@@ -266,7 +266,7 @@ end
         Random.seed!(1000 + d)
         s = [KC._draw_juttner_pstar_lib(M, T, d) for _ in 1:Nsamp]
         @test all(>=(0.0), s)
-        # χ² over deciles of the ANALYTIC distribution ⇒ 10 equiprobable bins by construction
+        # χ² over deciles of the analytic distribution ⇒ 10 equiprobable bins by construction
         edges = [0.0]
         for q in 0.1:0.1:0.9
             lo, hi = 0.0, 16*sqrt(M*T) + 16*T
@@ -294,7 +294,7 @@ end
 end
 
 @testset "U7 build_juttner_invcdf agrees with the rejection sampler it replaces on the GPU" begin
-    # THIS IS THE AGREEMENT PRODUCTION RESTS ON and nothing measured it: the CPU RTA path rejection-
+    # This is the agreement production rests on and nothing measured it: the CPU RTA path rejection-
     # samples |p*|, the GPU RTA path reads this table. If they differ, `collision_mode = :rta` means
     # two different things on the two backends.
     M, Nsamp = 1.5, 40_000
@@ -344,7 +344,7 @@ end
         @test isapprox(mean(x -> x^4, s), m4/den; rtol = 0.10)          # 4th moment: the tail too
     end
     @test UT.sample_pz_conditional_juttner(1.5, 0.0) == 0.0
-    # append_thermal_pz: rows 1-2 copied verbatim, row 3 drawn at the LOCAL temperature
+    # append_thermal_pz: rows 1-2 copied verbatim, row 3 drawn at the local temperature
     N = 4_000; mom = 0.5 .* randn(MersenneTwister(9), 2, N); pos = 2.0 .* randn(MersenneTwister(10), 2, N)
     out = UT.append_thermal_pz(mom, pos, 1.5, r -> 0.30)
     @test size(out) == (3, N) && out[1:2, :] == mom
@@ -356,8 +356,8 @@ end
 end
 
 @testset "U9b _to_cdf! is strictly increasing at ANY scale" begin
-    # 🔴 REGRESSION GUARD, 2026-09-15. The tie-breaking nudge was `c[k-1] + eps(Float64)` — an
-    # ABSOLUTE 2.2e-16, not representable next to a cumulative of 10³ or more, so `max` returned
+    # Regression guard, 2026-09-15. The tie-breaking nudge was `c[k-1] + eps(Float64)` — an
+    # absolute 2.2e-16, not representable next to a cumulative of 10³ or more, so `max` returned
     # `c[k-1]` and the CDF came out flat exactly where the guard was supposed to bite. Measured
     # then: 149 tied knots at every scale ≥ 10³ on this density, 0 at scale 1. Nothing moved
     # (the ties sit in the zero-density tail), but the docstring's "strictly increasing" was false.
@@ -377,8 +377,8 @@ end
 end
 
 @testset "U9 sample_particles_from_FONLL reproduces the density it was handed" begin
-    # FIDELITY, not just "it returns the right shape": bin the sampled particles and compare against
-    # the tabulated density in BOTH spatial modes.
+    # Fidelity, not just "it returns the right shape": bin the sampled particles and compare against
+    # the tabulated density in both spatial modes.
     M = 1.5; rg = collect(0.0:0.25:12.0); pg = collect(0.05:0.05:6.0)
     dens = [p*exp(-sqrt(p^2 + M^2)/0.5)*exp(-r^2/18) for p in pg, r in rg]   # (Np, Nr)
     N = 120_000
@@ -388,7 +388,7 @@ end
         @test size(x) == (2, N) && size(p) == (2, N)
         r = vec(sqrt.(sum(abs2, x; dims = 1)))
         @test maximum(r) <= last(rg) + 1e-9
-        # radial profile: P(r) ∝ r·n(r) in BOTH modes (the Cartesian mode gets the r from the area
+        # radial profile: P(r) ∝ r·n(r) in both modes (the Cartesian mode gets the r from the area
         # element, the polar mode from the explicit Jacobian) — they must agree with each other
         # and with the table.
         n_r = vec(sum(dens .* pg; dims = 1))
@@ -428,7 +428,7 @@ end
         _, _, d2 = build_tau_drag_spline(M, DsT; Tmin = 0.12, Tmax = 0.5, nT = 32)
         _, _, n2 = build_taun_current_spline(M, DsT; Tmin = 0.12, Tmax = 0.5, nT = 32)
         @test all(isapprox.(d2, d1 ./ 6; rtol = 1e-12))
-        @test all(isapprox.(n2, n1 ./ 6; rtol = 1e-12))    # BOTH — it moves D_s, not just the rate
+        @test all(isapprox.(n2, n1 ./ 6; rtol = 1e-12))    # Both — it moves D_s, not just the rate
     finally
         LangevInMedium.LV_TAUN_SCALE[] = old
     end
@@ -461,10 +461,10 @@ end
 end
 
 @testset "U13 homogeneous-box entry point against the EXACT discrete OU solution" begin
-    # The toy path: no positions, a fixed κ = 2.5T³ that ignores DsT, η_D = κ/(2Tm), and the EULER
+    # The toy path: no positions, a fixed κ = 2.5T³ that ignores DsT, η_D = κ/(2Tm), and the Euler
     # update p ← (1 − ηΔt)p + √(κΔt)·ξ (not the exact-OU propagator the field-driven path uses).
-    # For that scheme ⟨p²⟩ obeys a closed recursion, so the whole relaxation CURVE can be predicted
-    # exactly — a much sharper test than checking the endpoint, and it pins η_D, κ AND the update.
+    # For that scheme ⟨p²⟩ obeys a closed recursion, so the whole relaxation curve can be predicted
+    # exactly — a much sharper test than checking the endpoint, and it pins η_D, κ and the update.
     T, M, d = 0.35, 1.5, 3
     κ  = 2.5*T^3
     ηD = κ/(2*T*M)
@@ -486,7 +486,7 @@ end
         @test isapprox(mean(abs2, h), want; rtol = 0.03)
     end
     # and the k→∞ limit of that recursion is the Maxwell equipartition d·mT, up to the Euler
-    # O(ηΔt) bias 1/(1 − ηΔt/2) — assert BOTH so the toy's own discretisation is on record
+    # O(ηΔt) bias 1/(1 − ηΔt/2) — assert both so the toy's own discretisation is on record
     @test isapprox(d*κ*Δt/(1 - a^2), d*M*T/(1 - ηD*Δt/2); rtol = 1e-12)
     @test isapprox(mean(abs2, hist[end]), d*M*T; rtol = 0.03)
     @test all(isfinite, hist[end])

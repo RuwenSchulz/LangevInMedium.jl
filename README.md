@@ -316,6 +316,7 @@ keyword table; the ones that set the physics:
 | `momentum_langevin` | true | false (or `DsT = 0`): particles move with the flow, `p = m·γ·v`, every momentum row beyond the spatial ones set to zero |
 | `V2Evolutionn, psi2` | — | elliptic modulation `v → v(1 + 2v₂cos 2(φ−Ψ₂))` |
 | `adaptive_dt` | false | true: the variable step above; `Δt` unused. Tolerances `adaptive_drag_tol`, `adaptive_bg_tol` (0.01, 0.01), bounds `dt_min`, `dt_max` (1e-5, 0.1 fm) |
+| `kappa_law` | — | `KappaLaw(gL, gT)`: momentum diffusion depending on `\|p*\|` and different along (κ_L) and across (κ_T) the quark's rest-frame momentum, `κ_X = N(T)·(2T³/D_sT)·g_X(p, T)`, with the Itô drift that keeps the Jüttner stationary. `norm = :green_kubo` (default) fixes N so the Green–Kubo `D_s` is still `D_sT/T`; `:rest` fixes the drag at rest instead. Cartesian, relativistic, `:langevin` only; not with `adaptive_dt`. Absent: the constant κ, bit-identical |
 | `time_grid` | — | explicit step boundaries `[initial_time, …, final_time]`; must contain every snapshot time; `Δt` unused |
 | GPU only: `freezeout_capture, freezeout_interp` | false | latch each particle's `T = Tfo` crossing; returns a NamedTuple `(pos, mom, tau, flag)` instead of histories. The run does not stop at freeze-out |
 | GPU only: `integrator_mode` | 0 | 1 = drift-midpoint drag. It roughly doubles the Δt bias instead of removing it; the CPU refuses 1 |
@@ -331,6 +332,7 @@ src/constants.jl          ħc (PDG 0.197327 GeV·fm) and fmGeV
 src/backends.jl           CPUBackend, GPUBackend
 src/utils.jl              sample_particles_from_FONLL, the p_z completion (append_thermal_pz), check_momentum_dims
 src/transport.jl          tau_drag, tau_n_main3, effective_DsT, the two spline builders, build_juttner_invcdf, LV_TAUN_SCALE
+src/kappa_law.jl          KappaLaw (κ_L(p,T) ≠ κ_T(p,T)), its Green–Kubo normalisation, the (p, T) table, the step shared by CPU and GPU
 src/kernels_cpu.jl        per-step CPU kernels (boosts, forces, momentum/position updates, RTA, saves)
 src/timegrid.jl           the variable step: adaptive_time_grid, check_time_grid
 src/simulate_cpu.jl       CPU driver (+ _snapshot_times)

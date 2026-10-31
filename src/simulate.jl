@@ -3,6 +3,7 @@ module Simulate
 using ..Backends: AbstractBackend, CPUBackend, GPUBackend
 using ..Utils
 using ..SimulateCPU
+using ..KappaLaws: KappaLaw
 
 export simulate_ensemble_bulk
 
@@ -21,7 +22,7 @@ tabulated background and return `(time_points, momenta, positions)`, where `mome
 Background: `T_field[i, j] = T(xgrid[i], tgrid[j])` in GeV, `v_field` the radial flow velocity
 (c = 1); both are bilinearly interpolated in `(r, τ)` and clamped to the table at its edges.
 
-Initial condition: `x_init`/`p_init` (`(2, N)` each, lab positions and LOCAL-REST-FRAME momenta;
+Initial condition: `x_init`/`p_init` (`(2, N)` each, lab positions and local-rest-frame momenta;
 the initial lab boost is applied inside) or, when absent, `N_particles` samples from
 `density[p_index, r_index]` on `(r_grid, p_grid)` via `sample_particles_from_FONLL`
 (`cartesian_spatial_sampling`, `antithetic_momenta`).
@@ -29,28 +30,28 @@ the initial lab boost is applied inside) or, when absent, `N_particles` samples 
 Keywords (defaults in `simulate_cpu.jl`/`simulate_gpu.jl`):
 - `m` quark mass [GeV]; `DsT` the spatial diffusion coefficient `2πT D_s`-style label `D_s·T`
   (dimensionless). The drag is the Einstein relation `1/η_D = tau_drag = m·DsT/T²` — never
-  `tau_n_main3`, which is the derived diffusion-CURRENT time (see `tau_drag`).
+  `tau_n_main3`, which is the derived diffusion-current time (see `tau_drag`).
 - `DsT_linear, DsT_slope, DsT_offset, Tfo`: `DsT(T) = slope·max(T, Tfo) + offset`;
   `DsT_quad, DsT_Tref`: `DsT(T) = DsT·(T/Tref)²`, i.e. a T-independent drag time.
 - `dimensions`: 2 = transverse plane (x, y); 1 = radial mode (r, p_r only).
   `momentum_dimensions = 3` with `dimensions = 2` adds a longitudinal `p_z` row (thermal
   conditional at t0, invariant under the transverse boost); `bjorken_redshift` then applies
   `dp_z/dτ = −p_z/τ` between kicks (needs `initial_time > 0`).
-- `pz_init`: how that p_z row is drawn — `:thermal` (the local Jüttner conditional; the SHIPPED
+- `pz_init`: how that p_z row is drawn — `:thermal` (the local Jüttner conditional; the shipped
   default, what every pre-2026-09-01 product carries) or `:comoving` (`p_z* = 0`, the
   free-streaming initial condition: a quark produced at t = z = 0 arrives at η_s = y exactly).
   See `append_pz`; switching moves the freeze-out p_T spectrum by < 1 %.
 - `track_eta_s`: also integrate `dη_s/dτ = (1/τ)(p_z*/E*)` from 0 and return its history as a
-  FOURTH returned element, so that `y_lab = η_s + atanh(p_z*/E*)` becomes available. η_s is a
+  fourth returned element, so that `y_lab = η_s + atanh(p_z*/E*)` becomes available. η_s is a
   passenger — nothing in the dynamics reads it — so this cannot change any other output. Needs
   `momentum_dimensions = 3` and `initial_time > 0`.
 - `relativistic`: `true` = Jüttner kinematics (drag `·m/E`, streaming `p/E`, Lorentz boosts);
   `false` = the exactly solvable Galilean process (drag `η_D`, streaming `p/m`, `p∥ ∓ m·v`).
 - `collision_mode`: `:langevin` (exact-OU step), `:rta` (BGK re-draw from the local Jüttner with
-  probability `1 − e^{−Δt/τ_n}`, τ_n the CURRENT time), or `:none` (FREE STREAMING — no drag, no
+  probability `1 − e^{−Δt/τ_n}`, τ_n the current time), or `:none` (free streaming — no drag, no
   noise, no frame change; the Bjorken redshift still applies, being the longitudinal free-streaming
-  law). ⚠ `:none` is the ONLY way to ask for free streaming. `DsT = 0` and
-  `momentum_langevin = false` are both the COMOVING limit (`p = m·γ·v`); a negative `DsT` used to
+  law). `:none` is the only way to ask for free streaming. `DsT = 0` and
+  `momentum_langevin = false` are both the comoving limit (`p = m·γ·v`); a negative `DsT` used to
   free-stream by accident and is now refused.
 - `momentum_langevin = false` or `DsT = 0`: particles are glued to the flow (`p = m·γ·v`, and
   every momentum row beyond the spatial ones is set to zero — the fluid is longitudinally comoving
@@ -60,13 +61,18 @@ Keywords (defaults in `simulate_cpu.jl`/`simulate_gpu.jl`):
 - `V2Evolutionn, psi2`: optional elliptic modulation `v → v(1 + 2v₂cos2(φ−Ψ₂))`.
 - `save_interval`: snapshot cadence; if it does not divide the evolution the trailing steps
   are not in the history and `time_points` says so (a warning is issued once).
-- `adaptive_dt = true`: a VARIABLE, global step built from the background before the run
+- `adaptive_dt = true`: a variable, global step built from the background before the run
   (`adaptive_time_grid`): `η_D·h ≤ adaptive_drag_tol` in the hottest cell (the exact-OU step's
   bias is ≈ 12 %·η_DΔt, bench/bench_accuracy.jl), `h·|∂τη_D| ≤ adaptive_bg_tol·η_max`, and
   `dt_min ≤ h ≤ dt_max`. `time_grid = [t_0, …, t_n]` hands the step boundaries in directly. With
   either, `Δt` is unused, snapshots land exactly on `initial_time + k·save_interval` and on
   `final_time` (nothing is dropped), and `time_points` is a `Vector`. Off by default; the fixed-Δt
   path is bit-identical to before.
+- `kappa_law = KappaLaw(gL, gT)`: momentum diffusion that depends on |p*| and differs along
+  (κ_L) and across (κ_T) the quark's rest-frame momentum, with the Itô drift that keeps the Jüttner
+  stationary. `norm = :green_kubo` (default) scales it so the operator's Green–Kubo D_s is still
+  D_sT/T. Cartesian, relativistic, `:langevin` only; not with `adaptive_dt` (pass `time_grid`).
+  `nothing` (default) is the constant isotropic κ, bit-identical to before. See kappa_law.jl.
 - GPU only: `freezeout_capture`/`freezeout_interp` (returns a NamedTuple of the T = Tfo crossing
   instead of histories), `integrator_mode = 1` (drift-midpoint drag), `verbose`.
 
@@ -106,11 +112,11 @@ function simulate_ensemble_bulk(
     V2Evolutionn::Union{Nothing, AbstractMatrix} = nothing,
     psi2::Float64 = 0.0,
     integrator_mode::Int = 0,   # the CPU path implements only the pre-point exact-OU step (0); 1 exists on the GPU only
-    # `relativistic` switches the KINEMATICS, not just the drag:
+    # `relativistic` switches the kinematics, not just the drag:
     #   drag       η_D = η m/E   (Jüttner equilibrium)   vs   η_D = η        (Maxwell)
     #   streaming  dx/dt = p/E                           vs   dx/dt = p/m
     #   boost      Lorentz                               vs   Galilean p∥ ∓ m·v
-    # (The boost switch landed 2026-08-15 — see the HISTORY note above kernel_boost_to_lab_frame_cpu!
+    # (The boost switch landed 2026-08-15 — see the history note above kernel_boost_to_lab_frame_cpu!
     # in kernels_cpu.jl; before that, `false` was a kinematic hybrid at O(T/M) on a flowing
     # background. Post-fix, `false` is the exactly solvable Galilean process.)
     relativistic::Bool = true,    # p_z on the transverse plane (3 with dimensions=2) and its Bjorken redshift — utils.jl note.
@@ -119,7 +125,7 @@ function simulate_ensemble_bulk(
     bjorken_frame::Symbol = :lrf,     # where the redshift acts: :lrf (shipped) | :lab (lab p_T conserved) — simulate_cpu.jl note
     proper_time_kicks::Bool = false,  # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl); false = production
     pz_init::Symbol = :thermal,   # p_z row at t0: :thermal (shipped) | :comoving (p_z* = 0) — see append_pz
-    track_eta_s::Bool = false,    # also return the η_s history (a FOURTH element); see kernel_accumulate_eta_s_cpu!
+    track_eta_s::Bool = false,    # also return the η_s history (a fourth element); see kernel_accumulate_eta_s_cpu!
     verbose::Bool = false,        # accepted for signature parity with the GPU path (prints nothing on the CPU)
     adaptive_dt::Bool = false,    # variable step from the background (timegrid.jl); Δt then unused
     adaptive_drag_tol::Float64 = 0.01,   # η_D·h ≤ this in the hottest cell
@@ -127,6 +133,7 @@ function simulate_ensemble_bulk(
     dt_min::Float64 = 1e-5,
     dt_max::Float64 = 0.1,
     time_grid::Union{Nothing, AbstractVector} = nothing,   # explicit step boundaries; Δt then unused
+    kappa_law::Union{Nothing, KappaLaw} = nothing,         # κ_L(p, T) ≠ κ_T(p, T); see KappaLaw
 )
     integrator_mode == 0 ||
         error("simulate_ensemble_bulk(::CPUBackend): integrator_mode=$(integrator_mode) is not implemented on the CPU (only 0, the pre-point exact-OU step); the drift-midpoint variant (1) exists on the GPU path only.")
@@ -163,6 +170,7 @@ function simulate_ensemble_bulk(
         dt_min = dt_min,
         dt_max = dt_max,
         time_grid = time_grid,
+        kappa_law = kappa_law,
     )
 end
 

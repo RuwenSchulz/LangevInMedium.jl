@@ -3,15 +3,15 @@
 # bench_adaptive.jl — what the variable time step buys, and what it costs, on a production-shaped run.
 #
 # The question: on a cooling fireball, does `adaptive_dt = true` reproduce the fixed-Δt answer at
-# fewer steps, and is the variable step actually better than a UNIFORM step of the same cost?
+# fewer steps, and is the variable step actually better than a uniform step of the same cost?
 #
 # Setup: the examples' Bjorken fireball (T₀ = 0.5 GeV at τ₀ = 0.4 fm, Gaussian σ = 4 fm, radial flow
 # to 0.65), LP1-like charm (m = 1.5, D_sT = 0.11634), 3 momentum rows with the Bjorken redshift on
-# the lab momenta, FONLL-shaped initial condition. ONE initial condition, drawn on the host and
+# the lab momenta, FONLL-shaped initial condition. One initial condition, drawn on the host and
 # handed to every run, so the runs differ only by their step and their noise.
 #
-# Runs: fixed Δt = 2.5e-4 (the REFERENCE), fixed 1e-3 (production), adaptive at four drag
-# tolerances, and a fixed Δt with the SAME step count as adaptive tol = 0.01 (the cost-matched
+# Runs: fixed Δt = 2.5e-4 (the reference), fixed 1e-3 (production), adaptive at four drag
+# tolerances, and a fixed Δt with the same step count as adaptive tol = 0.01 (the cost-matched
 # control). For every run and snapshot: ⟨p_T⟩, ⟨p_T²⟩, ⟨p·r̂⟩ (the radial flow the quarks picked
 # up) and ⟨r²⟩, as % deviations from the reference, each with the 1σ noise of the difference.
 #
@@ -37,7 +37,7 @@ end
 const XG, TG, TF, VF = fireball()
 
 # the initial condition: FONLL-shaped p_T (1 + (p/2.1)²)^−3.1 at fixed r-profile, isotropic azimuth,
-# LOCAL-REST-FRAME momenta (the engine boosts them); drawn once
+# local-rest-frame momenta (the engine boosts them); drawn once
 function initial_condition(N; seed = 2026)
     rng = MersenneTwister(seed)
     x = 3.0 .* randn(rng, 2, N)
@@ -112,10 +112,10 @@ for (res, (l, kw)) in zip(results, RUNS)
     end
 end
 
-# ── gate: the DEFAULT tolerance must reproduce the reference within 3σ on every observable and
+# ── gate: the default tolerance must reproduce the reference within 3σ on every observable and
 # snapshot. σ treats the two runs as independent; they share the initial condition, so it is
 # conservative. The flag lives in a Ref: a bare `ok = false` in a top-level loop would make a new
-# local and the gate would print PASS after its failures (CLAUDE.md, the soft-scope trap).
+# local and the gate would print PASS after its failures (Julia's soft-scope rule).
 const OK = Ref(true)
 function gate(res, ref)
     for k in 2:length(ref.tp), f in (:pT, :pT2, :pr, :r2)

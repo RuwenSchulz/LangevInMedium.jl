@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# bench_physics_gates.jl — the engine against quantities in PHYSICAL UNITS.
+# bench_physics_gates.jl — the engine against quantities in physical units.
 #
 # The 2026-08-02 drag/current bug (realised D_s = K₃/K₂ × the label, 1.26–1.74×) survived every
 # agreement test in the tree because τ_n cancels in a comparison of two implementations of the same
@@ -8,12 +8,12 @@
 # gates are of that kind — each one pins the engine to a number it cannot fake:
 #
 #   (a) MSD slope = 2·d·D_s at three z = M/T, CPU and GPU         (the drag convention)
-#   (b) the Jüttner TAIL f(p > 3 GeV) at the Poisson floor          (⟨p²⟩ alone missed a 16.5 % tail error)
+#   (b) the Jüttner tail f(p > 3 GeV) at the Poisson floor          (⟨p²⟩ alone missed a 16.5 % tail error)
 #   (c) ℓ=1 current decay rate = η_D·K₂/K₃ (3 rows) and λ₁(2D)·η_D (2 rows)
 #   (d) the exact-OU propagator has NO Δt bias for the Galilean drag; the pre-point relativistic
 #       drag's O(Δt) bias on ⟨p²⟩ stays within a 1.5 % budget up to ηΔt = 0.1 (production: 0.003)
 #   (e) Galilean twin: the full MSD(t) curve ⟨Δx²⟩ = 2d(T/Mη)[t − (1−e^{−ηt})/η], not only its slope
-#   (f) DsT_quad: the realised drag rate is the SAME at T = 0.2 and 0.4 (const D_sT would give ×4)
+#   (f) DsT_quad: the realised drag rate is the same at T = 0.2 and 0.4 (const D_sT would give ×4)
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_physics_gates.jl     (LIM_NOGPU=1 to skip the GPU)
 # ==============================================================================================
@@ -26,9 +26,9 @@ ds_fm(T) = (DST / T) * HBARC                        # fm — D_s = D_sT/T [GeV�
 K2K3(z) = Bessels.besselkx(2, z) / Bessels.besselkx(3, z)
 lam1(T, d) = jmean(p -> (M / sqrt(p^2 + M^2)) * p^2, M, T, d) / jmean(p -> p^2, M, T, d)
 
-# ⚠ `tfinal` IS SNAPPED SO THE SAVE INTERVAL DIVIDES THE EVOLUTION, and that is not cosmetic.
+# `tfinal` is snapped so the SAVE interval divides the evolution, and that is not cosmetic.
 # These gates pick `tfinal` from a physical time (`k/η_D`), so `tfinal/dt` is an arbitrary real and
-# `steps % save_every` is almost never 0 — and when it is not, `_snapshot_times` drops the ENTIRE
+# `steps % save_every` is almost never 0 — and when it is not, `_snapshot_times` drops the entire
 # trailing save interval. Measured 2026-09-15 before this snap: gate (b) asked for 10 τ_drag with
 # `save = tf/2` and its last snapshot was at **5.0 τ_drag**, half the window, while the gate's own
 # label said 10; gate (a) lost 12.4 % of its diffusive window at T = 0.45 and 0.30. Both still
@@ -70,10 +70,10 @@ end
 
 println("── (c) ℓ=1 decay rate ──")
 # Two estimators of the rate at which a boosted Jüttner's current ⟨p_x⟩ decays:
-#   · the INSTANTANEOUS rate the ensemble realises, η_D⟨(M/E)p_x⟩/⟨p_x⟩ (exact moment equation) — a
+#   · the instantaneous rate the ensemble realises, η_D⟨(M/E)p_x⟩/⟨p_x⟩ (exact moment equation) — a
 #     ratio of two sums over the same particles, noise ≈ 0.2 % at N = 10⁶; it starts at λ₁ and drifts
 #     down by ≈ 1 % over ηt ≤ 0.8 because δf ∝ p_x f_eq is not an eigenmode (slow high-E particles);
-#   · the FITTED slope of ln⟨p_x⟩ — carries the accumulated kick noise, ±2.4 % at N = 10⁶ (seed scan:
+#   · the fitted slope of ln⟨p_x⟩ — carries the accumulated kick noise, ±2.4 % at N = 10⁶ (seed scan:
 #     0.683, 0.703, 0.688, 0.715 around λ₁ = 0.698). Gate it at the noise floor, not tighter.
 let T = 0.30, N = 1_000_000, v = 0.05
     γ = 1 / sqrt(1 - v^2)

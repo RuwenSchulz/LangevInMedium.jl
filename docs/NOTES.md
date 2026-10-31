@@ -11,7 +11,7 @@ defect ledgers are also in `CHANGELOG.md` under 0.2.3 and 0.2.4.
 - **Pre-point relativistic drag**: `η_D·m/E` is evaluated at the start of the step ⇒ an O(ηΔt)
   bias on ⟨p²⟩, ≈ −1 % at ηΔt = 0.1 and below resolution at production ηΔt ≈ 3·10⁻³. The
   Galilean propagator is exact at any Δt.
-- 🔴 **`integrator_mode = 1` makes that bias WORSE, not better** (measured 2026-08-31, N = 10⁶,
+- **`integrator_mode = 1` makes that bias worse, not better** (measured 2026-08-31, N = 10⁶,
   SEM 0.14 %, uniform bath against the 2-D Jüttner ⟨p²⟩):
 
   | ηΔt | mode 0 | mode 1 | ratio |
@@ -31,7 +31,7 @@ defect ledgers are also in `CHANGELOG.md` under 0.2.3 and 0.2.4.
   driver maps its `integrator` option with `== "mid" ? 1 : 0` and no recipe passes `"mid"`.
   Gated in `test_gpu_only_paths.jl` `@testset "F5"`; not fixed, because a fix changes what mode 1
   computes.
-- 🔴 **`eval_tau_n_spline` extrapolates outside its table** and can return a NEGATIVE time, which
+- **`eval_tau_n_spline` extrapolates outside its table** and can return a negative time, which
   every kernel reads as `η_D = κ = 0` — silent free streaming with neither drag nor noise. Not
   reachable through the drivers (they span the spline over the whole `T` table and the background
   interpolant clamps into it); reachable by any external caller, and this function is exported.
@@ -52,15 +52,15 @@ defect ledgers are also in `CHANGELOG.md` under 0.2.3 and 0.2.4.
 - GPU: the methods exist only after `using CUDA` (Requires.jl, not precompiled); `:rta` and
   `:langevin` only; the momentum history for `N·(saves+1)` lives on the device until the end.
 
-#### The LIMITS and the INPUT CONTRACT (found 2026-09-02, all FIXED in 0.2.3)
+#### The limits and the input contract (found 2026-09-02, all fixed in 0.2.3)
 
 The 0.2.1 audit covered every function and 0.2.2 the p_z frame. Neither asked what the engine does
 when it is asked for a *limit*, or handed an input outside its assumptions. Seven defects came out
 of that question. All are fixed; each is gated in `test/test_limits_and_contracts.jl` (41 assertions)
 with the pre-fix measurement in the comment, so a regression has something specific to fail against.
-⚠ **Three of the seven move numbers** — see "What regenerates" below.
+**Three of the seven move numbers** — see "What regenerates" below.
 
-- 🔴🔴 **`sample_particles_from_FONLL` assumed a UNIFORM grid, and was FIRST ORDER even there.**
+- **`sample_particles_from_FONLL` assumed a uniform grid, and was first order even there.**
   Its inverse CDF was `cumsum(w) * mean(diff(grid))` — a right-Riemann sum with one constant
   spacing. Now a cumulative trapezoid on the actual nodes (`Utils._cumtrapz`). Against the exact
   ⟨p⟩ of `P(p) ∝ p·f(p)` on the same range, FONLL-like `(1+(p/2.1)²)^(−3.1)`, 12 independent seeds:
@@ -74,37 +74,37 @@ with the pre-fix measurement in the comment, so a regression has something speci
 
   Two separate errors were in there. On a uniform grid the old rule converged (O(Δp)), so the
   production np = 300 cost ≈ −1 % on ⟨p_T⟩ and −1 % on ⟨p_T²⟩ of every FONLL initial condition —
-  partly cancelling in a ratio carrying the same IC top and bottom. On a NON-uniform grid it was
+  partly cancelling in a ratio carrying the same IC top and bottom. On a non-uniform grid it was
   simply the wrong quadrature and refinement did not help (−25.7 % at 160 log-spaced points, still
-  −24.7 % at 1600). The residual is now grid-INDEPENDENT, which is the signature that the
+  −24.7 % at 1600). The residual is now grid-independent, which is the signature that the
   quadrature is right, and sits at the measurement's own resolution.
-- 🔴 **The glued-to-the-flow limit forgot the `p_z` row.** `kernel_set_to_fluid_velocity_*` wrote
+- **The glued-to-the-flow limit forgot the `p_z` row.** `kernel_set_to_fluid_velocity_*` wrote
   momentum rows 1–2 only, on both backends, so with `momentum_dimensions = 3` row 3 kept whatever
   the IC put there and still entered `E = √(m² + p_⊥² + p_z*²)`: the particle that is supposed to
   *be* the fluid element streamed slower than it. Measured at v = 0.5, T = 0.30, τ ∈ [0.4, 2.4]:
   ⟨v_x⟩ = **0.4645 against the fluid's 0.5000, −7.10 %** (CPU and GPU to six digits), ⟨p_z*²⟩ =
   0.596 GeV² alive at the end. Both kernels now zero every row beyond the spatial ones — the fluid
   is longitudinally comoving in Milne by construction. Measured after: **0.500000, deficit 0.0000 %,
-  ⟨p_z*²⟩ = 0**. The old gate could not see it: `test_momentum_dims3.jl` "(R)" uses a ZERO-flow box.
-- 🔴 **`D_sT` had three limits and no way to name the third.** `DsT == 0.0` branches into the glue
+  ⟨p_z*²⟩ = 0**. The old gate could not see it: `test_momentum_dims3.jl` "(R)" uses a zero-flow box.
+- **`D_sT` had three limits and no way to name the third.** `DsT == 0.0` branches into the glue
   kernel: `p = m·γ·v`, the **cold comoving** limit (measured 0.86603 = m·γ·v exactly). `DsT → 0⁺` is
   a *different* limit — thermal comoving, ⟨p_x⟩ = γv⟨E*⟩ = **1.0350**, 19.5 % higher. Free streaming
   was neither, and was reachable only through a **negative** `DsT`, by accident. Three places in the
-  tree called `DsT = 0` "free streaming" (this README's trap list, `CLAUDE.md`,
+  tree called `DsT = 0` "free streaming" (this README's trap list, the parent repository's house rules,
   `Projects/SpectraDiagnostic/plot_dst_sweep.jl`, and `AttractorPaper5/Code/run_langevin_kompost.jl`,
   which *ran* it and labelled the curve). Now **`collision_mode = :none` is free streaming**, on both
   backends: no drag, no noise, and no boost pair either, so the momenta are exactly constant (the
   only residue is the documented γ regularisation in the single t0 lab boost, 6.7e-11 at v = 0.5).
   The Bjorken redshift still applies under `:none`, being the longitudinal free-streaming law.
-- 🔴 **`m ≤ 0` and `DsT < 0` degraded SILENTLY to free streaming** — `tau_drag` returns 0.0 for any
+- **`m ≤ 0` and `DsT < 0` degraded silently to free streaming** — `tau_drag` returns 0.0 for any
   non-positive argument and every kernel reads `τ ≤ 0` as `η_D = κ = 0`, so a mistyped mass gave a
   free-streaming run indistinguishable from a Langevin run except by its numbers (measured: ⟨p²⟩
   frozen to 1e-9, nothing said). Both are now refused with a message that names the alternative.
   `DsT == 0` stays legal — it is the comoving limit, not an error.
-- 🔴 **The background table was never checked against the requested window.** `interpolate_2d_*`
+- **The background table was never checked against the requested window.** `interpolate_2d_*`
   clamps into the table — right for a particle at the rim, wrong for a run that outlives the hydro
   output: past `tgrid[end]` the medium froze at its last slice and the run continued, silently, on
-  both backends. The clamping is KEPT (it is occasionally deliberate) and is now announced, by two
+  both backends. The clamping is kept (it is occasionally deliberate) and is now announced, by two
   once-per-run warnings: the window check at entry, and an escaped-particle count at exit
   (measured: on a table cut at r = 8 fm, **16.2 %** of a 20 000-particle ensemble finished outside
   it, out to r = 15.2 fm, dragged at the rim `T` and `v` the whole way). Neither carries `maxlog`,
@@ -136,17 +136,17 @@ with the pre-fix measurement in the comment, so a regression has something speci
   on and off, max |Δ| = **0.000e+00**). The 0.2.1 hot-loop rewrite has held: **0 bytes per
   particle-step** across CPU × N ∈ {2·10⁴, 10⁵} × pdim ∈ {2, 3} × {`:langevin`, `:rta`}.
 
-#### THE DIAGNOSTICS THAT COULD NOT BE HEARD (found 2026-09-15, all FIXED in 0.2.4)
+#### The diagnostics that could not be heard (found 2026-09-15, all fixed in 0.2.4)
 
 0.2.3 asked what the engine does at a limit. This pass asked the next question — whether the
 warnings it added can actually be *heard* in the way the engine is really driven, which is a
-campaign of many runs in one session. Three defects, none of which moves a number: all ten corpus
+campaign of many runs in one Julia session. Three defects, none of which moves a number: all ten corpus
 CPU hashes reproduce bit for bit and the GPU moments match.
 
-- 🔴 **The dropped-history warning carried `maxlog = 1`, so only the FIRST affected run in a session
+- **The dropped-history warning carried `maxlog = 1`, so only the first affected run in a Julia session
   said anything.** `maxlog` is keyed by source location — exactly the reason the 0.2.3 window and
   escaped-particle warnings were deliberately written without it. Losing history silently is the one
-  thing this warning exists to prevent, and it prevented it once per session. Measured: five
+  thing this warning exists to prevent, and it prevented it once per Julia session. Measured: five
   consecutive `_snapshot_times` calls at t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 each
   returned history only out to **0.9 fm of a requested 1.4 fm — half the evolution — and four of the
   five were silent.** The `maxlog` is gone, and the message now names `requested_final_time` and
@@ -160,7 +160,7 @@ CPU hashes reproduce bit for bit and the GPU moments match.
   ties fall in the zero-density tail and the sampled ⟨p⟩ was bit-identical from scale 1 to 10⁹),
   which is why nothing caught it; a tie in a populated region would not have been harmless. Now
   `nextfloat`, the representable step at any magnitude.
-- 🔴 **`bench_physics_gates.jl` gate (b) is labelled "tail after 10 τ_drag" and measured the tail
+- **`bench_physics_gates.jl` gate (b) is labelled "tail after 10 τ_drag" and measured the tail
   after 5.0.** These gates take `tfinal` from a physical time (`10/η_D` = 3.826 fm), so `tfinal/Δt`
   is an arbitrary real, `steps % save_every ≠ 0`, and with `save = tfinal/2` the whole trailing save
   interval went: last snapshot **1.914 fm, exactly half the window**. Gate (a) lost 12.4 % of its

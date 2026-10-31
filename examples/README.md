@@ -23,7 +23,7 @@ carry, kept out of the way so each example is only about the engine.
 
 ## Things worth taking from them
 
-- **`p_init` is a LOCAL-REST-FRAME momentum.** The engine applies the `t0` lab boost itself. On a
+- **`p_init` is a local-rest-frame momentum.** The engine applies the `t0` lab boost itself. On a
   flowing background that is a factor of `γ(1 + v·…)`, not a detail.
 - **`dimensions` sets the positions, `momentum_dimensions` the momenta.** A 2-D momentum run relaxes
   to the 2-D Jüttner, whose ℓ=1 rate differs from the 3-D `K₂/K₃·η_D` by 5–12 % over `z = 3.5–10` —

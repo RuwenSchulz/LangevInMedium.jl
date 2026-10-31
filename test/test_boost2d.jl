@@ -2,34 +2,34 @@
 # test/test_boost2d.jl — the boost kernels on a 2-D (vector) background.
 #
 # Step 2. `interpolate_3d_cpu` (test_background3d.jl) supplies T, u^x, u^y at the particle's own
-# (x, y, tau); this gives the boost kernels a flow DIRECTION of their own instead of r-hat.
+# (x, y, tau); this gives the boost kernels a flow direction of their own instead of r-hat.
 #
 # Four things have to hold, and the first is the one that makes the rest believable.
 #
-#   1. REDUCTION. Handed a purely RADIAL vector field u = v(r,t) r-hat, the 2-D path must reproduce
+#   1. Reduction. Handed a purely radial vector field u = v(r,t) r-hat, the 2-D path must reproduce
 #      the shipped radial path. This is the only check that ties the new path to eight months of
 #      validated results.
-#      ⚠ NOT to rounding, and I first asserted that it would be. The two paths interpolate
-#      DIFFERENT TABLES -- v(r,t) bilinearly on a radial grid, (u^x,u^y)(x,y,t) trilinearly on a
+#      Not to rounding, though this test first asserted that it would be. The two paths interpolate
+#      different tables -- v(r,t) bilinearly on a radial grid, (u^x,u^y)(x,y,t) trilinearly on a
 #      Cartesian one -- and hypot of two interpolated components is not the interpolant of the
 #      magnitude. The gap is interpolation error, ~1e-3 at the grids used here, and demanding
 #      rounding would be demanding something false. What distinguishes interpolation error from a
-#      logic bug is that it CONVERGES: the test refines both grids together and requires the
+#      logic bug is that it converges: the test refines both grids together and requires the
 #      discrepancy to fall. A wrong direction or a wrong sign would sit at a constant.
 #
-#   2. ROUND TRIP. rest-frame then lab-frame must be the identity, on a genuinely non-radial flow.
-#      That is what says the two kernels were generalised CONSISTENTLY; a sign or direction error
+#   2. Round trip. rest-frame then lab-frame must be the identity, on a genuinely non-radial flow.
+#      That is what says the two kernels were generalised consistently; a sign or direction error
 #      in one alone would survive test 1 (which uses a radial field) and fail here.
-#      ⚠ Exact only to ~1e-10, and that is PRE-EXISTING: the shipped kernels use
+#      Exact only to ~1e-10, and that is pre-existing: the shipped kernels use
 #      gamma = 1/sqrt(1 - v^2 + 1e-10), and that regulator makes the forward and inverse boosts
 #      not quite reciprocal (gamma^2(1-v^2) = 1 - 1e-10/(1-v^2)). The radial path is measured
 #      alongside as the control, and it carries the same error.
 #
-#   3. IT ACTUALLY DOES SOMETHING NEW. On a rotational flow the 2-D path must DIFFER from the
+#   3. It actually does something new. On a rotational flow the 2-D path must differ from the
 #      radial path by a large margin. Without this, 1 and 2 are equally satisfied by a kernel that
 #      silently ignores the new arguments.
 #
-#   4. GUARDS. `radial_mode` (a p_r-only momentum row) cannot represent a boost along a non-radial
+#   4. Guards. `radial_mode` (a p_r-only momentum row) cannot represent a boost along a non-radial
 #      flow and must refuse rather than quietly project.
 #
 # Run: julia --project=Julia Julia/LangevInMedium.jl/test/test_boost2d.jl
@@ -77,7 +77,7 @@ end
     rs, ts, V2, xs, ys, VX, VY = radial_pair()
 
     @testset "1. reduces to the shipped radial path on a radial field" begin
-        # Refine BOTH tables together. Interpolation error falls; a logic error would not.
+        # Refine both tables together. Interpolation error falls; a logic error would not.
         prev = NaN; errs = Float64[]
         for nref in (1, 2, 4)
             rs2, ts2, V22, xs2, ys2, VX2, VY2 = radial_pair(; nr = 40*nref + 1, nxy = 64*nref + 1)
@@ -120,7 +120,7 @@ end
         kernel_boost_to_lab_frame_cpu!(p, pos, xs, tsr, nothing, M, size(pos,2), 3, DT, T0;
                                        ygrid = ys, VxField = UX, VyField = UY)
         worst = maximum(abs, p .- mom); scale = maximum(abs, mom)
-        # CONTROL: the shipped radial path round-trips no better -- the gamma regulator, not the
+        # Control: the shipped radial path round-trips no better -- the gamma regulator, not the
         # generalisation, is what limits this.
         pr = copy(mom)
         kernel_boost_to_rest_frame_cpu!(pr, pos, rs, ts, V2, M, size(pos,2), 3, DT, T0)

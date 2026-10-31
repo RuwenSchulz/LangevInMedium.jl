@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# 02 — A HEAVY-ION RUN: cooling fireball, FONLL initial condition, freeze-out spectrum
+# 02 — a heavy-ion run: cooling fireball, FONLL initial condition, freeze-out spectrum
 #
 # The production shape of a real run, with a synthetic background so it needs no hydro output. What
 # it demonstrates:
@@ -9,7 +9,7 @@
 #   · the temperature-dependent D_sT prescriptions;
 #   · reading a freeze-out spectrum off the histories, and what "freeze-out" costs you if you do
 #     it from snapshots rather than on the fly (example 05 shows the GPU's on-the-fly latch);
-#   · the RADIAL FLOW picking the spectrum up — the physics the whole apparatus exists for.
+#   · the radial flow picking the spectrum up — the physics the whole apparatus exists for.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/examples/02_bjorken_fireball.jl
 # ==============================================================================================
@@ -31,7 +31,7 @@ xg, tg, Tf, Vf = bjorken_fireball(; τ0 = τ0, τf = τf)
 # The engine samples `N_particles` from `density[p_index, r_index]` on `(r_grid, p_grid)`:
 # positions by inverse CDF of `P(r) ∝ r·n(r)` (or by rejection in the disc, see below), momenta
 # from the conditional `P(p|r) ∝ p·f(r, p)` at the nearest tabulated r, with isotropic azimuth.
-# ⚠ Both quadratures are trapezoids on the nodes YOU hand it (0.2.3). A uniform grid is what every
+# Both quadratures are trapezoids on the nodes you hand it (0.2.3). A uniform grid is what every
 # driver builds and what the resolution below assumes: np = 300 over [0, 10] costs ≈ 0.1 % on the
 # sampled ⟨p_T⟩; np = 100 would cost ≈ 3 %.
 r_grid = collect(range(0.0, 20.0; length = 150))
@@ -46,7 +46,7 @@ CART = false
 # ── the run ────────────────────────────────────────────────────────────────────────────────────
 # `DsT_linear` makes D_sT(T) = slope·max(T, Tfo) + offset — the lattice-QCD-shaped law. The
 # alternative prescriptions are a constant D_sT (the default) and `DsT_quad` (D_sT ∝ T², i.e. a
-# T-INDEPENDENT drag time, the one member of the family for which the non-relativistic solvable
+# T-independent drag time, the one member of the family for which the non-relativistic solvable
 # class closes on an inhomogeneous T(r)).
 Random.seed!(2)
 t, mom, pos = simulate_ensemble_bulk(CPUBackend(), r_grid, p_grid, density, Tf, Vf, (xg, tg);
@@ -61,7 +61,7 @@ t, mom, pos = simulate_ensemble_bulk(CPUBackend(), r_grid, p_grid, density, Tf, 
     dimensions    = 2,
     momentum_dimensions = 3,       # 3-D momenta on the 2-D plane (example 01 explains why)
     bjorken_redshift = true,       # dp_z/dτ = −p_z/τ: the longitudinal work a 2-D run omits
-    proper_time_kicks = true,      # kick per the PARTICLE's proper time, not the lab step
+    proper_time_kicks = true,      # kick per the particle's proper time, not the lab step
     cartesian_spatial_sampling = CART,
     reflecting_boundary = false)
 t = collect(t)
@@ -70,7 +70,7 @@ t = collect(t)
 # With the undilated lab-Δt kick the stationary state on a flowing background is f_J/(γ(1+v·v_r))
 # rather than the boosted Jüttner, which shows up as a spurious inward diffusion current
 # ν^r/n ≈ −γv⟨v_r²⟩. `proper_time_kicks = true` runs the OU attenuation over Δt* = Δt·E*/E_lab.
-# It defaults to FALSE so that pre-2026-08 products stay bit-identical; new work should set it.
+# It defaults to false so that pre-2026-08 products stay bit-identical; new work should set it.
 
 # ── freeze-out from the snapshots ──────────────────────────────────────────────────────────────
 # The honest version: a particle freezes out the first time its local T drops below Tfo. Reading

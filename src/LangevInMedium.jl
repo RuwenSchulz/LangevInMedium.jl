@@ -26,6 +26,7 @@ include("constants.jl")         # ħc and the GeV⁻¹ ↔ fm conversion
 include("backends.jl")          # CPUBackend / GPUBackend singletons
 include("utils.jl")             # initial-condition samplers, the p_z completion
 include("transport.jl")         # τ_drag, τ_n (current), D_sT prescriptions, Jüttner inverse CDF
+include("kappa_law.jl")         # κ_L(p, T) ≠ κ_T(p, T): the law, its Green–Kubo normalisation, the step
 include("kernels_cpu.jl")       # the per-step CPU kernels
 include("timegrid.jl")          # the variable time step: adaptive_time_grid, check_time_grid
 include("simulate_cpu.jl")      # CPU driver
@@ -35,6 +36,7 @@ using .Constants
 using .Backends
 using .Utils
 using .Transport
+using .KappaLaws
 using .Simulate
 using .TimeGrid
 
@@ -44,5 +46,6 @@ export fmGeV, GevInvTofm
 export tau_n_main3, tau_drag, build_tau_drag_spline, build_taun_current_spline, eval_tau_n_spline, effective_DsT
 export sample_particles_from_FONLL
 export adaptive_time_grid
+export KappaLaw, kappa_green_kubo_ratio, build_kappa_table
 
 end # module LangevInMedium

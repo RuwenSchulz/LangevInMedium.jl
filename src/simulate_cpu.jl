@@ -7,26 +7,28 @@ using ..KernelsCPU
 using ..Utils
 using ..Transport
 using ..TimeGrid
+using ..KappaLaws: KappaLaw, build_kappa_table
 
 # === Exported Symbols ===
 export simulate_ensemble_bulk_cpu, _snapshot_times, _step_count, _check_time_window,
-       _warn_escaped_particles, _validate_transport_inputs, _variable_step_grid
+       _warn_escaped_particles, _validate_transport_inputs, _variable_step_grid,
+       _validate_kappa_law
 
 """
     _step_count(t0, tf, Δt) -> Int
 
 Number of steps in `[t0, tf]`, immune to the binary representation of the endpoints.
 
-🔴 FIXED 2026-09-02. This was a bare `floor(Int, (tf − t0)/Δt)`. When the difference is not exactly
-representable — `1.4 − 0.4 = 0.9999999999999999` — the quotient lands a fraction of an ulp BELOW the
+Fixed 2026-09-02. This was a bare `floor(Int, (tf − t0)/Δt)`. When the difference is not exactly
+representable — `1.4 − 0.4 = 0.9999999999999999` — the quotient lands a fraction of an ulp below the
 integer and `floor` takes a whole step off. Usually that is one step of 10⁻³ fm and nobody notices;
 the damage is that it also breaks `steps % save_every == 0`, and then `_snapshot_times` drops the
 entire trailing save interval and blames `save_interval` for "not dividing the evolution".
-MEASURED worst case: t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 kept 501 of 1000 steps —
-HALF the requested history, silently, with a warning pointing at the wrong cause.
+Measured worst case: t0 = 0.4, tf = 1.4, Δt = 10⁻³, `save_interval` = 0.5 kept 501 of 1000 steps —
+half the requested history, silently, with a warning pointing at the wrong cause.
 
 The snap tolerance is 64 ulps of the quotient (≈ 9·10⁻¹⁰ at q = 1.26·10⁵), which is ~4 orders above
-any representation error and ~3 below any shortfall a caller could mean. ⚠ It DOES change runs whose
+any representation error and ~3 below any shortfall a caller could mean. It does change runs whose
 window was previously mis-floored: AttractorHydro's portrait (0.4 → 13.0 at Δt = 10⁻⁴) goes
 125 999 → 126 000 steps and 1260 → 1261 snapshots. LP1's 12.6 fm and O+O's 7.6 fm divide exactly and
 are untouched.
@@ -46,9 +48,9 @@ end
 
 Warn when the requested evolution leaves the tabulated time axis.
 
-🔴 ADDED 2026-09-02. `interpolate_2d_*` clamps every query into the table — right for a particle
+Added 2026-09-02. `interpolate_2d_*` clamps every query into the table — right for a particle
 leaving the fireball rim, wrong for a run that outlives the hydro output. Past `tgrid[end]` the
-medium FREEZES at its last tabulated slice and the run continues, with no error and no warning, on
+medium freezes at its last tabulated slice and the run continues, with no error and no warning, on
 both backends (measured: a table ending at τ = 2 integrated to τ = 6 kept evolving in the τ = 2
 medium). A warning, not an error: freezing the medium is occasionally what a caller wants, and
 AttractorMomentum's own driver already validates the window before calling.
@@ -67,10 +69,10 @@ end
 
 Warn if any particle finished outside the tabulated radial axis, where `T` and `v` are frozen at
 their rim values — an effectively infinite fireball. Added 2026-09-02 with `_check_time_window`;
-NO `maxlog`: both are once-per-RUN diagnostics, and `maxlog` is keyed by source location, so it
+NO `maxlog`: both are once-per-run diagnostics, and `maxlog` is keyed by source location, so it
 would silence every call after the first in a campaign that drives the engine many times;
 measured on a table cut at r = 8 fm, 16.2 % of a 20 000-particle ensemble ended outside it, out to
-r = 15.2 fm. One pass over the FINAL positions only, so it costs nothing per step.
+r = 15.2 fm. One pass over the final positions only, so it costs nothing per step.
 """
 function _warn_escaped_particles(positions::AbstractMatrix, xgrid)
     N = size(positions, 2)
@@ -96,12 +98,12 @@ end
 """
     _validate_transport_inputs(m, DsT)
 
-🔴 ADDED 2026-09-02. `tau_drag` returns 0.0 for any non-positive `m`, `T` or `DsT`, and every kernel
+Added 2026-09-02. `tau_drag` returns 0.0 for any non-positive `m`, `T` or `DsT`, and every kernel
 reads `τ ≤ 0` as `η_D = κ = 0`. So a mistyped mass or a negative `D_sT` used to produce a
-FREE-STREAMING run indistinguishable from a Langevin run except by its numbers — measured, `m = 0`,
+free-streaming run indistinguishable from a Langevin run except by its numbers — measured, `m = 0`,
 `m = −1.5` and `DsT = −0.1` all left ⟨p²⟩ frozen to 1e-9, with nothing said. Both are now refused.
 
-`DsT == 0` stays legal and is NOT free streaming: it is the comoving limit (`p = m·γ·v`, every
+`DsT == 0` stays legal and is not free streaming: it is the comoving limit (`p = m·γ·v`, every
 particle handed the fluid's momentum). Ask for free streaming with `collision_mode = :none`.
 """
 function _validate_transport_inputs(m::Real, DsT::Real)
@@ -113,6 +115,30 @@ function _validate_transport_inputs(m::Real, DsT::Real)
 end
 
 """
+    _validate_kappa_law(kappa_law; dimensions, relativistic, collision_mode, momentum_langevin, DsT,
+                        adaptive_dt, integrator_mode)
+
+Refuse every combination in which a `kappa_law` would be silently ignored or would not mean what it
+says (2026-10-24). The law is a statement about the relativistic Langevin operator in the Cartesian
+rest frame, so: not in radial mode (one momentum row has no transverse direction), not with
+`relativistic = false` (its stationary state is the Jüttner), not under `:rta`/`:none` or the
+comoving limit (no Langevin step to modify), and not with `adaptive_dt` (the grid is built from the
+constant-κ drag; pass a `time_grid` instead) or the GPU's drift-midpoint `integrator_mode = 1`.
+"""
+function _validate_kappa_law(kappa_law; dimensions, relativistic, collision_mode, momentum_langevin,
+                             DsT, adaptive_dt, integrator_mode = 0)
+    kappa_law === nothing && return nothing
+    kappa_law isa KappaLaw || error("simulate_ensemble_bulk: kappa_law must be a KappaLaw, got $(typeof(kappa_law))")
+    dimensions == 1 && error("simulate_ensemble_bulk: kappa_law needs the Cartesian path; radial mode (dimensions = 1) carries p_r only and has no transverse direction")
+    relativistic || error("simulate_ensemble_bulk: kappa_law keeps the Jüttner stationary and needs relativistic = true")
+    collision_mode === :langevin || error("simulate_ensemble_bulk: kappa_law modifies the Langevin step; collision_mode = $(collision_mode) would ignore it")
+    (momentum_langevin && DsT > 0) || error("simulate_ensemble_bulk: kappa_law with the comoving limit (DsT = 0 or momentum_langevin = false) would be ignored")
+    adaptive_dt && error("simulate_ensemble_bulk: adaptive_dt builds the step from the constant-κ drag and does not see a kappa_law; pass an explicit time_grid")
+    integrator_mode == 0 || error("simulate_ensemble_bulk: kappa_law is implemented for integrator_mode = 0 only")
+    return nothing
+end
+
+"""
     _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
 
 Times of the `num_saves + 1` stored snapshots. Snapshot k (k = 0…num_saves) is taken after step
@@ -120,11 +146,11 @@ k·save_every, i.e. at t0 + k·save_every·Δt. Returns the historical `range(t0
 that is exact (steps divisible by save_every) so existing outputs are unchanged; otherwise the
 true times, with a warning that the last `steps − num_saves·save_every` steps are not in the history.
 
-NO `maxlog`, for the reason given at `_warn_escaped_particles`: this is a once-per-RUN diagnostic
+NO `maxlog`, for the reason given at `_warn_escaped_particles`: this is a once-per-run diagnostic
 and `maxlog` is keyed by source location, so it silenced every run after the first in a campaign
 that drives the engine many times. Measured 2026-09-15 with `maxlog = 1` still in place: five
 consecutive calls at t0 = 0.4, tf = 1.4, Δt = 10⁻³, save_interval = 0.5 each returned history only
-out to 0.9 fm — half the requested evolution — and only the FIRST said so. Dropping history
+out to 0.9 fm — half the requested evolution — and only the first said so. Dropping history
 silently is exactly what this warning exists to prevent.
 """
 function _snapshot_times(t0, tf, Δt, steps, save_every, num_saves)
@@ -191,11 +217,11 @@ function simulate_ensemble_bulk_cpu(
     momentum_dimensions::Int = 0,
     # dp_z/dτ = −p_z/τ between kicks (Bjorken longitudinal free-streaming); needs momentum_dimensions=3.
     bjorken_redshift::Bool = false,
-    # WHERE the Bjorken redshift acts (2026-09-22). `:lrf` (default, every shipped product) scales p_z
-    # AFTER the boost to the rest frame; the back-boost then uses the reduced E*, so the LAB transverse
+    # Where the Bjorken redshift acts (2026-09-22). `:lrf` (default, every shipped product) scales p_z
+    # after the boost to the rest frame; the back-boost then uses the reduced E*, so the lab transverse
     # momentum falls by γ·v·δE* every step — a spurious force −u^r p_z²/(τE*) in the fluid frame whose
     # current is −n D_s κ₂ u^r/τ, κ₂ = ⟨p_x²p_z²/E²⟩/T² (≈0.9). Free streaming conserves the lab p_T,
-    # which `:lab` does: p_z is scaled on the LAB momenta before the boost. Identical with no flow.
+    # which `:lab` does: p_z is scaled on the lab momenta before the boost. Identical with no flow.
     bjorken_frame::Symbol = :lrf,
     # kick per the particle's proper time (Δt* = Δt·E*/E_lab) — removes the lab-simultaneity
     # ν^r artifact on flowing backgrounds; default false = production byte-identical.
@@ -205,10 +231,10 @@ function simulate_ensemble_bulk_cpu(
     # every existing product bit-identical.
     pz_init::Symbol = :thermal,
     # accumulate the spacetime rapidity η_s (dη_s/dτ = (1/τ)(p_z*/E*)) and return its history as a
-    # FOURTH element. η_s is a passenger — nothing reads it — so this cannot move any other number;
+    # fourth element. η_s is a passenger — nothing reads it — so this cannot move any other number;
     # with it, y_lab = η_s + atanh(p_z*/E*). Needs momentum_dimensions = 3 and initial_time > 0.
     track_eta_s::Bool = false,
-    # VARIABLE TIME STEP (2026-10-12). `adaptive_dt = true` builds the step boundaries from the
+    # Variable time step (2026-10-12). `adaptive_dt = true` builds the step boundaries from the
     # background with `adaptive_time_grid` (timegrid.jl: η_D·h ≤ adaptive_drag_tol in the hottest
     # cell, h·|∂τ η_D| ≤ adaptive_bg_tol·η_max, dt_min ≤ h ≤ dt_max); `time_grid` hands them in
     # directly. Either way `Δt` is unused and snapshots land exactly on t0 + k·save_interval and on
@@ -218,19 +244,24 @@ function simulate_ensemble_bulk_cpu(
     adaptive_bg_tol::Float64 = 0.01,
     dt_min::Float64 = 1e-5,
     dt_max::Float64 = 0.1,
-    time_grid::Union{Nothing, AbstractVector} = nothing)
+    time_grid::Union{Nothing, AbstractVector} = nothing,
+    # κ_L(p, T) ≠ κ_T(p, T) (kappa_law.jl). `nothing` = the constant isotropic κ, whose kernel is
+    # untouched — a run without a law is bit-identical to before.
+    kappa_law::Union{Nothing, KappaLaw} = nothing)
 
     # === Setup and Preallocation ===
-    # 🔴 2026-09-02: refuse the inputs that used to degrade to silent free streaming, and say so
+    # 2026-09-02: refuse the inputs that used to degrade to silent free streaming, and say so
     # when the requested window leaves the background table (both are new; see the helpers above).
     _validate_transport_inputs(m, DsT)
     bjorken_frame in (:lrf, :lab) || error("simulate_ensemble_bulk: bjorken_frame must be :lrf or :lab, got $(bjorken_frame)")
-    # SpaceTimeGrid[end], not [2]: on a 3-element (x, y, t) grid the second entry is the Y AXIS,
+    _validate_kappa_law(kappa_law; dimensions, relativistic, collision_mode, momentum_langevin, DsT,
+                        adaptive_dt = adaptive_dt && time_grid === nothing)
+    # SpaceTimeGrid[end], not [2]: on a 3-element (x, y, t) grid the second entry is the Y axis,
     # and checking the run window against it is silently vacuous whenever the box happens to
     # bracket the times.
     _check_time_window(initial_time, final_time, SpaceTimeGrid[end])
     total_time = final_time - initial_time
-    # `:none` = FREE STREAMING; see the note below where it is used.
+    # `:none` = free streaming; see the note below where it is used.
     free_stream = collision_mode === :none
     # grid === nothing ⇒ the fixed-Δt loop. Otherwise step k runs from grid[k] to grid[k+1] and the
     # snapshots are taken after the steps in save_steps (timegrid.jl).
@@ -258,17 +289,17 @@ function simulate_ensemble_bulk_cpu(
         end
     end
 
-    # `:none` = FREE STREAMING (2026-09-02). It exists because the tree had no way to ask for it:
-    # `DsT = 0` is the COMOVING limit (p = m·γ·v) and `momentum_langevin = false` is the same limit,
-    # while the only thing that actually free-streamed was a NEGATIVE DsT — by accident, through
+    # `:none` = free streaming (2026-09-02). It exists because the tree had no way to ask for it:
+    # `DsT = 0` is the comoving limit (p = m·γ·v) and `momentum_langevin = false` is the same limit,
+    # while the only thing that actually free-streamed was a negative DsT — by accident, through
     # `tau_drag ≤ 0 ⇒ η_D = κ = 0`, which is now refused. Three call sites in the tree asked for
     # "free streaming" and got the comoving limit; see docs/NOTES.md "The LIMITS and the INPUT CONTRACT".
     # (`free_stream` itself is set above, before the time grid, which needs it.)
 
-    # --- BACKGROUND GEOMETRY: dispatched on what was handed in, never on a flag ---
-    # A 2-tuple (xgrid, tgrid) with a matrix T is the shipped RADIAL background. A 3-tuple
+    # --- background geometry: dispatched on what was handed in, never on a flag ---
+    # A 2-tuple (xgrid, tgrid) with a matrix T is the shipped radial background. A 3-tuple
     # (xgrid, ygrid, tgrid) with a 3-D T and a (u^x, u^y) pair is a genuine function of the
-    # transverse PLANE. Dispatching on the data rather than on a keyword means the radial path
+    # transverse plane. Dispatching on the data rather than on a keyword means the radial path
     # cannot be reached by accident and the 2-D path cannot be half-selected: a 3-D table with a
     # 2-tuple grid is a shape error, not a silently different physics run.
     local xgrid, ygrid, tgrid, VxField, VyField
@@ -294,10 +325,10 @@ function simulate_ensemble_bulk_cpu(
         xgrid, tgrid = SpaceTimeGrid
         ygrid = nothing; VxField = nothing; VyField = nothing
     end
-    # the tables the kernels read for a SCALAR magnitude (temperature always; flow only for
+    # the tables the kernels read for a scalar magnitude (temperature always; flow only for
     # proper_time_kicks) plus the vector pair, bundled once so no call site can pass a subset
     bg2d = (; ygrid = ygrid, VxField = VxField, VyField = VyField)
-    # kernels that only need the flow MAGNITUDE (proper_time_kicks) take `Vfield`, a matrix.
+    # kernels that only need the flow magnitude (proper_time_kicks) take `Vfield`, a matrix.
     # On the 2-D path the magnitude is derived from the vector pair instead, so the scalar
     # table is absent rather than a tuple the kernel signature would reject.
     Vfield_scalar = ygrid === nothing ? VelocityEvolutionn : nothing
@@ -355,7 +386,7 @@ function simulate_ensemble_bulk_cpu(
         # compute r = sqrt(x^2 + y^2)
         r_samples = sqrt.(x_matrix[1, :].^2 .+ x_matrix[2, :].^2)
 
-        # At r≈0 the radial direction ê_r is undefined. Do NOT compute p_r=(x·p)/r
+        # At r≈0 the radial direction ê_r is undefined. Do not compute p_r=(x·p)/r
         # with r≈0 (it creates huge/garbage p_r). Instead, for very small r we
         # choose a random unit vector in the transverse plane.
         dr0 = (length(r_grid_Langevin) >= 2) ? abs(float(r_grid_Langevin[2] - r_grid_Langevin[1])) : 0.0
@@ -398,7 +429,7 @@ function simulate_ensemble_bulk_cpu(
                         pz_init = pz_init, track_eta_s = track_eta_s)
     if size(momenta, 1) < pdim
         # sampled momenta are LRF momenta at this point (the lab boost follows below), so both
-        # completions are statements in the LOCAL REST FRAME: :thermal draws the local Jüttner
+        # completions are statements in the local rest frame: :thermal draws the local Jüttner
         # conditional at T(r, τ0), :comoving sets p_z* = 0 (free-streamed from the production
         # point). See `append_pz`.
         momenta = append_pz(pz_init, momenta, positions, m,
@@ -416,7 +447,7 @@ function simulate_ensemble_bulk_cpu(
 
     momenta_history = zeros(Float64, pdim, N_particles, num_saves + 1)
     position_history = zeros(Float64, dimensions, N_particles, num_saves + 1)
-    # η_s starts at 0 for every particle ON PURPOSE: the engine accumulates only the CHANGE, and
+    # η_s starts at 0 for every particle on purpose: the engine accumulates only the change, and
     # the production value η_s(τ0) is applied afterwards by convolution (it cannot enter the
     # dynamics, so it must not enter the run).
     eta_s         = track_eta_s ? zeros(Float64, N_particles) : Float64[]
@@ -451,7 +482,7 @@ function simulate_ensemble_bulk_cpu(
     tau_Tmin::Float64 = 0.0
     tau_invdT::Float64 = 1.0
     tau_vals = Float64[0.0, 0.0]
-    # RTA/BGK needs the CURRENT time, not the drag — see build_taun_current_spline.
+    # RTA/BGK needs the current time, not the drag — see build_taun_current_spline.
     taun_vals = Float64[0.0, 0.0]
     if momentum_langevin && DsT > 0.0 && !free_stream
         Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
@@ -475,12 +506,17 @@ function simulate_ensemble_bulk_cpu(
                 DsT_Tref = DsT_Tref)
         end
     end
+    # the κ_L/κ_T table over the same temperature range as the drag spline (kappa_law.jl)
+    ktab = kappa_law === nothing ? nothing :
+        build_kappa_table(kappa_law, m, pdim;
+            Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0),
+            Tmax = float(maximum(TemperatureEvolutionn)))
 
 
     # === Langevin Time Evolution Loop ===
     @showprogress 10 "Running Langevin CPU simulation..." for step in 1:steps
         # The step's own (kstep, h, tk), so that every kernel's `tk + kstep·h` is the END of the step
-        # and `tk + (kstep−1)·h` its START. Fixed Δt: exactly the old (step, Δt, initial_time), so the
+        # and `tk + (kstep−1)·h` its start. Fixed Δt: exactly the old (step, Δt, initial_time), so the
         # arithmetic — and every output — is bit-identical. Variable step: (1, t_{k+1} − t_k, t_k).
         if grid === nothing
             kstep = step; h = Δt; tk = initial_time
@@ -488,19 +524,19 @@ function simulate_ensemble_bulk_cpu(
             kstep = 1; tk = grid[step]; h = grid[step + 1] - grid[step]
         end
 
-        # ⚡ randn!(ξ) in place — `ξ .= randn(pdim, N)` allocated a fresh N×pdim matrix EVERY step.
+        # ⚡ randn!(ξ) in place — `ξ .= randn(pdim, N)` allocated a fresh N×pdim matrix every step.
         # Same RNG stream, same values, same order ⇒ bit-identical. Skipped under `:none`, whose
         # only consumer of randomness is the initial sampler.
         free_stream || randn!(ξ)
 
-        # 0. Bjorken redshift on the LAB momenta (bjorken_frame = :lab): lab p_T is conserved, as in
+        # 0. Bjorken redshift on the lab momenta (bjorken_frame = :lab): lab p_T is conserved, as in
         #    free streaming; the boost below then sees the reduced E_lab.
         if bjorken_redshift && bjorken_frame === :lab
             kernel_bjorken_redshift_cpu!(momenta, 3, kstep, h, tk, N_particles)
         end
 
         # 1. Boost momenta to local rest frame.
-        # `collision_mode = :none` is FREE STREAMING (added 2026-09-02): no drag, no noise, and no
+        # `collision_mode = :none` is free streaming (added 2026-09-02): no drag, no noise, and no
         # frame change either — the lab momenta are constant, so the boost pair would be a round
         # trip whose only effect is the γ = 1/√(1−v²+1e-10) contraction (≈1e-10 per step). Skipping
         # it makes free streaming exact. Everything below is bit-identical when free_stream = false.
@@ -513,7 +549,7 @@ function simulate_ensemble_bulk_cpu(
 
         # 1b. Longitudinal redshift of p_z in the LRF (bjorken_frame = :lrf, the shipped ordering).
         # p_z itself is invariant under the transverse boost, but E* is not held by the back-boost:
-        # this ordering lowers the LAB p_T by γ·v·δE* per step (see the bjorken_frame note above).
+        # this ordering lowers the lab p_T by γ·v·δE* per step (see the bjorken_frame note above).
         # dp_z/dτ = −p_z/τ IS the longitudinal free-streaming law, so it belongs in the :none path too.
         if bjorken_redshift && bjorken_frame === :lrf
             kernel_bjorken_redshift_cpu!(momenta, 3, kstep, h, tk, N_particles)
@@ -529,7 +565,7 @@ function simulate_ensemble_bulk_cpu(
                 relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
         elseif collision_mode == :rta
             # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn.
-            # 🔴 τn here is the CURRENT relaxation time (tau_n_main3), NOT the OU drag.
+            # τn here is the current relaxation time (tau_n_main3), not the OU drag.
             # BGK relaxes every moment at 1/τ, so matching the OU's ℓ=1 decay rate — the
             # diffusion-current sector the papers compare — requires τ_n = τ_drag·K₃/K₂.
             # Passing the drag would relax the RTA K₃/K₂ (1.26-1.74×) too fast.
@@ -542,6 +578,23 @@ function simulate_ensemble_bulk_cpu(
                 proper_time_kicks = proper_time_kicks, Vfield = Vfield_scalar, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
 
             # Boost updated momenta back to lab frame
+            kernel_boost_to_lab_frame_cpu!(
+                momenta, positions, xgrid, tgrid,
+                VelocityEvolutionn, m, N_particles, kstep, h, tk,radial_mode = radial_mode,
+                V2Evolution = V2Evolutionn, psi2 = psi2, relativistic = relativistic, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
+        elseif ktab !== nothing
+            # 2'. κ_L(p, T) ≠ κ_T(p, T): its own kernel, so the constant-κ branch below is untouched
+            kernel_compute_forces_kappa_cpu!(
+                TemperatureEvolutionn, xgrid, tgrid,
+                momenta, positions,
+                ξ, deterministic_terms, stochastic_terms,
+                h, m, pdim, N_particles, kstep, tk;
+                tau_Tmin = tau_Tmin, tau_invdT = tau_invdT, tau_vals = tau_vals, ktab = ktab,
+                proper_time_kicks = proper_time_kicks,
+                Vfield = Vfield_scalar, ygrid = bg2d.ygrid, VxField = bg2d.VxField, VyField = bg2d.VyField)
+            kernel_update_momenta_LRF_cpu!(
+                momenta, deterministic_terms, stochastic_terms,
+                h, pdim, N_particles)
             kernel_boost_to_lab_frame_cpu!(
                 momenta, positions, xgrid, tgrid,
                 VelocityEvolutionn, m, N_particles, kstep, h, tk,radial_mode = radial_mode,
@@ -602,7 +655,7 @@ function simulate_ensemble_bulk_cpu(
         # --- NaN / Inf check ---
         if any(!isfinite, momenta) || any(!isfinite, positions)
             @error "Detected NaN or Inf at step=$step" 
-            display("⚠️  Step $step — NaN/Inf detected in simulation state.")
+            display("Warning: step $step — NaN/Inf detected in simulation state.")
             println("Non-finite in momenta? ", any(!isfinite, momenta))
             println("Non-finite in positions? ", any(!isfinite, positions))
             #println("Non-finite values:")
@@ -629,7 +682,7 @@ function simulate_ensemble_bulk_cpu(
 
     end
 
-    # 🔴 2026-09-02: say so if particles finished outside the tabulated radial axis, where T and v
+    # 2026-09-02: say so if particles finished outside the tabulated radial axis, where T and v
     # are frozen at their rim values. One pass over the final positions; nothing per step.
     _warn_escaped_particles(positions, xgrid)
 

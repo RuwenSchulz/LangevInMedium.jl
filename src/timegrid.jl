@@ -1,6 +1,6 @@
 module TimeGrid
 
-# The variable time step (added 2026-10-12). The engine's kernels see time ONLY through
+# The variable time step (added 2026-10-12). The engine's kernels see time only through
 # `t0 + step·Δt` (and the Bjorken/η_s kernels through `t0 + (step−1)·Δt`), so a step of length
 # h_k from t_{k−1} is the call `(step = 1, t0 = t_{k−1}, Δt = h_k)` with no kernel touched. The
 # drivers therefore need only a vector of step boundaries; this module builds one from the
@@ -32,7 +32,7 @@ and the step numbers after which a snapshot is taken. The step is global (every 
 the same h_k) and depends only on the background and the transport parameters, never on the
 particle state, so the grid is the same on the CPU and the GPU and for every seed.
 
-`T_field` is the temperature table with time as its LAST axis (`T[r, τ]` or `T[x, y, τ]`) on
+`T_field` is the temperature table with time as its last axis (`T[r, τ]` or `T[x, y, τ]`) on
 `tgrid`. For each table interval the builder records the hottest drag rate `η_max = max η_D(T)` and
 the fastest change `η̇_max = max |∂_τ η_D|` over all cells, and takes at time t
 

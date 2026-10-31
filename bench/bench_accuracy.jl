@@ -1,29 +1,29 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# bench_accuracy.jl — the Δt ACCURACY BUDGET: how wrong is the engine at a given step size?
+# bench_accuracy.jl — the Δt accuracy budget: how wrong is the engine at a given step size?
 #
-# WHY THIS IS NOT bench_physics_gates (d). That gate pins the propagator's Δt bias inside a 1.5 %
+# Why this is not bench_physics_gates (d). That gate pins the propagator's Δt bias inside a 1.5 %
 # budget at three step sizes and says so in its own comment: "This is a budget gate, not a scaling
 # measurement." At N = 1.5·10⁵ its SEM is 0.37 % and the three readings (−1.23 %, −0.47 %, −0.84 %)
-# do not resolve a slope — so the tree knows the bias EXISTS, and has never measured its ORDER or
-# its COEFFICIENT. Neither has it ever answered the question a production run actually asks:
+# do not resolve a slope — so the tree knows the bias exists, and has never measured its order or
+# its coefficient. Neither has it ever answered the question a production run actually asks:
 #
 #     "at Δt = 10⁻³ fm on a T ≈ 0.3 GeV medium, how wrong are ⟨p²⟩, D_s and the ℓ=1 rate?"
 #
-# HOW THE NOISE IS BEATEN DOWN. Every quantity here is a STATIONARY-STATE average, so it is
-# averaged over TIME as well as over particles: with snapshots one drag time apart over a run of
+# How the noise is beaten down. Every quantity here is a stationary-state average, so it is
+# averaged over time as well as over particles: with snapshots one drag time apart over a run of
 # `NTAU` drag times, N_eff ≈ N·NTAU and the SEM falls as 1/√(N·NTAU) at a cost that is the same
 # either way (cost ∝ N·T_run/Δt, N_eff ∝ N·T_run — the ratio is Δt regardless of how the budget is
 # split). That is what makes an O(ηΔt) bias measurable down to ηΔt ≈ 0.01, where it is ≈ 0.1 %.
 #
-# WHAT IS MEASURED
+# What is measured
 #   (A) stationary ⟨p²⟩ vs the exact d-dimensional Jüttner moment  — relativistic, 2 and 3 rows.
-#       The Galilean branch is the CONTROL: its propagator is exact at any Δt, so a nonzero slope
+#       The Galilean branch is the control: its propagator is exact at any Δt, so a nonzero slope
 #       there would mean the measurement, not the engine, is biased.
 #   (B) realised D_s from the MSD slope vs D_s = D_sT/T·ħc         — the position/momentum split.
 #   (C) realised ℓ=1 (diffusion-current) rate vs λ₁η_D             — reported with its noise floor.
 #   (D) the RTA/BGK realised rate vs the nominal 1/τ_n at five step sizes. Until 2026-09-02 the
-#       per-step collision probability was the LINEARISED Δt/τ_n, so the realised rate was
+#       per-step collision probability was the linearised Δt/τ_n, so the realised rate was
 #       −ln(1 − Δt/τ_n)/Δt and the RTA carried a step-size ceiling; it is `−expm1(−Δt/τ_n)` now
 #       (0.2.3), and this block is what says the Δt trend is gone rather than merely smaller.
 #
@@ -33,7 +33,7 @@
 #   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_accuracy.jl
 #   LIM_BENCH_QUICK=1 ...      fewer step sizes / smaller ensembles (≈ ¼ the wall time)
 #
-# Wall-clock independent: this bench measures ACCURACY, not speed, so unlike bench_throughput.jl
+# Wall-clock independent: this bench measures accuracy, not speed, so unlike bench_throughput.jl
 # it is valid on a loaded machine.
 # ==============================================================================================
 include(joinpath(@__DIR__, "bench_common.jl"))
@@ -59,7 +59,7 @@ function fit_order(x, y)
 end
 
 """
-Stationary-state run in a uniform bath: start FROM the exact Jüttner (independent rejection
+Stationary-state run in a uniform bath: start from the exact Jüttner (independent rejection
 sampler), discard the first `burn` drag times, and return the snapshots after it. Sampling one
 drag time apart keeps the snapshots close to independent, so N_eff ≈ N × (number kept).
 """
@@ -83,8 +83,8 @@ println("bath T = $TBATH GeV, m = $M GeV, D_sT = $DST  ⇒  η_D = $(fmt(ETA; d=
 println("production runs use Δt ≈ 1e-3…5e-3 fm, i.e. ηΔt ≈ $(fmt(ETA*1e-3; d=5))…$(fmt(ETA*5e-3; d=4))\n")
 
 # ── (A) stationary ⟨p²⟩ ────────────────────────────────────────────────────────────────────────
-# ⚠ READ THE COLUMNS AS A SLOPE, NOT AS FIVE ABSOLUTE NUMBERS. Every Δt is started from the SAME
-# seeded Jüttner draw, so the IC's own finite-N deviation from the exact moment (≈ 1 SEM) is COMMON
+# Read the columns as a slope, not as five absolute numbers. Every Δt is started from the same
+# seeded Jüttner draw, so the IC's own finite-N deviation from the exact moment (≈ 1 SEM) is common
 # to all five columns: it cancels in the Δt-dependence, which is what is being measured, and it
 # shifts the whole row by a constant. The Galilean control makes that visible — its five readings
 # are +0.03…+0.12 %, one-signed and Δt-independent, which is exactly that shared offset and not a
@@ -138,10 +138,10 @@ let N = QUICK ? 20_000 : 40_000, ntau = QUICK ? 40 : 80
     println("    ηΔt   ", join([lpad(fmt(x; d = 3), 9) for x in ETADT]))
     println("    bias% ", join([lpad(fmt(100b; d = 3), 9) for b in bias]))
     gate!(abs(bias[end]) < 0.02, "(B) realised D_s within 2 % at the smallest step (ηΔt = $(fmt(last(ETADT); d=3)))")
-    # ⚠ The MSD slope's own scatter (a fit over ~½ the snapshots of a random walk) is percent-level
-    # here, so only the LARGEST step separates from noise: the fit below is an UPPER BOUND on the
+    # The MSD slope's own scatter (a fit over ~½ the snapshots of a random walk) is percent-level
+    # here, so only the largest step separates from noise: the fit below is an upper bound on the
     # position-update bias, not a measured law like (A)'s. What it does establish is that D_s is
-    # unbiased to ≲1 % everywhere at ηΔt ≤ 0.08 — i.e. the O(ηΔt) bias (A) sees in ⟨p²⟩ does NOT
+    # unbiased to ≲1 % everywhere at ηΔt ≤ 0.08 — i.e. the O(ηΔt) bias (A) sees in ⟨p²⟩ does not
     # propagate into the transport coefficient at any step size anyone would use.
     println("    fitted |bias| ≲ $(fmt(100C; d=2)) %·(ηΔt)^$(fmt(ord; d=2))  (noise-limited; see the note)\n")
 end

@@ -1,31 +1,31 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# bench_semianalytic.jl — the engine against CLOSED FORMS, with plots.
+# bench_semianalytic.jl — the engine against closed forms, with plots.
 #
-# WHERE THIS SITS. `Projects/SemiAnalyticBenchmarks/bench_langevin_ou.jl` (B10) already pins the
+# Where this sits. `Projects/SemiAnalyticBenchmarks/bench_langevin_ou.jl` (B10) already pins the
 # Galilean ⟨p²⟩ relaxation, the 1/√N Monte-Carlo rate and the momentum autocorrelation. It lives in
-# the repo, drives the FP solvers alongside the engine, and tests the MOMENTUM sector only. This
-# one lives in the PACKAGE (so it travels with the engine and needs nothing but the monorepo
+# the repo, drives the FP solvers alongside the engine, and tests the momentum sector only. This
+# one lives in the package (so it travels with the engine and needs nothing but the monorepo
 # environment) and takes the five closed forms B10 does not:
 #
-#   (S1) the full Uhlenbeck–Ornstein PHASE-SPACE covariance — σ_pp, σ_xx and, the sharp one,
+#   (S1) the full Uhlenbeck–Ornstein phase-space covariance — σ_pp, σ_xx and, the sharp one,
 #        the position–momentum cross-correlation σ_xp = (T/η)(1 − e^{−ηt}). Nothing in the tree
 #        tests σ_xp, and it is exactly where an operator-split error between the momentum update
 #        and the position update would show up. Across the ballistic→diffusive crossover.
-#   (S2) the EXACT BGK moment law. In a uniform bath a particle survives to t with probability
-#        e^{−t/τ_n} and is otherwise equilibrium-distributed, so for ANY observable g
+#   (S2) the exact BGK moment law. In a uniform bath a particle survives to t with probability
+#        e^{−t/τ_n} and is otherwise equilibrium-distributed, so for any observable g
 #             ⟨g⟩(t) = e^{−t/τ_n}⟨g⟩₀ + (1 − e^{−t/τ_n})⟨g⟩_eq          (exact, all t)
 #        — the whole relaxation curve, not just its rate. Checked at four Δt spanning 100×, which
 #        is a gate on the 0.2.3 `−expm1` fix: with the old linearised Δt/τ_n the largest step
 #        relaxed 22 % too fast and this curve was simply wrong.
-#   (S3) free streaming WITH the Bjorken redshift, which has a closed form worth having:
+#   (S3) free streaming with the Bjorken redshift, which has a closed form worth having:
 #        p_z(τ) = p_z(τ₀)τ₀/τ exactly, and since E depends on the redshifting p_z,
 #             x_⊥(τ) = x_⊥(τ₀) + (p_⊥/m_T²)·[√(m_T²τ² + a²) − √(m_T²τ₀² + a²)],  a = p_z(τ₀)τ₀
-#        The engine is first order here by construction (the redshift reads the START of the step,
-#        the position update the END), so this block measures the ORDER, not exactness.
-#   (S4) the relativistic equilibrium SHAPE, not its moments: the |p| histogram against the exact
+#        The engine is first order here by construction (the redshift reads the start of the step,
+#        the position update the END), so this block measures the order, not exactness.
+#   (S4) the relativistic equilibrium shape, not its moments: the |p| histogram against the exact
 #        Jüttner p^{d−1}e^{−(E−m)/T} with a two-sample KS statistic, in 2 and 3 momentum rows.
-#   (S5) the comoving blast wave (`DsT = 0`), which is exact PER PARTICLE: every quark carries
+#   (S5) the comoving blast wave (`DsT = 0`), which is exact per particle: every quark carries
 #        p = m·γ(r)·v(r) at its own radius, so the predicted momentum can be checked against the
 #        measured one particle by particle rather than through an ensemble moment.
 #
@@ -71,12 +71,12 @@ println("="^94)
 # (S1) Uhlenbeck–Ornstein phase-space covariance — σ_pp, σ_xx, σ_xp
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The Galilean branch (`relativistic = false`) IS the classic OU process: dp = −ηp dt + √κ dW with
-# κ = 2mTη, and dx = p/m dt. From a THERMAL initial momentum at x = 0 the exact per-component
+# κ = 2mTη, and dx = p/m dt. From a thermal initial momentum at x = 0 the exact per-component
 # moments are (Chandrasekhar 1943, Rev. Mod. Phys. 15, 1 §II):
 #     σ_pp(t) = mT                                            (stationary from the start)
 #     σ_xx(t) = 2(T/m)/η² · (ηt − 1 + e^{−ηt})                 ballistic t², diffusive 2D_s t
 #     σ_xp(t) = (T/η)(1 − e^{−ηt})                             the cross-correlation
-# σ_xp is the one to watch: it is built from the momentum update and the position update TOGETHER,
+# σ_xp is the one to watch: it is built from the momentum update and the position update together,
 # so an operator-split or an off-by-one-step error shows there first, while σ_pp and σ_xx can each
 # look right on their own.
 println("\n── (S1) Uhlenbeck–Ornstein phase-space covariance (Galilean, exact) ──")
@@ -126,10 +126,10 @@ end
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # A BGK/RTA particle in a uniform bath either has not collided (probability e^{−t/τ_n}, so it still
 # carries its initial momentum) or has, in which case it is Jüttner-distributed — and stays so
-# under further collisions. Hence for ANY observable g, exactly and at all t,
+# under further collisions. Hence for any observable g, exactly and at all t,
 #       ⟨g⟩(t) = e^{−t/τ_n}⟨g⟩₀ + (1 − e^{−t/τ_n})⟨g⟩_eq.
 # This is a much stronger statement than "the ℓ=1 mode decays at 1/τ_n": it fixes the entire curve.
-# It also only holds if the PER-STEP collision probability is exact — with the linearised Δt/τ_n
+# It also only holds if the per-step collision probability is exact — with the linearised Δt/τ_n
 # the engine carried before 0.2.3, the Δt = 0.2 curve relaxed 22 % too fast.
 println("\n── (S2) exact BGK moment law ⟨g⟩(t) = e^{−t/τ_n}⟨g⟩₀ + (1−e^{−t/τ_n})⟨g⟩_eq ──")
 let N = QUICK ? 100_000 : 300_000
@@ -144,7 +144,7 @@ let N = QUICK ? 100_000 : 300_000
     println("    Δt      Δt/τ_n    worst |⟨p²⟩ meas/exact − 1|   worst |⟨p_x⟩ meas/exact − 1|")
     for dt in (QUICK ? (0.002, 0.05, 0.2) : (0.002, 0.02, 0.1, 0.2))
         xg, tg, Tf, Vf = box_fields(TBATH; tf = tf + 0.5)
-        # the save cadence must be a multiple of Δt AND at least Δt — at Δt = 0.2 a tf/30 = 0.1
+        # the save cadence must be a multiple of Δt and at least Δt — at Δt = 0.2 a tf/30 = 0.1
         # cadence is shorter than one step and the driver (rightly) refuses.
         save = max(round(tf / 30 / dt) * dt, dt)
         tt, mm, _ = run_fields(CPUBackend(), xg, tg, Tf, Vf; M, DsT = DST, N, dt, tfinal = tf,
@@ -164,7 +164,7 @@ let N = QUICK ? 100_000 : 300_000
     gate!(worst < 0.03, "(S2) the whole ⟨p²⟩(t) curve follows the exact BGK law at every Δt (3 %)")
     if !NOPLOT
         cols = [:steelblue, :firebrick, :seagreen, :darkorange]
-        # the exact law drawn ONCE as a wide pale band, the engines as markers on top of it
+        # the exact law drawn once as a wide pale band, the engines as markers on top of it
         tt_ref = range(0, tf; length = 200)
         e_ref  = [exp(-t / τn) * p2_0 + (1 - exp(-t / τn)) * p2eq for t in tt_ref]
         pa = plot(tt_ref, e_ref; lw = 7, c = :gray85,
@@ -194,9 +194,9 @@ end
 # telescopes to p_z(τ₀)τ₀/τ, and the transverse position follows from dx/dτ = p_⊥/E(τ) with
 # E(τ)² = m_T² + (p_z(τ₀)τ₀/τ)²:
 #       x(τ) = x(τ₀) + (p_⊥/m_T²)·[√(m_T²τ² + a²) − √(m_T²τ₀² + a²)],   a = p_z(τ₀)·τ₀
-# The engine is first order here by construction — the redshift kernel reads the START of the step
+# The engine is first order here by construction — the redshift kernel reads the start of the step
 # (which is what makes it the exact free-streaming solution over the interval) while the position
-# update reads the END — so the right question is the ORDER, not the residual.
+# update reads the END — so the right question is the order, not the residual.
 println("\n── (S3) free streaming + Bjorken redshift: closed form and convergence order ──")
 let N = 20_000, τ0 = 0.4, τf = 6.0, pT = 1.2
     mT = sqrt(M^2 + pT^2)
@@ -216,9 +216,9 @@ let N = 20_000, τ0 = 0.4, τf = 6.0, pT = 1.2
     for dt in dts
         tt_, mm_, xx_ = go(dt)
         tt = collect(tt_)
-        # every particle has the same p_⊥ but its OWN p_z(τ₀), drawn by the thermal completion.
+        # every particle has the same p_⊥ but its own p_z(τ₀), drawn by the thermal completion.
         # The single-particle closed form is exact, so the ensemble prediction is its average over
-        # the SAMPLED p_z(τ₀) — no distributional assumption enters.
+        # the sampled p_z(τ₀) — no distributional assumption enters.
         a_i = view(mm_[1], 3, :) .* τ0
         xe  = [mean(8.0 .+ (pT / mT^2) .* (sqrt.(mT^2 * τ^2 .+ a_i .^ 2) .- sqrt.(mT^2 * τ0^2 .+ a_i .^ 2)))
                for τ in tt]
@@ -253,7 +253,7 @@ let N = 20_000, τ0 = 0.4, τf = 6.0, pT = 1.2
 end
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# (S4) the equilibrium SHAPE, not its moments
+# (S4) the equilibrium shape, not its moments
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # ⟨p²⟩ agreeing with the Jüttner value does not say the distribution IS Jüttner — the 0.2.1 audit
 # added a tail gate for exactly that reason (a 16.5 % tail error hid under a correct ⟨p²⟩). Here the
@@ -305,7 +305,7 @@ let N = QUICK ? 60_000 : 200_000
 end
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# (S5) the comoving blast wave — exact PER PARTICLE
+# (S5) the comoving blast wave — exact per particle
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # `DsT = 0` glues every quark to the flow, so it does not merely reproduce an ensemble average: at
 # its own radius each particle must carry exactly p = m·γ(r)·v(r) along r̂. That makes the check
@@ -326,11 +326,11 @@ let N = QUICK ? 20_000 : 60_000
         ones(length(pg), length(rg)), Tf, Vf, (xg, tg); x_init = x0, p_init = p0,
         N_particles = N, Δt = Δt, initial_time = 0.4, final_time = 3.4, save_interval = 3.0,
         m = M, dimensions = 2, Tfo = 0.0, kw...))
-    # ⚠ THE COMPARISON CARRIES A ONE-STEP LAG, AND IT IS PHYSICS, NOT SLOP. Within a step the glue
-    # kernel writes p = m·γ(r)v(r) at the particle's CURRENT radius and the position kernel then
+    # The comparison carries a one-step lag, and it is physics, not slop. Within a step the glue
+    # kernel writes p = m·γ(r)v(r) at the particle's current radius and the position kernel then
     # streams it; the snapshot therefore pairs a momentum set at r_before with a position r_after,
     # Δr = v·Δt. So the residual is m·d(γv)/dr·v·Δt = O(Δt) by construction and the right statement
-    # is its ORDER, not its size. (At Δt = 10⁻³, v = 0.5 and dv/dr = 0.075 fm⁻¹ that predicts
+    # is its order, not its size. (At Δt = 10⁻³, v = 0.5 and dv/dr = 0.075 fm⁻¹ that predicts
     # ≈ 8·10⁻⁵ GeV, which is what comes out.)
     local meas, pred, mf, r_fine, res_fine
     worsts = Float64[]; dts = QUICK ? (2e-3, 5e-4) : (4e-3, 2e-3, 1e-3, 5e-4)
@@ -356,7 +356,7 @@ let N = QUICK ? 20_000 : 60_000
     gate!(0.7 < ord < 1.4 && worsts[end] < 1e-4,
           "(S5) the glued momentum is m·γ(r)·v(r) up to the O(Δt) streaming lag (order $(fmt(ord; d=2)))")
     if !NOPLOT
-        # The gate is PER PARTICLE, so the figure is too. Left: every particle's own residual
+        # The gate is per particle, so the figure is too. Left: every particle's own residual
         # against the closed form at its own radius, with the predicted one-step lag
         # m·d(γv)/dr·v·Δt drawn through it — a histogram of |p| would hide exactly the
         # per-particle information the gate is built on. Right: that residual is O(Δt).
@@ -364,7 +364,7 @@ let N = QUICK ? 20_000 : 60_000
         sub  = round.(Int, range(1, length(r_fine); length = nsub))
         rr_s = r_fine[sub]; res_s = res_fine[sub]
         # The momentum is written at r_before and compared against the closed form at r_after, so
-        # the residual is NEGATIVE and equals −m·d(γv)/dr·v·Δt — the particle carries the momentum
+        # the residual is negative and equals −m·d(γv)/dr·v·Δt — the particle carries the momentum
         # of the radius it has just left. Beyond r = 8 fm the flow profile saturates, dv/dr = 0,
         # and the residual vanishes identically: that step is the prediction, not an artefact.
         dvdr(r) = r < 8.0 ? vmax / 8.0 : 0.0

@@ -1,17 +1,17 @@
 # ==============================================================================================
 # test_adaptive_dt.jl — the variable time step (2026-10-12).
 #
-# Every kernel reads time only as `t0 + step·Δt` (END of the step) or `t0 + (step−1)·Δt` (START),
+# Every kernel reads time only as `t0 + step·Δt` (END of the step) or `t0 + (step−1)·Δt` (start),
 # so the drivers run a variable step as the call (step = 1, t0 = t_k, Δt = t_{k+1} − t_k). These
 # checks pin that plumbing and the grid the builder makes:
 #
 #   V1  a `time_grid` that is the uniform grid reproduces the fixed-Δt run to float rounding —
 #       same seed, same RNG draws, every kernel on the path (boosts, OU, positions, Bjorken
 #       redshift, η_s). Any kernel handed the wrong (step, Δt, t0) would differ at O(1).
-#   V2  the adaptive grid: starts/ends on the window, lands EXACTLY on every snapshot, respects
+#   V2  the adaptive grid: starts/ends on the window, lands exactly on every snapshot, respects
 #       η_D·h ≤ drag_tol in the hottest cell, dt_min ≤ h ≤ dt_max, and grows as the medium cools.
 #   V3  free streaming + Bjorken redshift on a strongly non-uniform grid: p_z·τ is conserved to
-#       rounding (the redshift telescopes only if each step uses ITS OWN start time).
+#       rounding (the redshift telescopes only if each step uses its own start time).
 #   V4  a stationary bath: the adaptive run holds the Jüttner ⟨p²⟩ at the accuracy the bench
 #       predicts for its η_D·h, and a deliberately coarse tolerance shows the bias it should —
 #       the test can tell a good step from a bad one.
@@ -136,7 +136,7 @@ end
         φ = 2π * rand(rng); p0[:, i] .= p .* (cos(φ), sin(φ))
     end
     x0 = zeros(2, N)
-    # the EXACT 2-D Jüttner ⟨p²⟩, not the sample's (whose own noise is ≈ 0.5 %)
+    # the exact 2-D Jüttner ⟨p²⟩, not the sample's (whose own noise is ≈ 0.5 %)
     ref = quadgk(p -> p^2 * w(p), 0, pmax)[1] / quadgk(w, 0, pmax)[1]
     function stationary_p2(tol)
         out = run(xg, tg, Tf, Vf, x0, p0; seed = 2, initial_time = 0.0, final_time = 10.0,

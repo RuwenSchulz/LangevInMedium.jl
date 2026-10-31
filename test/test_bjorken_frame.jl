@@ -1,10 +1,10 @@
 #=
-   test_bjorken_frame.jl — WHERE the Bjorken redshift acts, with a transverse flow (2026-09-22).
+   test_bjorken_frame.jl — where the Bjorken redshift acts, with a transverse flow (2026-09-22).
 
-   THE DEFECT THIS PINS. With `bjorken_redshift = true` the engine scaled p_z ← p_z τ_a/τ_b on the
-   REST-FRAME momenta, between the boost to the rest frame and the boost back. p_z is invariant under
+   The defect this pins. With `bjorken_redshift = true` the engine scaled p_z ← p_z τ_a/τ_b on the
+   rest-frame momenta, between the boost to the rest frame and the boost back. p_z is invariant under
    the transverse boost, so the old comment called the two orderings "the same operation" — but E* is
-   not, and the back-boost reads E*: every step the LAB transverse momentum fell by γ·v·δE*. Free
+   not, and the back-boost reads E*: every step the lab transverse momentum fell by γ·v·δE*. Free
    streaming conserves the lab p_⊥ exactly (the η_s-comoving frame's transverse momentum is a
    constant of the motion). In the fluid frame the old ordering is a spurious force −u^r p_z²/(τE*);
    its first-order current, −n D_s κ₂ u^r/τ with κ₂ ≈ 0.9, was the "missing inertia" of
@@ -15,8 +15,8 @@
    in effect (D_sT = 1e18 ⇒ τ_drag ≈ 3e18 fm), so the boost pair is exercised and nothing but the
    redshift can move a momentum.
 
-   Gates:  F1  bjorken_frame = :lab conserves every particle's LAB p_⊥ (free streaming)
-           F2  bjorken_frame = :lrf (the shipped default) does NOT: ⟨Δp_⊥⟩ < 0, and it vanishes when
+   Gates:  F1  bjorken_frame = :lab conserves every particle's lab p_⊥ (free streaming)
+           F2  bjorken_frame = :lrf (the shipped default) does not: ⟨Δp_⊥⟩ < 0, and it vanishes when
                p_z = 0 — the defect, pinned so a silent change of the default shows
            F3  the p_z row is scaled identically by both orderings
            F4  with no flow the two orderings agree
@@ -59,7 +59,7 @@ end
     lab = run_frame(:lab); lrf = run_frame(:lrf)
     @printf("  flow v = 0.5, τ %.1f → %.1f, free streaming: ⟨Δp_⊥⟩ = %+.3e (:lab)  %+.3e (:lrf)  of ⟨p_⊥⟩ = %.3f GeV\n",
             TAU0_BF, TAU1_BF, mean(lab.dpt), mean(lrf.dpt), lab.pt0)
-    # F1 — the lab transverse momentum is a constant of free streaming. The floor is NOT zero: the
+    # F1 — the lab transverse momentum is a constant of free streaming. The floor is not zero: the
     # boost kernels use γ = 1/√(1 − v² + 1e-10), so each rest↔lab round trip is inexact at ~1e-10 and
     # 2000 steps leave ~4e-7 GeV (measured, identical for both orderings and with p_z = 0). 1e-5 sits
     # an order above that floor and four below the defect (0.16 GeV here).

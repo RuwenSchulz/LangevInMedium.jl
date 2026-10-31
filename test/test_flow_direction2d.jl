@@ -1,7 +1,7 @@
 #=
-   test_flow_direction2d.jl — the flow DIRECTION on a 2-D (x, y, τ) background (2026-09-24).
+   test_flow_direction2d.jl — the flow direction on a 2-D (x, y, τ) background (2026-09-24).
 
-   THE DEFECTS THIS PINS. Two kernels took the flow to point along r̂. On a radial (r, τ) table that
+   The defects this pins. Two kernels took the flow to point along r̂. On a radial (r, τ) table that
    is exact, so no gate built on one could see it; on a 2-D background the flow points along its own
    direction û = (v^x, v^y)/|v|, which departs from r̂ by a median 22° (p90 105°) on the Pb+Pb 20–30 %
    event and 12° on the O+O average, in cells above T_fo weighted by the charm density.

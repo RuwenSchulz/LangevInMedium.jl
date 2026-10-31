@@ -17,20 +17,20 @@ const _TINY = 1e-300
 """
     LV_TAUN_SCALE
 
-Diagnostic multiplier applied inside `_build_time_spline`, i.e. to BOTH the drag spline and the
+Diagnostic multiplier applied inside `_build_time_spline`, i.e. to both the drag spline and the
 current spline. Default 1.0 = unscaled, unchanged production behaviour. Set
 `LV_TAUN_SCALE=0.16666666666666666` (1/6) to impose the ÷g_hq convention that Fluidum's
-`τ_diffusion_hadron` used to carry, so both descriptions can be run under the SAME convention.
+`τ_diffusion_hadron` used to carry, so both descriptions can be run under the same convention.
 
-⚠️ PHYSICS CAVEAT — this is NOT the same kind of knob as Fluidum's `HQ_TAUN_SCALE`. In hydro, κ and
+Physics caveat — this is not the same kind of knob as Fluidum's `HQ_TAUN_SCALE`. In hydro, κ and
 τ_n are independent (κ from `diffusion_hadron`, τ_n from `τ_diffusion_hadron`), so scaling τ_n
-changes the relaxation rate at FIXED D_s. In the Langevin there is only ONE free coefficient: the
+changes the relaxation rate at fixed D_s. In the Langevin there is only one free coefficient: the
 OU kernel sets η_D = 1/τ_drag and κ = 2MT/τ_drag from the same drag, so scaling here rescales
 both, and therefore moves D_s and the Navier–Stokes limit as well. A "Langevin with the factor"
 run is a physically different medium, not merely a differently-relaxing one. Interpret accordingly.
 
 Implemented as a Ref populated in `__init__` rather than `const X = parse(ENV...)`: the latter is
-evaluated at PRECOMPILE time and baked into the .ji, so the env var would be silently ignored in
+evaluated at precompile time and baked into the .ji, so the env var would be silently ignored in
 every later process (this exact mistake produced bit-identical "different" runs in Fluidum).
 """
 const LV_TAUN_SCALE = Ref(1.0)
@@ -111,7 +111,7 @@ relation and nothing else:
 
     D_s = T/(m η_D)   ⇒   1/η_D = m D_s/T = m·DsT/T²        (×ħc for fm)
 
-🔴 **THIS IS NOT `tau_n_main3`, AND CONFUSING THE TWO WAS A REAL BUG (fixed 2026-08-02).**
+**This is not `tau_n_main3`, and confusing the two was a real bug (fixed 2026-08-02).**
 `tau_n_main3` = D_s z K₃/K₂ is the **diffusion-current relaxation time** — the τ_n of the
 Israel–Stewart current equation, which is what Fluidum's `τ_diffusion_hadron` evaluates. For a
 Fokker–Planck process with drag η_D the ℓ=1 mode relaxes at
@@ -119,7 +119,7 @@ Fokker–Planck process with drag η_D the ℓ=1 mode relaxes at
     λ₁ = η_D · ⟨(m/E)p²⟩/⟨p²⟩ = η_D · K₂(z)/K₃(z)     (an identity in 3-D, verified to 4 digits)
 
 so its current time is automatically `(1/η_D)·K₃/K₂`. Substituting `1/η_D = m DsT/T²` returns
-`D_s z K₃/K₂` — Fluidum's τ_n exactly. **So a Langevin built with `tau_drag` reproduces BOTH of
+`D_s z K₃/K₂` — Fluidum's τ_n exactly. **So a Langevin built with `tau_drag` reproduces both of
 hydro's coefficients: D_s (the Navier–Stokes limit) and τ_n (the relaxation time).** It has only one
 free coefficient, and this is the value that makes both agree.
 
@@ -138,7 +138,7 @@ end
 
 @inline function effective_DsT(T::Real, DsT::Real; DsT_linear::Bool=false, DsT_slope::Real=1.765, DsT_offset::Real=-0.159, Tfo::Real=0.156, DsT_quad::Bool=false, DsT_Tref::Real=0.0)::Float64
     if DsT_quad
-        # DsT(T) = DsT·(T/T_ref)² ⇒ tau_drag = m·DsT_eff/T² = m·DsT/T_ref², CONSTANT in T:
+        # DsT(T) = DsT·(T/T_ref)² ⇒ tau_drag = m·DsT_eff/T² = m·DsT/T_ref², constant in T:
         # the spatially and temporally uniform-drag member of the family — the prescription under
         # which the non-relativistic solvable class on an inhomogeneous T(r) closes exactly
         # (any T-dependent drag couples ⟨η(x)·quadratic⟩ to fourth moments). No Tfo clamp on
@@ -198,9 +198,9 @@ end
 """
     build_tau_drag_spline(m, DsT; Tmin, Tmax, nT) -> (Tmin, invdT, tau_drag_vals)
 
-Spline of the **DRAG** time `tau_drag` (in fm) — what the OU/Langevin step needs.
+Spline of the **drag** time `tau_drag` (in fm) — what the OU/Langevin step needs.
 
-🔴 Renamed from `build_tau_n_spline` on 2026-08-03 and switched from `tau_n_main3` to
+Renamed from `build_tau_n_spline` on 2026-08-03 and switched from `tau_n_main3` to
 `tau_drag` on 2026-08-02. The old name is the whole reason the bug survived: one name
 meaning two different times, so `η_D = 1/τ` read as correct at every call site. If you
 want the Israel–Stewart current time, call `build_taun_current_spline` and say so.
@@ -211,12 +211,12 @@ build_tau_drag_spline(m::Real, DsT::Real; kwargs...) =
 """
     build_taun_current_spline(m, DsT; Tmin, Tmax, nT) -> (Tmin, invdT, taun_vals)
 
-Spline of the **DIFFUSION-CURRENT** relaxation time `tau_n_main3` (in fm) — the τ_n of
+Spline of the **diffusion-current** relaxation time `tau_n_main3` (in fm) — the τ_n of
 Israel–Stewart, equal to `tau_drag · K₃/K₂`.
 
 Used by the RTA/BGK collision kernels: BGK relaxes every non-equilibrium moment at `1/τ`,
 so to make the RTA and the OU Langevin share an ℓ=1 (diffusion-current) decay rate — the
-sector both papers compare — the RTA must be driven by THIS time, not by the drag.
+sector both papers compare — the RTA must be driven by this time, not by the drag.
 """
 build_taun_current_spline(m::Real, DsT::Real; kwargs...) =
     _build_time_spline(tau_n_main3, m, DsT; kwargs...)
@@ -225,12 +225,12 @@ build_taun_current_spline(m::Real, DsT::Real; kwargs...) =
     eval_tau_n_spline(T, Tmin, invdT, tau_vals) -> Float64
 
 Evaluate a uniform-grid linear time spline. Generic: it does not know, and cannot check, whether
-it was handed `build_tau_drag_spline` or `build_taun_current_spline` output — the CALLER owns
+it was handed `build_tau_drag_spline` or `build_taun_current_spline` output — the caller owns
 that distinction. (Name kept for call-site compatibility; read it as `eval_time_spline`.)
 
-🔴🔴 KNOWN DEFECT, FOUND 2026-08-31, DELIBERATELY NOT FIXED — read before calling this yourself.
+Known defect, found 2026-08-31, deliberately not fixed — read before calling this yourself.
 
-**Outside `[Tmin, Tmax]` this EXTRAPOLATES.** The cell index `i` is clamped to `[1, n-1]`; the
+**Outside `[Tmin, Tmax]` this extrapolates.** The cell index `i` is clamped to `[1, n-1]`; the
 interpolation weight `t` is not. Both transport times fall like 1/T², so the linear extension of a
 convex falling function crosses zero. Measured on a `[0.12, 0.50]` drag spline (m = 1.5,
 DsT = 0.11634, nT = 1024):
@@ -244,7 +244,7 @@ The negative branch is the dangerous one. Every kernel guards with `τ > 0 ? 1/�
 **not** produce a NaN that anyone would notice — it silently sets `η_D = κ = 0` and the particle
 free-streams with neither drag nor noise for as long as it is out of range.
 
-WHY IT IS STILL HERE. The one-line fix is `t = clamp(u - (i - 1), 0.0, 1.0)`. It is not applied
+Why it is still here. The one-line fix is `t = clamp(u - (i - 1), 0.0, 1.0)`. It is not applied
 because it is not bit-neutral: the background interpolant returns `T` a fraction of an ulp *outside*
 `[min T_table, max T_table]` whenever the field is locally flat (a constant-T box; the `max(0.12, …)`
 floor of a cooling fireball), and the driver builds the spline over exactly that range — so `u` goes
@@ -252,15 +252,15 @@ slightly negative and the old code extrapolates by a tiny weight. Clamping chang
 Measured over 300 steps of the `default_box` corpus case (T = 0.30, N = 20 000):
 
     per-particle max |Δp| = 3.0e-14, max |Δx| = 5.3e-15
-    ⟨p²⟩ and ⟨x²⟩ IDENTICAL to all 17 digits (relative difference exactly 0.0)
+    ⟨p²⟩ and ⟨x²⟩ identical to all 17 digits (relative difference exactly 0.0)
 
 i.e. it moves no physics number, but it does move 6 of the 10 SHA-256 hashes in
 `test/regression_corpus_baseline.txt`. Under the audit's standing rule ("bit-identical default,
-nothing regenerates") that made it the user's call, not the auditor's. `test_kernel_units.jl` block
+nothing regenerates") that made it the maintainer's call, not the audit's. `test_kernel_units.jl` block
 U2 pins the defect with `@test_broken`, so applying the clamp turns that gate red and sends the
 reader here.
 
-REACHABILITY. The main drivers span the spline over `[minimum(T_field), maximum(T_field)]` and the
+Reachability. The main drivers span the spline over `[minimum(T_field), maximum(T_field)]` and the
 background interpolant clamps every query into the table, so the production path only ever leaves
 the range by that fraction of an ulp — harmless. This function is **exported**, and consumers that
 build their own splines over a narrower range (`Projects/*/minimal_langevin_from_splines.jl`) get no
@@ -283,8 +283,8 @@ such protection. If you call it directly, clamp your own query into `[Tmin, Tmax
     u = (x - Tmin) * invdT
     i = Int(floor(u)) + 1
     i = clamp(i, 1, n - 1)
-    # ⚠ THE WEIGHT IS DELIBERATELY *NOT* CLAMPED — see the "KNOWN DEFECT" block in the docstring.
-    # `t = clamp(u - (i - 1), 0.0, 1.0)` is the one-line fix and it is NOT applied, because it moves
+    # The weight is deliberately *not* clamped — see the "Known defect" block in the docstring.
+    # `t = clamp(u - (i - 1), 0.0, 1.0)` is the one-line fix and it is not applied, because it moves
     # the last bits of every run whose background sits at the table's temperature extremum.
     t = u - (i - 1)
 
@@ -297,12 +297,12 @@ end
     build_juttner_invcdf(m, dimensions; Tmin, Tmax, nT, nU, np)
         -> (invCDF::Vector{Float64}, nU::Int, nT::Int, Ttab_min::Float64, Ttab_invdT::Float64)
 
-Precompute a HOST-side inverse-CDF table for the isotropic local-rest-frame Jüttner
+Precompute a host-side inverse-CDF table for the isotropic local-rest-frame Jüttner
 momentum-magnitude distribution
 
     P(p*) ∝ p*^(d-1) · exp(-(E-m)/T),   E = sqrt(m² + p*²),   d = `dimensions`,
 
-the EXACT same shape sampled by rejection in `_draw_juttner_pstar_lib` (kernels_cpu.jl).
+the exact same shape sampled by rejection in `_draw_juttner_pstar_lib` (kernels_cpu.jl).
 This lets a GPU thread draw `p*` by a constant-work table lookup instead of a variable-length
 rejection loop (divergence-free).
 

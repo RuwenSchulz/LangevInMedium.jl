@@ -1,19 +1,19 @@
 # ==============================================================================================
 # test_relativistic_switch.jl — the `relativistic` switch must actually switch.
 #
-# WHY THIS TEST EXISTS. The flag was, for a long time, parsed by the drivers, written into the
+# Why this test exists. The flag was, for a long time, parsed by the drivers, written into the
 # output metadata, and never handed to the solver. Every run used the engine default while the
 # sidecar recorded whatever had been asked for. It was found only because two runs differing in
-# nothing but that option came out BIT-IDENTICAL — which is exactly what this file asserts must
+# nothing but that option came out bit-identical — which is exactly what this file asserts must
 # never happen again.
 #
 # The three assertions are, in order of how easily each would be lost:
-#   (1) SWITCHING CHANGES THE ANSWER.  Same seed, same everything else: the two settings must give
+#   (1) switching changes the answer.  Same seed, same everything else: the two settings must give
 #       different trajectories. This is the plumbing test, and it is the one that failed.
-#   (2) THE EQUILIBRIA ARE THE RIGHT ONES.  relativistic=true must relax to a Jüttner and
+#   (2) the equilibria are the right ones.  relativistic=true must relax to a Jüttner and
 #       relativistic=false to a Maxwell. A flag that is plumbed but wired to the wrong branch
 #       passes (1) and fails this.
-#   (3) STREAMING SWITCHES TOO.  A run with a spatial extent must show a different spatial spread,
+#   (3) streaming switches too.  A run with a spatial extent must show a different spatial spread,
 #       because dx/dt = p/E and dx/dt = p/m are different velocities. Switching only the drag was
 #       the state of the code before this test: it passes (1) and (2) and fails this.
 #
@@ -22,7 +22,7 @@
 using Test, Random, Statistics, LangevInMedium
 const K = LangevInMedium.KernelsCPU
 
-# ⚠ THE TEST CALLS THE REAL KERNEL. Reimplementing the branches here would make it pass even if the
+# The test calls the real kernel. Reimplementing the branches here would make it pass even if the
 # shipped kernel lost its switch, which is precisely the failure mode being guarded against.
 
 """
@@ -51,7 +51,7 @@ function box_run(; relativistic::Bool, N = 20_000, M = 1.5, T = 0.3, DsT = 0.5,
                 p[dd, i] = a * p[dd, i] + s * randn(rng)
             end
         end
-        # (3) STREAMING: the shipped kernel, not a copy of it.
+        # (3) streaming: the shipped kernel, not a copy of it.
         K.kernel_update_positions_cpu!(x, p, M, dt, N, 0, 0.0,
             xgrid, tgrid, Tfield, DsT;
             dimensions = d, radial_mode = false, position_diffusion = false,
@@ -82,7 +82,7 @@ maxwell_p2(M, T) = 2 * M * T
 
     # (3) streaming switches too: p/E and p/M give different spatial spreads
     @test !isapprox(mean(sum(xr .^ 2, dims = 1)), mean(sum(xn .^ 2, dims = 1)); rtol = 1e-3)
-    # the non-relativistic run streams FASTER (p/M > p/E), so it spreads further
+    # the non-relativistic run streams faster (p/M > p/E), so it spreads further
     @test mean(sum(xn .^ 2, dims = 1)) > mean(sum(xr .^ 2, dims = 1))
 
     println("  <p*2>  relativistic = ", round(p2r, digits = 4),

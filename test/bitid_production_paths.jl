@@ -1,10 +1,10 @@
 # ==============================================================================================
-# bitid_production_paths.jl — bit-identity over the switches the PRODUCTION cells run (2026-09-24).
+# bitid_production_paths.jl — bit-identity over the switches the production cells run (2026-09-24).
 #
 # `regression_corpus.jl` spans the kwarg surface up to 0.2.3, but not `proper_time_kicks`,
 # `bjorken_frame = :lab`, the cold-comoving (DsT == 0) kernel or the GPU freeze-out latch — the
-# switches every LP1 / O+O / AH / KD cell runs with. This hashes seeded CPU AND GPU runs through
-# them on a RADIAL background (the only kind any DPM cell uses). GPU runs are bit-reproducible
+# switches every LP1 / O+O / AH / KD cell runs with. This hashes seeded CPU and GPU runs through
+# them on a radial background (the only kind any DPM cell uses). GPU runs are bit-reproducible
 # under `CUDA.seed!` (+ `Random.seed!` for the host-side draws); checked twice in a row first.
 #
 # Written for the 2+1D flow-direction fix (CHANGELOG "Unreleased / Fixed"; IDEAS I-64): the
@@ -14,9 +14,9 @@
 #   write:  BITID_MODE=write julia --project=Julia Julia/LangevInMedium.jl/test/bitid_production_paths.jl
 #   check:                   julia --project=Julia Julia/LangevInMedium.jl/test/bitid_production_paths.jl
 #
-# ⚠ The GPU hashes are specific to the device, driver and CUDA.jl build (written on an RTX 5070,
+# The GPU hashes are specific to the device, driver and CUDA.jl build (written on an RTX 5070,
 # CUDA.jl 5.11.2, Julia 1.12.6). On another GPU, or after a toolchain update, the GPU lines will
-# not match for reasons that are not the engine: regenerate at the OLD commit first, then check
+# not match for reasons that are not the engine: regenerate at the old commit first, then check
 # the new one. The CPU lines are portable across machines with the same Julia version.
 # ==============================================================================================
 using CUDA, LangevInMedium, Random, SHA, Printf
@@ -89,7 +89,9 @@ else
     for l in lines
         a = split(l, ' '; limit = 3); key = a[1] * " " * a[2]
         ok = get(base, key, "MISSING") == a[3] && !startswith(a[3], "ERROR")
-        ok || (nfail += 1)
+        # `global`: a bare `nfail += 1` here made a soft-scope local, so a diff still ended in
+        # "BIT-IDENTICAL" and exit 0 (found 2026-10-24 from the warning; every line was OK then)
+        ok || (global nfail += 1)
         @printf("%-4s %-28s %s\n", ok ? "OK" : "DIFF", key, ok ? a[3][1:16] : "base " * get(base, key, "MISSING")[1:min(end, 16)] * "  now " * a[3][1:min(end, 16)])
     end
     println(nfail == 0 ? "BIT-IDENTICAL: all $(length(lines)) hashes match the pre-fix baseline" : "FAIL: $nfail of $(length(lines)) differ")

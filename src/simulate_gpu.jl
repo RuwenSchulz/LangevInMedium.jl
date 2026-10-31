@@ -7,7 +7,8 @@ using ...Utils
 using ...KernelsCPU: interpolate_2d_cpu, interpolate_3d_cpu   # host-side T lookups for the
                                                               # initial p_z draw (radial / 2-D)
 using ...SimulateCPU: _snapshot_times, _step_count, _check_time_window, _warn_escaped_particles,
-                      _validate_transport_inputs, _variable_step_grid
+                      _validate_transport_inputs, _variable_step_grid, _validate_kappa_law
+using ...KappaLaws: KappaLaw, build_kappa_table
 using CUDA
 using ...Transport
 
@@ -19,7 +20,7 @@ function print_cuda_status()
     dev = CUDA.device()
     name = CUDA.name(dev)
     cap = CUDA.capability(dev)
-    println("🟢 CUDA status:")
+    println("CUDA status:")
     println("  Device : $name")
     println("  Compute Capability : $cap")
     CUDA.memory_status()
@@ -62,7 +63,7 @@ function simulate_ensemble_bulk_gpu(
     bjorken_frame::Symbol = :lrf,   # :lrf (shipped) | :lab (lab p_T conserved) — see the simulate_cpu.jl note
     proper_time_kicks::Bool = false, # OU kick per proper time Δt·E*/E_lab (see kernels_cpu.jl note)
     pz_init::Symbol = :thermal,     # :thermal (shipped) | :comoving (p_z* = 0); see append_pz
-    track_eta_s::Bool = false,      # accumulate η_s and return its history as a FOURTH element
+    track_eta_s::Bool = false,      # accumulate η_s and return its history as a fourth element
     verbose::Bool = false,          # print device name + memory status at entry
     adaptive_dt::Bool = false,      # variable step from the background (timegrid.jl); Δt then unused
     adaptive_drag_tol::Float64 = 0.01,
@@ -70,6 +71,7 @@ function simulate_ensemble_bulk_gpu(
     dt_min::Float64 = 1e-5,
     dt_max::Float64 = 0.1,
     time_grid::Union{Nothing, AbstractVector} = nothing,
+    kappa_law::Union{Nothing, KappaLaw} = nothing,   # κ_L(p, T) ≠ κ_T(p, T); see kappa_law.jl
 )
     CUDA.reclaim()  # Free any unused GPU memory
     verbose && print_cuda_status()
@@ -77,13 +79,15 @@ function simulate_ensemble_bulk_gpu(
 
     try
         # === Derived parameters ===
-        # 🔴 2026-09-02: identical to the CPU path — refuse the inputs that used to degrade to
+        # 2026-09-02: identical to the CPU path — refuse the inputs that used to degrade to
         # silent free streaming, warn when the window leaves the table, and count steps with the
         # ulp-tolerant rule instead of a bare floor(). See the helpers in simulate_cpu.jl.
         _validate_transport_inputs(m, DsT)
+        _validate_kappa_law(kappa_law; dimensions, relativistic, collision_mode, momentum_langevin, DsT,
+                            adaptive_dt = adaptive_dt && time_grid === nothing, integrator_mode)
         _check_time_window(initial_time, final_time, SpaceTimeGrid[end])
         total_time = final_time - initial_time
-        # grid === nothing ⇒ the fixed-Δt loop; otherwise step k runs grid[k] → grid[k+1]. The SAME
+        # grid === nothing ⇒ the fixed-Δt loop; otherwise step k runs grid[k] → grid[k+1]. The same
         # helper as the CPU driver, so both backends take the same steps from the same call.
         grid, save_steps = _variable_step_grid(time_grid, adaptive_dt, TemperatureEvolutionn,
             SpaceTimeGrid[end]; initial_time, final_time, save_interval, m, DsT,
@@ -106,7 +110,7 @@ function simulate_ensemble_bulk_gpu(
                 save_slot[k] = i + 1
             end
         end
-        # ON-THE-FLY FREEZE-OUT: no trajectory history is needed (memory ∝ N, VRAM-safe at any cadence);
+        # On-the-fly freeze-out: no trajectory history is needed (memory ∝ N, VRAM-safe at any cadence);
         # each particle latches its own state the step it first crosses T=Tfo. Keep a trivial 1-snapshot
         # history so the existing allocation/return plumbing is untouched.
         if freezeout_capture
@@ -121,7 +125,7 @@ function simulate_ensemble_bulk_gpu(
         blocks = cld(N_particles, threads)
 
         # === Upload background grids to GPU ===
-        # Geometry is dispatched on the DATA, exactly as on the CPU path: a 2-tuple grid with a
+        # Geometry is dispatched on the data, exactly as on the CPU path: a 2-tuple grid with a
         # matrix T is the shipped radial background; a 3-tuple with T[x,y,t] and a (u^x, u^y) pair
         # is a genuine function of the transverse plane. The contract is validated here, on the
         # host, so a shape error is a clear message rather than a kernel launch failure.
@@ -160,11 +164,11 @@ function simulate_ensemble_bulk_gpu(
         use_v2 = V2Evolutionn !== nothing
         V2Evolution = use_v2 ? CuArray(V2Evolutionn) : CuArray(zeros(Float64, 1, 1))
 
-        # === Precompute the DRAG spline τ_drag(T) on CPU and upload to GPU ===
+        # === Precompute the drag spline τ_drag(T) on CPU and upload to GPU ===
         tau_Tmin::Float64 = 0.0
         tau_invdT::Float64 = 1.0
         tau_vals = Float64[0.0, 0.0]
-        # RTA/BGK needs the CURRENT time instead — see build_taun_current_spline.
+        # RTA/BGK needs the current time instead — see build_taun_current_spline.
         taun_vals = Float64[0.0, 0.0]
         if momentum_langevin && DsT > 0.0 && collision_mode !== :none
             Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0)
@@ -190,11 +194,18 @@ function simulate_ensemble_bulk_gpu(
         end
         tau_vals_d = CuArray(tau_vals)
         taun_vals_d = CuArray(taun_vals)
+        # κ_L/κ_T table (kappa_law.jl), built on the host — the CPU builds the same one
+        pdim_k = momentum_dimensions <= 0 ? dimensions : momentum_dimensions
+        ktab = kappa_law === nothing ? nothing :
+            build_kappa_table(kappa_law, m, pdim_k;
+                Tmin = max(float(minimum(TemperatureEvolutionn)), 0.0),
+                Tmax = float(maximum(TemperatureEvolutionn)))
+        kvals_d = ktab === nothing ? nothing : CuArray(ktab.vals)
 
         # === RTA/BGK: precompute the isotropic Jüttner inverse-CDF table on CPU, upload to GPU ===
         # Divergence-free `p*` sampler for kernel_rta_collision_gpu! (replaces the CPU rejection loop).
         rta_mode = collision_mode == :rta
-        # `:none` = FREE STREAMING (2026-09-02); the twin of the CPU flag. See simulate_cpu.jl.
+        # `:none` = free streaming (2026-09-02); the twin of the CPU flag. See simulate_cpu.jl.
         free_stream = collision_mode === :none
         invcdf_nU::Int = 2
         invcdf_nT::Int = 2
@@ -339,7 +350,7 @@ function simulate_ensemble_bulk_gpu(
         position_history_gpu = CUDA.zeros(Float64, dimensions, N_particles * (num_saves + 1))
         position_history_gpu[:, 1:N_particles] .= positions
 
-        # η_s starts at 0 for every particle ON PURPOSE — the engine accumulates only the CHANGE;
+        # η_s starts at 0 for every particle on purpose — the engine accumulates only the change;
         # η_s(τ0) is applied afterwards by convolution (see kernel_accumulate_eta_s_cpu!).
         eta_s_gpu         = track_eta_s ? CUDA.zeros(Float64, N_particles) : CUDA.zeros(Float64, 1)
         eta_s_history_gpu = track_eta_s ? CUDA.zeros(Float64, N_particles * (num_saves + 1)) : CUDA.zeros(Float64, 1)
@@ -381,7 +392,7 @@ function simulate_ensemble_bulk_gpu(
             end
 
             if rta_mode
-                # RTA/BGK noise: two uniforms (collision decision + inverse-CDF |p*| draw) and a RAW
+                # RTA/BGK noise: two uniforms (collision decision + inverse-CDF |p*| draw) and a raw
                 # (un-normalized) Gaussian direction — the kernel normalizes it per particle.
                 CUDA.rand!(u_collide)
                 CUDA.rand!(u_sample)
@@ -406,7 +417,7 @@ function simulate_ensemble_bulk_gpu(
                 end
             end
 
-            # Step 0: Bjorken redshift on the LAB momenta (bjorken_frame = :lab) — lab p_T conserved.
+            # Step 0: Bjorken redshift on the lab momenta (bjorken_frame = :lab) — lab p_T conserved.
             if bjorken_redshift && bjorken_frame === :lab
                 @cuda threads=threads blocks=blocks kernel_bjorken_redshift_gpu!(
                     momenta, 3, kstep, h, tk, N_particles)
@@ -441,7 +452,7 @@ function simulate_ensemble_bulk_gpu(
             elseif rta_mode
                 # Boltzmann RTA / BGK: re-draw from the local Jüttner with prob Δt/τn in the LRF,
                 # then boost back to lab. Skips the OU force/update kernels entirely.
-                # 🔴 τn here is the CURRENT relaxation time (tau_n_main3), NOT the OU drag: BGK
+                # τn here is the current relaxation time (tau_n_main3), not the OU drag: BGK
                 # relaxes every moment at 1/τ, so matching the OU's ℓ=1 (diffusion-current) decay
                 # needs τ_n = τ_drag·K₃/K₂. The drag would relax it 1.26-1.74× too fast.
                 @cuda threads=threads blocks=blocks kernel_rta_collision_gpu!(
@@ -453,6 +464,22 @@ function simulate_ensemble_bulk_gpu(
                     u_collide, u_sample, random_directions,
                     proper_time_kicks, VelocityEvolution, ygrid, VxField, VyField)
 
+                @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
+                    momenta, positions, xgrid, tgrid, VelocityEvolution,
+                    m, N_particles, kstep, h, tk,radial_mode, use_v2, V2Evolution, psi2,
+                    relativistic, ygrid, VxField, VyField)
+            elseif ktab !== nothing
+                # Step 2': κ_L(p, T) ≠ κ_T(p, T) — its own kernel; the constant-κ one below is untouched
+                @cuda threads=threads blocks=blocks kernel_compute_forces_kappa_gpu!(
+                    TemperatureEvolution, xgrid, tgrid, momenta, positions,
+                    ξ_momentum, deterministic_terms, stochastic_terms,
+                    h, m, pdim, N_particles, kstep, tk,
+                    tau_Tmin, tau_invdT, tau_vals_d,
+                    kvals_d, ktab.invdp, ktab.np, ktab.Tmin, ktab.invdT, ktab.nT,
+                    proper_time_kicks, VelocityEvolution, ygrid, VxField, VyField)
+                @cuda threads=threads blocks=blocks kernel_update_momenta_LRF_gpu!(
+                    momenta, deterministic_terms, stochastic_terms,
+                    h, pdim, N_particles)
                 @cuda threads=threads blocks=blocks kernel_boost_to_lab_frame_gpu!(
                     momenta, positions, xgrid, tgrid, VelocityEvolution,
                     m, N_particles, kstep, h, tk,radial_mode, use_v2, V2Evolution, psi2,
@@ -481,7 +508,7 @@ function simulate_ensemble_bulk_gpu(
                     relativistic, ygrid, VxField, VyField)
             end
             # Step 5: Update particle positions based on momenta
-            # IMPORTANT: pass the current time-step, not the total number of steps.
+            # Important: pass the current time-step, not the total number of steps.
             @cuda threads=threads blocks=blocks kernel_update_positions_gpu!(
                 positions, momenta, m, h, N_particles, kstep, tk,
                 xgrid, tgrid, TemperatureEvolution, DsT, dimensions, radial_mode, position_diffusion, reflecting_boundary, ξ_position,
@@ -529,7 +556,7 @@ function simulate_ensemble_bulk_gpu(
             return fo
         end
 
-        # 🔴 2026-09-02: warn if particles finished outside the tabulated radial axis (CPU twin).
+        # 2026-09-02: warn if particles finished outside the tabulated radial axis (CPU twin).
         _warn_escaped_particles(Array(positions), xgridd)
 
         # === Transfer saved histories back to CPU ===
@@ -569,6 +596,7 @@ function simulate_ensemble_bulk_gpu(
         finalize(invcdf_d)
         finalize(tau_vals_d)
         finalize(taun_vals_d)
+        kvals_d === nothing || finalize(kvals_d)
 
         # Clear references
         momenta_history_gpu = nothing

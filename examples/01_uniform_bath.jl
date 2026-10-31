@@ -1,13 +1,13 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# 01 — THERMALISATION IN A UNIFORM BATH
+# 01 — thermalisation in a uniform bath
 #
 # The smallest complete setup: a box at fixed T with no flow, charm quarks started far from
 # equilibrium, and the one question the engine has to get right — does the ensemble relax to the
 # Jüttner distribution at the rate the Einstein relation prescribes?
 #
 # Everything here has a closed form, which is why this is the first example: if a change to the
-# engine breaks something, it breaks HERE first and visibly.
+# engine breaks something, it breaks here first and visibly.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/examples/01_uniform_bath.jl
 #   LIM_NOPLOT=1 ...     numbers only
@@ -21,9 +21,9 @@ const DST = 0.11634    # the D_s·T label — see below for what it means dynami
 const N   = 100_000
 
 # ── what D_sT actually sets ────────────────────────────────────────────────────────────────────
-# The engine takes ONE transport coefficient. Everything else follows from the Einstein relation:
+# The engine takes one transport coefficient. Everything else follows from the Einstein relation:
 #     τ_drag = m·D_sT/T²   [fm]        η_D = 1/τ_drag          κ = 2mT·η_D
-# and the diffusion-current relaxation time τ_n = τ_drag·K₃/K₂ is then a DERIVED quantity, not a
+# and the diffusion-current relaxation time τ_n = τ_drag·K₃/K₂ is then a derived quantity, not a
 # second input. Do not build the drag from `tau_n_main3` — that applies K₃/K₂ once too often and
 # inflates the realised D_s by 1.26–1.74× (it was the state of every product before 2026-08-02).
 τ_drag = tau_drag(T, M, DST)
@@ -38,10 +38,10 @@ xg, tg, Tf, Vf = uniform_bath(T; τf = 26 * τ_drag)   # the table must outlast 
 
 # ── the initial condition ──────────────────────────────────────────────────────────────────────
 # `x_init`/`p_init` inject particles directly and bypass the sampler — the right choice whenever
-# you want to control the IC exactly. ⚠ `p_init` is a LOCAL-REST-FRAME momentum: the engine applies
+# you want to control the IC exactly. `p_init` is a local-rest-frame momentum: the engine applies
 # the t0 lab boost itself. Here the bath does not flow, so the two frames coincide.
 # All particles start with |p| = 2.5 GeV in +x: a δ-function far from equilibrium, and a pure ℓ=1
-# (current) perturbation, so both the ISOTROPISATION and the CURRENT decay are visible.
+# (current) perturbation, so both the isotropisation and the current decay are visible.
 x0 = zeros(2, N)
 p0 = zeros(2, N); p0[1, :] .= 2.5
 
@@ -62,11 +62,11 @@ t, mom, pos = simulate_ensemble_bulk(CPUBackend(), rg, pg, dens, Tf, Vf, (xg, tg
     m           = M,
     DsT         = DST,
     dimensions  = 2,                             # transverse plane
-    momentum_dimensions = 3,                     # ⚠ but THREE momentum rows — see below
+    momentum_dimensions = 3,                     # but three momentum rows — see below
     Tfo         = 0.0)
 
 # ── why momentum_dimensions = 3 on a 2-D plane ─────────────────────────────────────────────────
-# `dimensions` sets the POSITIONS. If the momenta are 2-D too, the ensemble relaxes to the 2-D
+# `dimensions` sets the positions. If the momenta are 2-D too, the ensemble relaxes to the 2-D
 # Jüttner, whose ℓ=1 rate λ₁η_D differs from the 3-D K₂/K₃·η_D by 5–12 % over z = 3.5–10 — and the
 # hydro coefficients (τ_n = D_s z K₃/K₂, κ) are matched in the 3-D theory. Three momentum rows on a
 # two-dimensional plane is the combination that removes that convention offset.
@@ -81,15 +81,15 @@ K2K3 = Bessels.besselkx(2, M / T) / Bessels.besselkx(3, M / T)
 sel = px .> 0.10 * px[1]
 c   = hcat(ones(sum(sel)), t[sel]) \ log.(px[sel])
 rate_fit = -c[2]
-# TWO estimators of the same rate, and the difference between them is the point of this block.
-#   · the FITTED slope of ln⟨p_x⟩ accumulates the kick noise: its floor is ≈ 2.4 %·√(10⁶/N), so at
+# Two estimators of the same rate, and the difference between them is the point of this block.
+#   · the fitted slope of ln⟨p_x⟩ accumulates the kick noise: its floor is ≈ 2.4 %·√(10⁶/N), so at
 #     N = 10⁵ it is ±7.6 % and a 5 % miss means nothing;
-#   · the INSTANTANEOUS estimator is the exact moment equation d⟨p_x⟩/dt = −η_D⟨(m/E)p_x⟩, i.e.
-#     rate(t) = η_D⟨(m/E)p_x⟩/⟨p_x⟩. It is a ratio of two sums over the SAME particles, so the noise
-#     largely cancels — but it equals λ₁ ONLY once δf has relaxed onto the ℓ=1 eigenmode.
+#   · the instantaneous estimator is the exact moment equation d⟨p_x⟩/dt = −η_D⟨(m/E)p_x⟩, i.e.
+#     rate(t) = η_D⟨(m/E)p_x⟩/⟨p_x⟩. It is a ratio of two sums over the same particles, so the noise
+#     largely cancels — but it equals λ₁ only once δf has relaxed onto the ℓ=1 eigenmode.
 # From this δ-function IC it starts at η_D·m/E(p₀) — every particle has the same energy, so the
 # weight ⟨m/E⟩ is just m/E(p₀), far from its thermal value — and climbs to λ₁η_D as the ensemble
-# spreads. λ₁ is an ASYMPTOTIC eigenvalue, not the instantaneous rate of an arbitrary initial state.
+# spreads. λ₁ is an asymptotic eigenvalue, not the instantaneous rate of an arbitrary initial state.
 rate_inst(k) = begin
     Ek = sqrt.(M^2 .+ vec(sum(abs2, mom[k]; dims = 1)))
     η_D * mean((M ./ Ek) .* view(mom[k], 1, :)) / mean(view(mom[k], 1, :))
@@ -130,7 +130,7 @@ if plots_on()
     # `sel` (⟨p_x⟩ > 10 % of its initial value). Drawing the band keeps the flat tail from
     # reading as the engine leaving the closed form.
     # Stop the axis a factor 3 under the floor: below that the points are pure noise and a wider
-    # axis only makes the excursions look like structure. ⚠ Take the floor over the EQUILIBRATED
+    # axis only makes the excursions look like structure. Take the floor over the equilibrated
     # snapshots: the IC here is a δ-function in p, so sem_px[1] is exactly 0 and a plain
     # `minimum` would put the axis bottom at 0 and collapse the log scale.
     pxlo = minimum(@view sem_px[2:end]) / 3

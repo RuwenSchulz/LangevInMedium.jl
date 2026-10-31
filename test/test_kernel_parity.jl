@@ -1,19 +1,19 @@
 # ==============================================================================================
-# test_kernel_parity.jl — DETERMINISTIC CPU ↔ GPU parity, kernel by kernel (2026-08-31 audit).
+# test_kernel_parity.jl — deterministic CPU ↔ GPU parity, kernel by kernel (2026-08-31 audit).
 #
-# WHY THIS EXISTS. Until now the only thing holding the two backends together was an ENSEMBLE
+# Why this exists. Until now the only thing holding the two backends together was an ensemble
 # comparison through the full driver at 3 % (`bench_gpu_parity.jl`, `regression_corpus.jl`). That
 # is a weak instrument: CURAND is unseedable, so a real per-particle disagreement has to exceed the
 # Monte-Carlo scatter of ⟨p²⟩ at N = 50 000 (≈1.5 %) before any gate notices. The 0.2.0 bugs — the
 # GPU interpolant extrapolating past the table, the GPU boosts not clamping |v| < 1 — were found
 # only because they produced NaNs; a 5 % silent drift would have sailed through.
 #
-# The GPU kernels take their randomness as PRE-GENERATED ARRAYS (ξ, u_collide, u_sample,
-# dir_gauss). So the two backends can be driven with the SAME inputs AND THE SAME NOISE and
+# The GPU kernels take their randomness as pre-generated arrays (ξ, u_collide, u_sample,
+# dir_gauss). So the two backends can be driven with the same inputs and the same noise and
 # compared per particle. That is what this file does, and it makes the comparison exact instead of
 # statistical: every gate below is at 1e-12 relative or tighter, and several are bit-for-bit.
 #
-# Any kernel-level divergence that is REAL and intended is recorded here as such (see D1), not
+# Any kernel-level divergence that is real and intended is recorded here as such (see D1), not
 # quietly reconciled — the point is that the difference is a decision on the record, not a drift.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/test/test_kernel_parity.jl
@@ -38,8 +38,8 @@ else
 
     launch(f, N, args...) = (@cuda threads=256 blocks=cld(N, 256) f(args...); CUDA.synchronize())
 
-    # ⚠ WHY NOTHING WITH A MULTIPLY-ADD IN IT IS COMPARED WITH `==`.
-    # The NVPTX backend CONTRACTS `a*b + c*d` into fused multiply-adds; the host does not. So even
+    # Why nothing with a multiply-add in IT is compared with `==`.
+    # The NVPTX backend contracts `a*b + c*d` into fused multiply-adds; the host does not. So even
     # a character-for-character identical expression — `v00*(1-xd) + v10*xd`, the bilinear
     # interpolant — returns results one ulp apart on the two backends, by construction and with no
     # bug involved. Exact equality is therefore reserved for kernels with nothing to contract (a
@@ -49,7 +49,7 @@ else
     ulpeq(A, B) = maximum(abs.(A .- B) ./ max.(abs.(A), abs.(B), 1e-300)) <= ULP
     """
     Worst absolute deviation between a host array and a device array, and that deviation relative
-    to the ARRAY'S OWN SCALE. Deliberately not a per-element relative error: a momentum component
+    to the array's own scale. Deliberately not a per-element relative error: a momentum component
     is a difference of larger numbers and routinely lands within an ulp of zero, where a pointwise
     ratio diverges while nothing is wrong. Scale-relative is the meaningful statement.
     """
@@ -77,7 +77,7 @@ else
         end
         Random.seed!(5)
         nq = 20_000
-        # deliberately spill far outside the table in BOTH axes and both directions
+        # deliberately spill far outside the table in both axes and both directions
         qx = vcat(range(-30.0, 60.0; length = nq ÷ 2), 20.0 .* rand(nq ÷ 2))
         qy = vcat(range(-5.0, 12.0; length = nq ÷ 2), 0.4 .+ 2.0 .* rand(nq ÷ 2))
         # ... and land exactly on nodes, where an off-by-one in the cell search shows up
@@ -91,7 +91,7 @@ else
             @test all(isfinite, Array(dout))
             nm == "v" && @test all(abs.(Array(dout)) .<= 1.0)
         end
-        # a NON-UNIFORM axis — the binary search must not assume constant spacing
+        # a non-uniform axis — the binary search must not assume constant spacing
         xnu = [0.0, 0.05, 0.4, 3.0, 3.1, 9.0, 20.0]
         Tnu = [0.2 + 0.01*r + 0.02*τ for r in xnu, τ in TG]
         cpu = [KC.interpolate_2d_cpu(xnu, TG, Tnu, qx[i], qy[i]) for i in 1:nq]
@@ -117,8 +117,8 @@ else
             inr = findall(T -> 0.12 <= T <= 0.50, Ts)
             out = findall(T -> T < 0.12 || T > 0.50, Ts)
             @test ulpeq(gpu[inr], cpu[inr])            # in range: sub-ulp, measured 2.2e-16
-            # OUTSIDE the range both backends extrapolate (the defect documented on
-            # `Transport.eval_tau_n_spline`), and `(1-t)y0 + t·y1` with |t| ~ 10³–10⁴ AMPLIFIES the
+            # Outside the range both backends extrapolate (the defect documented on
+            # `Transport.eval_tau_n_spline`), and `(1-t)y0 + t·y1` with |t| ~ 10³–10⁴ amplifies the
             # one-ulp FMA difference by exactly that factor: measured worst 4.4e-11 at T = 0.749,
             # where the extrapolated "time" is already on its way through zero. So the unclamped
             # weight costs CPU/GPU parity as well as correctness — a second argument for the clamp.
@@ -181,7 +181,7 @@ else
                 dpm, dpu, dη, dkL, dkT, CuArray(ξ), ddet, dsto, 2e-3, M, CuArray(rd), pdim, NP, 7, 0.4, DST,
                 T0, invdT, CuArray(vals), false, Int32(0), rel, ptk, d_VF)
             _, rd_ = dev(det, ddet); _, rs = dev(sto, dsto)
-            # Judged RELATIVE TO EACH TERM'S OWN SCALE: the deterministic term is O(0.02) GeV while
+            # Judged relative to each term's own scale: the deterministic term is O(0.02) GeV while
             # the noise amplitude is √κ ≈ 9 GeV/√fm, so a common absolute threshold would compare
             # two quantities three decades apart. Measured worst, over all eight combinations:
             # det 3.4e-16 abs on a 0.015 scale, sto 1.6e-13 abs on a 10 scale — both ≈1.6e-14
@@ -202,7 +202,7 @@ else
         # `det + √Δt·sto` IS contractible, so this is ulp-level rather than exact — and judged
         # against the array scale, since an updated momentum component routinely lands near zero.
         _, r = dev(mom, dmom); @test r < 1e-15
-        # redshift: a pure multiply — nothing to contract — so it must agree to the LAST BIT, and
+        # redshift: a pure multiply — nothing to contract — so it must agree to the last bit, and
         # over 200 chained steps, which is where a one-ulp-per-step drift would show
         m2 = randn(MersenneTwister(44), pdim, NP); dm2 = CuArray(m2)
         for step in 1:200
@@ -230,9 +230,9 @@ else
             mom, pos = state(; pdim = pdim, seed = 51, spread = 14.0)   # some particles past the rim
             ξp = randn(MersenneTwister(52), 2, NP)
             dmom, dpos = CuArray(mom), CuArray(pos)
-            # The CPU draws its diffusion noise INSIDE the kernel from the global RNG while the GPU
+            # The CPU draws its diffusion noise inside the kernel from the global RNG while the GPU
             # takes a pre-generated array, so the two cannot be compared draw for draw with
-            # diffusion ON. It is still covered — deterministically — by the ZERO-NOISE block
+            # diffusion ON. It is still covered — deterministically — by the zero-noise block
             # below, which isolates everything about the diffusion branch except the Gaussian.
             diff && continue
             KC.kernel_update_positions_cpu!(pos, mom, M, 2e-3, NP, 7, 0.4, XG, TG, TF, DST;
@@ -244,10 +244,10 @@ else
             @test ap < 1e-13 && am < 1e-13
         end
         # ── position_diffusion, deterministically ────────────────────────────────────────────────
-        # Hand the GPU a ZERO noise array. In the Cartesian branch the only diffusion term is
-        # σ·ξ, so the result must then be bit-comparable to the CPU with diffusion OFF — which
+        # Hand the GPU a zero noise array. In the Cartesian branch the only diffusion term is
+        # σ·ξ, so the result must then be bit-comparable to the CPU with diffusion off — which
         # tests that the GPU computes D = DsT/T(r,τ)/ħc, gates on D > 0 and applies the noise
-        # PURELY multiplicatively (an additive term or a wrong D would survive ξ = 0 and show up).
+        # purely multiplicatively (an additive term or a wrong D would survive ξ = 0 and show up).
         for pdim in (2, 3)
             mom, pos = state(; pdim = pdim, seed = 55, spread = 10.0)
             posC = copy(pos); momC = copy(mom)
@@ -260,7 +260,7 @@ else
             a, _ = dev(posC, dpos); @test a < 1e-13
         end
         # radial: with ξ = 0 the diffusion branch still contributes the geometric drift (D/r)·Δt,
-        # so the GPU must differ from a no-diffusion CPU run by EXACTLY that, computed here from
+        # so the GPU must differ from a no-diffusion CPU run by exactly that, computed here from
         # the published formula (D = DsT/T/ħc) rather than from the kernel.
         let
             mom = randn(MersenneTwister(56), 1, NP)
@@ -305,9 +305,9 @@ else
     end
 
     @testset "P8 RTA/BGK — same collision decision, same |p*|, same direction" begin
-        # The two paths draw |p*| differently BY DESIGN (CPU: rejection; GPU: inverse-CDF table), so
-        # they cannot be compared draw for draw. What CAN be compared exactly is everything else:
-        # the collision DECISION (Pcol) and the direction, given the same uniforms and Gaussians.
+        # The two paths draw |p*| differently by design (CPU: rejection; GPU: inverse-CDF table), so
+        # they cannot be compared draw for draw. What can be compared exactly is everything else:
+        # the collision decision (Pcol) and the direction, given the same uniforms and Gaussians.
         # U7 in test_kernel_units.jl is the distributional check on the two |p*| samplers.
         pdim = 2
         mom, pos = state(; pdim = pdim, seed = 71)
@@ -343,7 +343,7 @@ else
                 if !collided
                     @test out[:, i] == mom[:, i]              # untouched, bit for bit
                 else
-                    # direction must be dir_gauss normalised — |p*| aside, the ANGLE is exact
+                    # direction must be dir_gauss normalised — |p*| aside, the angle is exact
                     n = hypot(dg[1, i], dg[2, i]); pn = hypot(out[1, i], out[2, i])
                     if n > 1e-8 && pn > 1e-12
                         @test isapprox(out[1, i]/pn, dg[1, i]/n; atol = 1e-12)
@@ -373,7 +373,7 @@ else
     @testset "P10 2-D BACKGROUND — CPU/GPU parity of the trilinear path" begin
         # The 2-D background (T[x,y,t] plus a (u^x, u^y) vector pair) was added CPU-first and the
         # GPU kernels mirror it. The CPU tests prove the physics reduces to the shipped radial path;
-        # THIS proves the two backends implement that same physics, per particle, with the same
+        # this proves the two backends implement that same physics, per particle, with the same
         # noise -- the only instrument here that can see a silent GPU-only divergence, which is
         # exactly the class the 0.2.0 interpolant and clamp bugs belonged to.
         YG = collect(-20.0:0.5:20.0)
@@ -398,12 +398,12 @@ else
             qy = vcat(range(-60.0, 60.0; length = nq ÷ 2), 40.0 .* rand(nq ÷ 2) .- 20.0)
             qt = vcat(range(-3.0, 9.0;   length = nq ÷ 2), 0.4 .+ 2.0 .* rand(nq ÷ 2))
             qx[1:length(XG2)] .= XG2; qy[1:length(XG2)] .= YG[1]; qt[1:length(XG2)] .= TG[1]
-            # 🔑 T is strictly positive, so a pointwise relative error is meaningful and `ulpeq`
-            # applies. u^x and u^y are SIGNED and cross zero, where `|Δ|/max(|a|,|b|)` is
+            # T is strictly positive, so a pointwise relative error is meaningful and `ulpeq`
+            # applies. u^x and u^y are signed and cross zero, where `|Δ|/max(|a|,|b|)` is
             # meaningless -- measured, it reports 31 ulps for a 7e-15 absolute difference on a
             # field of order 0.5. That is the same pathology this file's own `dev` docstring
             # records for momentum components, so the vector components are compared the same way:
-            # deviation against the ARRAY'S OWN SCALE.
+            # deviation against the array's own scale.
             for (nm, vals) in (("T", T3), ("ux", UX), ("uy", UY))
                 dv  = CuArray(vals)
                 cpu = [KC.interpolate_3d_cpu(XG2, YG, TG, vals, qx[i], qy[i], qt[i]) for i in 1:nq]
@@ -418,7 +418,7 @@ else
                 end
                 @test all(isfinite, got)
             end
-            # NON-UNIFORM axes: the device binary search must not assume constant spacing
+            # Non-uniform axes: the device binary search must not assume constant spacing
             xnu = [-20.0, -19.5, -3.0, 0.0, 0.2, 7.0, 20.0]
             ynu = [-20.0, -6.0, -0.1, 0.0, 4.0, 20.0]
             Tnu = [1.0 + 0.01x - 0.02y + 0.03τ for x in xnu, y in ynu, τ in TG]   # strictly positive: ulpeq applies
@@ -470,7 +470,7 @@ else
                     CuArray(mom), CuArray(pos), dpm, dpu, dη, dkL, dkT, CuArray(ξ), ddet, dsto,
                     2e-3, M, CuArray(rd), 3, NP, 7, 0.4, DST, T0s, invdT, CuArray(vals),
                     false, Int32(0), rel, ptk, d_VF, d_YG, d_UX, d_UY)
-                # P4 (the radial twin of this test) asserts the RELATIVE deviation at 1e-12 and
+                # P4 (the radial twin of this test) asserts the relative deviation at 1e-12 and
                 # not the absolute one, because `dev`'s absolute value scales with the field: the
                 # stochastic terms are the largest of these arrays and land at 1.7e-13 absolute
                 # while sitting at 1.6e-14 relative. Same convention here, so the 2-D gate is no
@@ -485,9 +485,9 @@ else
 
     @testset "D1 KNOWN DIVERGENCES — recorded, not reconciled" begin
         # ── D1a. RTA at T → 0. ──────────────────────────────────────────────────────────────────
-        # CPU `_draw_juttner_pstar_lib` returns 0.0 for T <= 0, so a collision ZEROES the momentum.
+        # CPU `_draw_juttner_pstar_lib` returns 0.0 for T <= 0, so a collision zeroes the momentum.
         # GPU `_juttner_invcdf_lookup` clamps the query to the table's Tmin edge and returns a
-        # FINITE THERMAL |p*|. Same input, qualitatively different output: at the fireball rim the
+        # finite thermal |p*|. Same input, qualitatively different output: at the fireball rim the
         # CPU brings particles to rest and the GPU thermalises them at the table's coldest bin.
         # Not reconciled here because either choice moves numbers (see CHANGELOG 0.2.1). The
         # background T table is required to be strictly positive by `_build_time_spline`, so this

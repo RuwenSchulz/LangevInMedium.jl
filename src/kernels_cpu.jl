@@ -3,6 +3,7 @@ module KernelsCPU
 using LinearAlgebra
 using ..Constants: fmGeV
 using ..Transport: eval_tau_n_spline
+using ..KappaLaws: KappaTable, kappa_step!
 
 # === Exported Symbols ===
 export interpolate_2d_cpu,
@@ -10,6 +11,7 @@ export interpolate_2d_cpu,
        kernel_boost_to_rest_frame_cpu!,
        kernel_boost_to_lab_frame_cpu!,
        kernel_compute_all_forces_cpu!,
+       kernel_compute_forces_kappa_cpu!,
        kernel_update_momenta_LRF_cpu!,
        kernel_bjorken_redshift_cpu!,
        kernel_accumulate_eta_s_cpu!,
@@ -24,7 +26,7 @@ export interpolate_2d_cpu,
 """
     interpolate_2d_cpu
 
-Bilinear lookup of a tabulated field `values[i, j]` on `(x[i], y[j])` at `(xi, yi)`. The query point is CLAMPED to the table (edge value outside it) — extrapolating gave `T < 0` and `|v| > 1` once particles left the grid. Degenerate cells (`x1 == x0`) return the node value.
+Bilinear lookup of a tabulated field `values[i, j]` on `(x[i], y[j])` at `(xi, yi)`. The query point is clamped to the table (edge value outside it) — extrapolating gave `T < 0` and `|v| > 1` once particles left the grid. Degenerate cells (`x1 == x0`) return the node value.
 """
 function interpolate_2d_cpu(x, y, values, xi, yi)
     # Clamp query points to the tabulated domain.
@@ -60,7 +62,7 @@ end
 """
     _bg_scalar(xgrid, ygrid, tgrid, field, x, y, r, t)
 
-Read a tabulated SCALAR of the background (temperature, or a flow magnitude) at a particle.
+Read a tabulated scalar of the background (temperature, or a flow magnitude) at a particle.
 `ygrid === nothing` is the shipped radial table `field[r, t]`; otherwise `field[x, y, t]` is a
 genuine function of the transverse plane. Keeping this in one place is what stops the two
 conventions drifting apart across the six kernels that read a background.
@@ -77,7 +79,7 @@ end
 """
     _proper_time_dil_2d(xgrid, ygrid, tgrid, VxField, VyField, x, y, t, k1, k2, Estar)
 
-The proper-time dilation E*/E_lab = 1/(γ(1 + v⃗·k⃗/E*)) on a 2-D background: the flow is the VECTOR
+The proper-time dilation E*/E_lab = 1/(γ(1 + v⃗·k⃗/E*)) on a 2-D background: the flow is the vector
 (v^x, v^y) at the particle, (k1, k2) the rest-frame transverse momentum, `Estar` the full rest-frame
 energy. The radial path keeps its |v|·k·r̂ form, which is this quantity when the flow points along r̂.
 |v| is clamped at 0.999999 by scaling the vector, as the radial path clamps the magnitude.
@@ -105,15 +107,15 @@ end
     _axis_cell(a, q) -> (i, i_next, weight)
 
 Locate `q` on the tabulated axis `a`: the node below it, its neighbour, and the blend weight.
-Clamps to the table (never extrapolates) and treats a LENGTH-1 axis -- a t-independent or
+Clamps to the table (never extrapolates) and treats a length-1 axis -- a t-independent or
 y-independent background is naturally handed in as a single slice -- by returning the node twice
 with weight 0, where `length(a) - 1` would otherwise make `clamp(i, 1, 0)` throw.
 
-🪤 TOP-LEVEL ON PURPOSE. This began as a closure inside `interpolate_3d_cpu`, and its local `i`
-then SHARED the enclosing function's `i` (Julia boxes a variable assigned in both scopes when it
+Pitfall: top-level on purpose. This began as a closure inside `interpolate_3d_cpu`, and its local `i`
+then shared the enclosing function's `i` (Julia boxes a variable assigned in both scopes when it
 is not a parameter of the inner function). The third call therefore overwrote the x-index before
 the node lookup used it, and the interpolator silently read the wrong cell in x -- exactly the
-closure-capture class CLAUDE.md records from KA-PRD Fig. 3(d), where an inner `a, b = Tlo, Thi`
+closure-capture class the parent repository's house rules record from KA-PRD Fig. 3(d), where an inner `a, b = Tlo, Thi`
 wrote the enclosing bracket. The trilinear-exactness test caught it because a wrong cell is not a
 small error; on a smooth field it would have looked like interpolation error.
 """
@@ -131,13 +133,13 @@ end
 
 Trilinear lookup of a tabulated field `values[i, j, k]` on `(x[i], y[j], t[k])` at `(xi, yi, ti)`.
 The (x, y, t) twin of `interpolate_2d_cpu`, for a background that is a genuine function of the
-transverse PLANE rather than of the radius: `T(x, y, tau)`, `u^x(x, y, tau)`, `u^y(x, y, tau)`.
+transverse plane rather than of the radius: `T(x, y, tau)`, `u^x(x, y, tau)`, `u^y(x, y, tau)`.
 
 Conventions are deliberately identical to the 2-D version and not re-derived: query points are
-CLAMPED to the table (extrapolating gave `T < 0` and `|v| > 1` once particles left the grid),
+clamped to the table (extrapolating gave `T < 0` and `|v| > 1` once particles left the grid),
 `searchsortedlast` locates the cell, and a degenerate axis (`x1 == x0`) contributes its node value.
 Keeping them identical is what makes the reduction test meaningful — on a field with no y
-dependence this returns `interpolate_2d_cpu` to within a rounding of the y-blend -- NOT bit for
+dependence this returns `interpolate_2d_cpu` to within a rounding of the y-blend -- not bit for
 bit, because `c*(1-yd) + c*yd` re-rounds even when the two nodes are equal. `test_background3d.jl`
 asserts agreement at that level (a few ulp) rather than exact equality, which is the strongest
 claim the arithmetic actually supports.
@@ -175,15 +177,15 @@ function kernel_boost_to_rest_frame_cpu!(
     m, N, step, Δt, t0;
     radial_mode::Bool = false,
     V2Evolution = nothing, psi2::Float64 = 0.0,
-    # --- 2-D BACKGROUND (optional). Absent => the shipped radial path, untouched. ---
-    # Supply ygrid plus u^x(x,y,t), u^y(x,y,t) tables and the flow is read as a VECTOR at the
+    # --- 2-D background (optional). Absent => the shipped radial path, untouched. ---
+    # Supply ygrid plus u^x(x,y,t), u^y(x,y,t) tables and the flow is read as a vector at the
     # particle's own (x, y) instead of a magnitude along r-hat. Everything else about the boost is
     # unchanged: the same Lorentz transformation, with the direction and magnitude taken from a
     # vector field rather than from r-hat. Mutually exclusive with V2Evolution, which is an ad-hoc
     # stand-in for the same anisotropy -- using both would count it twice.
     ygrid = nothing, VxField = nothing, VyField = nothing,
-    # ⚠ relativistic = false makes the frame change GALILEAN: p*∥ = p∥ − m·v with v the flow field
-    # read as a VELOCITY (no γ, no E, no clamp — the non-relativistic class puts no bound on H·r).
+    # relativistic = false makes the frame change Galilean: p*∥ = p∥ − m·v with v the flow field
+    # read as a velocity (no γ, no E, no clamp — the non-relativistic class puts no bound on H·r).
     # This is what makes `relativistic = false` the actual exactly solvable process rather than the
     # O(T/M) hybrid documented above kernel_boost_to_lab_frame_cpu!. Default true is bit-identical
     # to the old behaviour.
@@ -221,7 +223,7 @@ function kernel_boost_to_rest_frame_cpu!(
                 φ = atan(positions[2, i], positions[1, i])
                 v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
             end
-            # radial_mode carries ONE position row, so positions[2, .] is out of bounds
+            # radial_mode carries one position row, so positions[2, .] is out of bounds
             # there. It used to be unreachable because r-hat was formed inside the
             # Cartesian branch; hoisting the direction to the top of the loop exposed it.
             # The CPU read it under @inbounds and silently used a garbage value that
@@ -263,13 +265,13 @@ function kernel_boost_to_rest_frame_cpu!(
 
         else
             # ==================================
-            # 🟢 Cartesian mode (2D or 3D)
+            # Cartesian mode (2D or 3D)
             # ==================================
             if size(positions, 1) < 2
                 error("Cartesian boost requires at least 2D positions")
             end
 
-            # decompose along the FLOW direction (r-hat in the radial case)
+            # decompose along the flow direction (r-hat in the radial case)
             rhatx, rhaty = dirx, diry
 
             # Decompose momentum into parallel/perpendicular
@@ -289,9 +291,9 @@ function kernel_boost_to_rest_frame_cpu!(
     return nothing
 end
 
-# ⚠ HISTORY: until 2026-08-15 the boosts were LORENTZ BOOSTS FOR EVERY RUN — `relativistic=false`
-# switched only the streaming velocity and the kick, making a "non-relativistic" run a KINEMATIC
-# HYBRID at O(T/M): boosting back after an LRF kick hands the particle a mean momentum
+# History: until 2026-08-15 the boosts were Lorentz boosts for every run — `relativistic=false`
+# switched only the streaming velocity and the kick, making a "non-relativistic" run a kinematic
+# hybrid at O(T/M): boosting back after an LRF kick hands the particle a mean momentum
 # gamma*v*<E> ≈ M*v*(1 + T/M), so the cloud was advected ~T/M faster than the flow (measured: its
 # sigma_xx outgrew the exact Galilean covariance solution by 21% by tau = 10 fm/c on the
 # stages4_cf3nr_t6 background, T/M = 0.12), and the recorded plateau landed between the Galilean
@@ -308,8 +310,8 @@ function kernel_boost_to_lab_frame_cpu!(
     m, N, step, Δt, t0;
     radial_mode::Bool = false,
     V2Evolution = nothing, psi2::Float64 = 0.0,
-    # --- 2-D BACKGROUND (optional). Absent => the shipped radial path, untouched. ---
-    # Supply ygrid plus u^x(x,y,t), u^y(x,y,t) tables and the flow is read as a VECTOR at the
+    # --- 2-D background (optional). Absent => the shipped radial path, untouched. ---
+    # Supply ygrid plus u^x(x,y,t), u^y(x,y,t) tables and the flow is read as a vector at the
     # particle's own (x, y) instead of a magnitude along r-hat. Everything else about the boost is
     # unchanged: the same Lorentz transformation, with the direction and magnitude taken from a
     # vector field rather than from r-hat. Mutually exclusive with V2Evolution, which is an ad-hoc
@@ -340,14 +342,14 @@ function kernel_boost_to_lab_frame_cpu!(
         else
             # --- local fluid velocity ---
             v = interpolate_2d_cpu(xgrid, tgrid, VelocityEvolution, r, t_now)
-            # optional m=2 azimuthal modulation (elliptic flow); must MATCH the rest-frame boost so the
+            # optional m=2 azimuthal modulation (elliptic flow); must match the rest-frame boost so the
             # round-trip is exact when no diffusion.  Default (nothing) ⇒ unchanged radial flow.
             if V2Evolution !== nothing && size(positions, 1) >= 2
                 v2m = interpolate_2d_cpu(xgrid, tgrid, V2Evolution, r, t_now)
                 φ = atan(positions[2, i], positions[1, i])
                 v *= (1.0 + 2.0 * v2m * cos(2.0 * (φ - psi2)))
             end
-            # radial_mode carries ONE position row, so positions[2, .] is out of bounds
+            # radial_mode carries one position row, so positions[2, .] is out of bounds
             # there. It used to be unreachable because r-hat was formed inside the
             # Cartesian branch; hoisting the direction to the top of the loop exposed it.
             # The CPU read it under @inbounds and silently used a garbage value that
@@ -386,13 +388,13 @@ function kernel_boost_to_lab_frame_cpu!(
 
         else
             # ======================================
-            # 🟢 Cartesian mode (2D, rotation invariant)
+            # Cartesian mode (2D, rotation invariant)
             # ======================================
             if size(positions, 1) < 2
                 error("Cartesian boost requires at least 2D positions")
             end
 
-            # decompose along the FLOW direction (r-hat in the radial case)
+            # decompose along the flow direction (r-hat in the radial case)
             rhatx, rhaty = dirx, diry
 
             # Decompose momentum along / perpendicular to radial direction
@@ -415,22 +417,23 @@ end
 """
     kernel_compute_all_forces_cpu!
 
-Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (NOT the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that a step of `kernel_update_momenta_LRF_cpu!` reproduces the OU stationary variance
+Per-particle drag and noise of the exact Ornstein–Uhlenbeck step in the rest frame. Reads `T(r, t)`, the drag time `τ_drag(T)` from the spline `(tau_Tmin, tau_invdT, tau_vals)` built by `build_tau_drag_spline` (not the current time), sets `η_D = 1/τ_drag`, `κ = 2MT/τ_drag`, and with `η_eff = η_D·M/E` (`relativistic`) or `η_D` writes `deterministic_terms = (e^{−η_eff Δt} − 1)·p` and `stochastic_terms = √κ·√((1−a²)/(2η_eff Δt))·ξ`, so that a step of `kernel_update_momenta_LRF_cpu!` reproduces the OU stationary variance
 `κ/(2η_eff)` exactly, at any Δt, per component.
 
-⚠ THAT VARIANCE IS `MT` ONLY IN THE GALILEAN BRANCH. With `relativistic = true`, η_eff = η_D·M/E
+That variance is `MT` only in the Galilean branch. With `relativistic = true`, η_eff = η_D·M/E
 carries the particle's own energy, so `κ/(2η_eff) = 2MTη_D/(2η_D M/E) = T·E_LRF` — the relativistic
-equipartition ⟨p_i²⟩ = T⟨E⟩ of the Jüttner, not the Maxwell `MT`. And it is exact only at FROZEN E:
-E is re-read at the START of each step while the true process changes it during the step, which is
+equipartition ⟨p_i²⟩ = T⟨E⟩ of the Jüttner, not the Maxwell `MT`. And it is exact only at frozen E:
+E is re-read at the start of each step while the true process changes it during the step, which is
 where the pre-point O(ηΔt) bias on ⟨p²⟩ documented in docs/NOTES.md "Known biases and limits" (≈ −1 % at
 ηΔt = 0.1, measured by `bench_physics_gates.jl` gate (d)) comes from. The Galilean branch has no
 such bias because η_eff is momentum-independent there — the propagator is genuinely exact.
 
-`radial_mode` uses the Euler form with noise projected along p̂. ⚠ That projection is currently a
-NO-OP: `kL == kT == √κ` (isotropic noise, one free coefficient), so
+`radial_mode` uses the Euler form with noise projected along p̂. That projection is currently a
+No-op: `kL == kT == √κ` (isotropic noise, one free coefficient), so
 `(kL−kT)p̂_d p̂_j ξ_j + kT δ_dj ξ_j` collapses to `kT·ξ[d, i]` identically, and `p_mags`, `p_units`
 and `random_directions` are computed for it but cannot change the answer. The structure is kept
-because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go.
+because it is where a longitudinal/transverse split (κ_L ≠ κ_T) would go. (That split now
+exists as `kappa_law`, in its own kernel `kernel_compute_forces_kappa_*!`; this one is unchanged.)
 """
 function kernel_compute_all_forces_cpu!(
     Tfield, xgrid, tgrid,
@@ -440,14 +443,14 @@ function kernel_compute_all_forces_cpu!(
     ξ, deterministic_terms, stochastic_terms,
     Δt, m, random_directions,
     dimensions, N, step, t0, DsT;
-    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    # --- 2-D background (optional). Absent => the shipped radial tables, untouched. ---
     ygrid = nothing, VxField = nothing, VyField = nothing,
     tau_Tmin::Float64,
     tau_invdT::Float64,
     tau_vals::AbstractVector{<:Real},
     radial_mode::Bool = false,
     relativistic::Bool = true,
-    # 2026-08-25: kick per the particle's PROPER time. The undilated lab-Δt kick makes the
+    # 2026-08-25: kick per the particle's proper time. The undilated lab-Δt kick makes the
     # stationary state on a flowing background f_J/(γ(1+v v_r)) instead of the boosted Jüttner —
     # a spurious inward ν^r/n ≈ −γ v ⟨v_r²⟩ (the 08-04 "boost case" −0.071 at u^r = 0.5; see
     # AttractorMomentum FIGURE_REGISTRY and Tex/MaxEntHydro README §engine simultaneity
@@ -459,7 +462,7 @@ function kernel_compute_all_forces_cpu!(
     Vfield::Union{Nothing,AbstractMatrix} = nothing
  )
     M = m  # heavy-quark mass (can be parameterized)
-    # proper_time_kicks needs the flow MAGNITUDE. On the radial path that is `Vfield`; on a 2-D
+    # proper_time_kicks needs the flow magnitude. On the radial path that is `Vfield`; on a 2-D
     # background it is derived from the (u^x, u^y) pair, so either source satisfies the guard —
     # demanding `Vfield` alone would refuse a perfectly well-specified 2-D run.
     proper_time_kicks && Vfield === nothing && VxField === nothing &&
@@ -468,7 +471,7 @@ function kernel_compute_all_forces_cpu!(
 
     @inbounds for i in 1:N
         # --- local temperature ---
-        # ⚡ accumulate in a loop, NOT `sqrt(sum(positions[:, i].^2))`: the slice and the
+        # ⚡ accumulate in a loop, not `sqrt(sum(positions[:, i].^2))`: the slice and the
         # broadcast each allocate, and this runs N times per step (measured 160 B/particle/step,
         # i.e. 160 MB/step at N = 10⁶; the loop form is 9.8× faster). Bit-identical — a leading
         # `+0.0` is exact and `sum` on a 2/3-element vector adds in the same order.
@@ -486,13 +489,13 @@ function kernel_compute_all_forces_cpu!(
         DsT_safe = DsT <= 0 ? 0.0 : DsT
 
         # --- transport coefficients ---
-        # 🔴 This is the DRAG time τ_drag = M·DsT/T² (Transport.tau_drag), supplied as a
-        # precomputed spline in fm by `build_tau_drag_spline`. It is NOT `tau_n_main3`.
+        # This is the drag time τ_drag = M·DsT/T² (Transport.tau_drag), supplied as a
+        # precomputed spline in fm by `build_tau_drag_spline`. It is not `tau_n_main3`.
         # Until 2026-08-02 this comment claimed the spline held the matched τ_n = D_s z K₃/K₂
         # "the same relaxation time as the MIS-hydro side" — and it did, which is precisely the
-        # bug: τ_n is the diffusion-CURRENT time, and using it as 1/η_D applied K₃/K₂ once too
+        # bug: τ_n is the diffusion-current time, and using it as 1/η_D applied K₃/K₂ once too
         # often, so the realised D_s was K₃/K₂ (1.26-1.74×) larger than the DsT label.
-        # The hydro τ_n is a DERIVED consequence here, not an input: with this drag the ℓ=1
+        # The hydro τ_n is a derived consequence here, not an input: with this drag the ℓ=1
         # mode decays at η_D·K₂/K₃, i.e. exactly Fluidum's τ_diffusion_hadron. See `tau_drag`.
         τ_drag = DsT_safe == 0.0 ? 0.0 : eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
 
@@ -510,7 +513,7 @@ function kernel_compute_all_forces_cpu!(
         # k_r is the LRF radial momentum (p_z ⊥ the transverse boost), E* the full LRF energy.
         dil = 1.0
         if proper_time_kicks && VxField !== nothing
-            # 🔴 FIXED 2026-09-24 — on a 2-D background the flow is the VECTOR (v^x, v^y), and
+            # Fixed 2026-09-24 — on a 2-D background the flow is the vector (v^x, v^y), and
             # E_lab/E* = γ(1 + v⃗·k⃗/E*). The radial branch below takes |v|·k·r̂, which is the same
             # thing only where the flow points along r̂; on an azimuthal flow it lost the whole
             # correction and made a spurious outward current (test_flow_direction2d.jl F2).
@@ -574,13 +577,13 @@ function kernel_compute_all_forces_cpu!(
 
                 deterministic_terms[d, i] = det_term
                 # Euler form: noise variance scales with the proper step ⇒ amplitude × √dil
-                # (the update kernel multiplies by √Δt, the LAB step).
+                # (the update kernel multiplies by √Δt, the lab step).
                 stochastic_terms[d, i]    = sto_term * sqrt(dil)
             end
 
         else
             # ==========================================
-            # 🟢 Cartesian mode: independent px, py
+            # Cartesian mode: independent px, py
             # ==========================================
             # Exact OU propagator with relativistic drag η_eff = ηD * m/E_LRF.
             # κ = 2mT ηD is unchanged; only the attenuation a = exp(-η_eff dt) changes.
@@ -593,7 +596,7 @@ function kernel_compute_all_forces_cpu!(
                 end
                 E_LRF   = sqrt(p2_lrf + M^2)
                 η_eff   = relativistic ? ηD * M / E_LRF : ηD   # non-rel: momentum-independent drag ⇒ Maxwell
-                # attenuation over the PROPER step Δt·dil; the noise prefactor keeps the LAB Δt in
+                # attenuation over the proper step Δt·dil; the noise prefactor keeps the lab Δt in
                 # its denominator because the update kernel multiplies by √Δt(lab) — together they
                 # realise the exact-OU stationary variance MT for any Δt and any dil.
                 a       = exp(-η_eff * Δt * dil)
@@ -663,6 +666,78 @@ function kernel_compute_all_forces_cpu!(
 end
 
 """
+    kernel_compute_forces_kappa_cpu!(Tfield, xgrid, tgrid, momenta, positions, ξ,
+        deterministic_terms, stochastic_terms, Δt, m, dimensions, N, step, t0;
+        tau_Tmin, tau_invdT, tau_vals, ktab::KappaTable, ...)
+
+The rest-frame step with a momentum-dependent, anisotropic κ_L(p, T), κ_T(p, T) (`kappa_law`;
+kappa_law.jl). A separate kernel on purpose: `kernel_compute_all_forces_cpu!` is not touched, so
+every run without a law is bit-identical by construction. Reads T and τ_drag exactly as that kernel
+does, sets κ₀ = 2MT/τ_drag, and hands the particle to `kappa_step!` (shared with the GPU). Same
+`proper_time_kicks` dilation as the constant-κ kernel; the Cartesian path only (the drivers refuse
+radial mode and `relativistic = false` with a law).
+"""
+function kernel_compute_forces_kappa_cpu!(
+    Tfield, xgrid, tgrid,
+    momenta, positions,
+    ξ, deterministic_terms, stochastic_terms,
+    Δt, m, dimensions, N, step, t0;
+    ygrid = nothing, VxField = nothing, VyField = nothing,
+    tau_Tmin::Float64,
+    tau_invdT::Float64,
+    tau_vals::AbstractVector{<:Real},
+    ktab::KappaTable,
+    proper_time_kicks::Bool = false,
+    Vfield::Union{Nothing,AbstractMatrix} = nothing,
+ )
+    M = Float64(m)
+    proper_time_kicks && Vfield === nothing && VxField === nothing &&
+        error("kernel_compute_forces_kappa_cpu!: proper_time_kicks needs the velocity field")
+    @inbounds for i in 1:N
+        r2_i = 0.0
+        for d in 1:size(positions, 1)
+            r2_i += positions[d, i]^2
+        end
+        r = sqrt(r2_i)
+        t_now = step * Δt + t0
+        T = _bg_scalar(xgrid, ygrid, tgrid, Tfield, positions[1, i],
+                       size(positions,1) >= 2 ? positions[2, i] : 0.0, r, t_now)
+        T = max(float(T), 0.0)
+        τ_drag = eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals)
+        κ0 = (τ_drag > 0.0 && isfinite(τ_drag)) ? (2.0 * M * T) / τ_drag : 0.0
+
+        dil = 1.0
+        if proper_time_kicks
+            p2_all = 0.0
+            for d in 1:dimensions
+                p2_all += momenta[d, i]^2
+            end
+            Estar = sqrt(p2_all + M^2)
+            if VxField !== nothing
+                dil = _proper_time_dil_2d(xgrid, ygrid, tgrid, VxField, VyField, positions[1, i],
+                                          size(positions,1) >= 2 ? positions[2, i] : 0.0, t_now,
+                                          momenta[1, i], size(momenta,1) >= 2 ? momenta[2, i] : 0.0, Estar)
+            else
+                v = clamp(float(_bg_flowmag(xgrid, ygrid, tgrid, Vfield, VxField, VyField, positions[1, i],
+                                            size(positions,1) >= 2 ? positions[2, i] : 0.0, r, t_now)),
+                          -0.999999, 0.999999)
+                γv = 1.0 / sqrt(1.0 - v * v)
+                kr = 0.0
+                for d in 1:size(positions, 1)
+                    kr += momenta[d, i] * positions[d, i]
+                end
+                kr /= max(r, 1e-12)
+                dil = 1.0 / max(γv * (1.0 + v * kr / Estar), 1e-6)
+            end
+        end
+
+        kappa_step!(momenta, ξ, deterministic_terms, stochastic_terms, i, dimensions, κ0, dil,
+                    Float64(Δt), M, T, ktab.vals, ktab.invdp, ktab.np, ktab.Tmin, ktab.invdT, ktab.nT)
+    end
+    return nothing
+end
+
+"""
     kernel_update_momenta_LRF_cpu!
 
 `p += deterministic + √Δt·stochastic` for the `dimensions` momentum rows — the second half of the OU step prepared by `kernel_compute_all_forces_cpu!`.
@@ -683,7 +758,7 @@ end
 # === Bjorken redshift of the longitudinal momentum (boost-invariant background, u^η = 0) ===
 # A particle of rapidity y at space-time rapidity η carries p_z' = m_T sinh(y−η) in the local
 # longitudinally-comoving frame, and dη/dτ = tanh(y−η)/τ along its free path, so
-#     dp_z'/dτ = −m_T cosh(y−η)·tanh(y−η)/τ = −p_z'/τ        (EXACT, no small-angle step)
+#     dp_z'/dτ = −m_T cosh(y−η)·tanh(y−η)/τ = −p_z'/τ        (exact, no small-angle step)
 # between kicks. The midrapidity ensemble is statistically the ensemble co-moving with one cell,
 # so the rule is applied to every particle's p_z row in the LRF: p_z ← p_z·τ_a/τ_b over the step
 # τ_a = t0+(step−1)Δt → τ_b = τ_a+Δt. This is the longitudinal work term of θ = 1/τ + ∇_⊥·u_⊥
@@ -703,22 +778,22 @@ function kernel_bjorken_redshift_cpu!(momenta, pz_row::Int, step, Δt, t0, N)
     return nothing
 end
 
-# === Spacetime rapidity: the missing third POSITION row ==========================================
-# The package stores TWO position rows (x, y) but THREE momentum rows, and the position kernel
+# === Spacetime rapidity: the missing third position row ==========================================
+# The package stores two position rows (x, y) but three momentum rows, and the position kernel
 # already sums all three into E. The row that closes that asymmetry is eta_s, Milne's longitudinal
 # coordinate, whose streaming equation is the transverse one with the metric's 1/tau:
 #
 #     dx_perp/dtau = p_perp/E*          (kernel_update_positions_cpu!, the loop over `dimensions`)
 #     d eta_s/dtau = (1/tau)(p_z*/E*)   (here)
 #
-# eta_s is CYCLIC — nothing in the dynamics reads it (that is exactly why it could be dropped, and
-# why tau*p_z* is conserved by Noether, i.e. the Bjorken redshift). It is a PASSENGER: written,
+# eta_s is cyclic — nothing in the dynamics reads it (that is exactly why it could be dropped, and
+# why tau*p_z* is conserved by Noether, i.e. the Bjorken redshift). It is a passenger: written,
 # never read, so switching it on cannot move any other number. With it,
 #
 #     y_lab = eta_s + atanh(p_z*/E*)
 #
 # and, because K = Delta eta_s + y*(freeze-out) is independent of eta_s(tau0) by construction,
-# dN/dy = rho(eta_s) (*) P(K) EXACTLY: one boost-invariant run gives the kernel and any production
+# dN/dy = rho(eta_s) (*) P(K) exactly: one boost-invariant run gives the kernel and any production
 # profile is a convolution afterwards. Measured corr(eta_0, K) = +0.0005 (2026-09-01).
 """
     kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, dlogtau, N, pdim)
@@ -728,7 +803,7 @@ One step of `dη_s/dτ = (1/τ)(p_z*/E*)`: `η_s += log(τ_b/τ_a)·p_z*/E*`, wi
 (lab p_⊥, comoving p_z), which is what Milne kinematics calls for.
 
 `dlogtau = log(τ_b/τ_a)` is passed in already evaluated: the `1/τ` factor is then integrated
-EXACTLY across the step and only `p_z*/E*` is frozen, which is strictly better than an Euler
+exactly across the step and only `p_z*/E*` is frozen, which is strictly better than an Euler
 `Δt/τ` at identical cost (one `log` per step, hoisted out of the particle loop).
 """
 function kernel_accumulate_eta_s_cpu!(eta_s, momenta, m, dlogtau, N, pdim)
@@ -768,9 +843,9 @@ end
 # RTA/BGK momentum update in the LRF: with probability Pcol = clamp(Δt/τn(T_local), 0, 1)
 # re-draw the momentum from an isotropic Jüttner at the local T; otherwise leave it unchanged.
 #
-# 🔴 `tau_vals` MUST be the CURRENT-time spline (`build_taun_current_spline`, = tau_n_main3),
-# NOT the drag spline the OU kernel takes. BGK relaxes EVERY non-equilibrium moment at 1/τ,
-# whereas the OU's ℓ=1 mode decays at η_D·K₂/K₃ = 1/τ_n. So "RTA and Langevin differ ONLY in
+# `tau_vals` must be the current-time spline (`build_taun_current_spline`, = tau_n_main3),
+# not the drag spline the OU kernel takes. BGK relaxes every non-equilibrium moment at 1/τ,
+# whereas the OU's ℓ=1 mode decays at η_D·K₂/K₃ = 1/τ_n. So "RTA and Langevin differ only in
 # the collision operator" — the intent here — holds in the diffusion-current sector iff the RTA
 # is driven by τ_n. Before 2026-08-02 both kernels shared one spline that happened to hold τ_n:
 # the RTA was right and the OU was wrong. Fixing the OU inverted that, so the two splines are
@@ -782,20 +857,20 @@ end
 """
     kernel_rta_collision_cpu!
 
-Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-draw the momentum from the local isotropic Jüttner (`|p*| ∝ p^{d−1} e^{−(E−m)/T}` by rejection, random direction), else leave it. `tau_vals` MUST be the CURRENT-time spline from `build_taun_current_spline` (BGK relaxes every moment at 1/τ; the OU's ℓ=1 mode decays at `η_D K₂/K₃`, so matching the current sector needs τ_n = τ_drag·K₃/K₂). `dimensions` must equal the momentum rows (checked).
+Boltzmann RTA / BGK step in the rest frame: with probability `Δt/τ_n(T)` re-draw the momentum from the local isotropic Jüttner (`|p*| ∝ p^{d−1} e^{−(E−m)/T}` by rejection, random direction), else leave it. `tau_vals` must be the current-time spline from `build_taun_current_spline` (BGK relaxes every moment at 1/τ; the OU's ℓ=1 mode decays at `η_D K₂/K₃`, so matching the current sector needs τ_n = τ_drag·K₃/K₂). `dimensions` must equal the momentum rows (checked).
 """
 function kernel_rta_collision_cpu!(
     Tfield, xgrid, tgrid,
     momenta, positions,
     Δt, m, N, step, t0, DsT;
-    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    # --- 2-D background (optional). Absent => the shipped radial tables, untouched. ---
     ygrid = nothing, VxField = nothing, VyField = nothing,
     tau_Tmin::Float64,
     tau_invdT::Float64,
     tau_vals::AbstractVector{<:Real},
     dimensions::Int = 2,
     radial_mode::Bool = false,
-    proper_time_kicks::Bool = false,        # 2026-08-29: collide per PROPER time (see the GPU twin)
+    proper_time_kicks::Bool = false,        # 2026-08-29: collide per proper time (see the GPU twin)
     Vfield = nothing,
  )
     M = m
@@ -812,11 +887,11 @@ function kernel_rta_collision_cpu!(
         T = max(float(_bg_scalar(xgrid, ygrid, tgrid, Tfield, positions[1, i],
                                  size(positions,1) >= 2 ? positions[2, i] : 0.0, r, step * Δt + t0)), 0.0)
         τn = (DsT > 0.0 && T > 0.0) ? eval_tau_n_spline(T, tau_Tmin, tau_invdT, tau_vals) : 0.0
-        # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)), the SAME factor
-        # kernel_compute_all_forces_cpu! applies to the OU step. DEFAULT OFF ⇒ literal 1.0.
+        # proper-time dilation Δt* = Δt·E*/E_lab = Δt/(γ(1+v·k_r/E*)), the same factor
+        # kernel_compute_all_forces_cpu! applies to the OU step. Default off ⇒ literal 1.0.
         dil = 1.0
         if proper_time_kicks && VxField !== nothing
-            # 🔴 FIXED 2026-09-24 — the flow VECTOR on a 2-D background; see the same branch in
+            # Fixed 2026-09-24 — the flow vector on a 2-D background; see the same branch in
             # kernel_compute_all_forces_cpu! (test_flow_direction2d.jl F3).
             p2_all = 0.0
             for d in 1:dimensions
@@ -845,14 +920,14 @@ function kernel_rta_collision_cpu!(
             dil = 1.0 / (den > 1e-6 ? den : 1e-6)
         end
         # τn ≤ 0 ⇒ infinitely fast relaxation ⇒ always re-draw (DsT→0 local-equilibrium limit)
-        # 🔴 FIXED 2026-09-02 — the collision probability over a step is EXPONENTIAL, not linear.
+        # Fixed 2026-09-02 — the collision probability over a step is exponential, not linear.
         # This was `clamp(Δt·dil/τn, 0, 1)`, so the survival probability was 1 − Δt/τ_n and the
-        # realised BGK rate was −ln(1 − Δt/τ_n)/Δt ≈ (1/τ_n)(1 + Δt/2τ_n), i.e. always TOO FAST.
+        # realised BGK rate was −ln(1 − Δt/τ_n)/Δt ≈ (1/τ_n)(1 + Δt/2τ_n), i.e. always too fast.
         # Measured before the fix against the ℓ=1 decay of a drifting ensemble at T = 0.30
         # (τ_n = 0.5976 fm), ratio to the nominal 1/τ_n: 1.0013 / 1.0069 / 1.0517 / 1.0936 / 1.2198
         # at Δt = 0.002 / 0.01 / 0.05 / 0.1 / 0.2 — each within 1 % of that closed form, so the
         # mechanism was confirmed rather than inferred. `−expm1(−x)` is the exact per-step
-        # probability at ANY Δt and removes the ceiling on the step size. Production Δt ≈ 1e-3 ⇒
+        # probability at any Δt and removes the ceiling on the step size. Production Δt ≈ 1e-3 ⇒
         # the change is below 0.1 %, but it is not zero: the two RTA cells move.
         Pcol = (τn > 0.0 && isfinite(τn)) ? clamp(-expm1(-Δt * dil / τn), 0.0, 1.0) : 1.0
         rand() < Pcol || continue
@@ -882,17 +957,17 @@ Stream the positions: `x += Δt·p/E` with `E = √(m² + Σp²)` over all `mome
 function kernel_update_positions_cpu!(
     positions, momenta, m, Δt, N,step,t0,
     xgrid,tgrid, Tfield,DsT;
-    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    # --- 2-D background (optional). Absent => the shipped radial tables, untouched. ---
     ygrid = nothing, VxField = nothing, VyField = nothing,
     dimensions::Int = 2,
-    # number of MOMENTUM rows (3 on a 2-D plane carrying p_z); only E = √(m²+Σp²) sees it — the
+    # number of momentum rows (3 on a 2-D plane carrying p_z); only E = √(m²+Σp²) sees it — the
     # streaming, the diffusion and the reflection act on the `dimensions` spatial components.
     momentum_dimensions::Int = dimensions,
     radial_mode::Bool = false,
     position_diffusion::Bool = false,
     reflecting_boundary::Bool = false,
-    # ⚠ STREAMING IS PART OF THE KINEMATICS, NOT A DETAIL. dx/dt = p/E is the relativistic
-    # velocity; the non-relativistic dynamics streams at p/m. Switching only the DRAG and leaving
+    # Streaming is part of the kinematics, not a detail. dx/dt = p/E is the relativistic
+    # velocity; the non-relativistic dynamics streams at p/m. Switching only the drag and leaving
     # this relativistic gives a hybrid that is neither, and the difference is O(p²/m²) — the same
     # order as the drag correction it is supposed to be switched off with.
     relativistic::Bool = true,
@@ -925,7 +1000,7 @@ function kernel_update_positions_cpu!(
             dr = (pr / E) * Δt
 
             # Optional coordinate-space diffusion (overdamped Brownian motion).
-            # Default is OFF because the underdamped Langevin already produces spatial
+            # Default is off because the underdamped Langevin already produces spatial
             # diffusion through momentum kicks + advection; enabling this typically
             # double-counts diffusion compared to hydro.
             if position_diffusion
@@ -1073,7 +1148,7 @@ function kernel_set_to_fluid_velocity_cpu!(
     step::Int,
     Δt::Float64,
     t0::Float64;
-    # --- 2-D BACKGROUND (optional). Absent => the shipped radial tables, untouched. ---
+    # --- 2-D background (optional). Absent => the shipped radial tables, untouched. ---
     ygrid = nothing, VxField = nothing, VyField = nothing,
     radial_mode::Bool = false,
     relativistic::Bool = true,         # false ⇒ imprint m·v, not m·γ·v
@@ -1094,7 +1169,7 @@ function kernel_set_to_fluid_velocity_cpu!(
             continue
         end
 
-        # 🔴 FIXED 2026-09-02 — ZERO EVERY MOMENTUM ROW BEYOND THE SPATIAL ONES. This kernel used
+        # Fixed 2026-09-02 — zero every momentum row beyond the spatial ones. This kernel used
         # to write rows 1–2 only, so with `momentum_dimensions = 3` the p_z* row kept whatever the
         # initial condition put there while still entering E = √(m² + p_⊥² + p_z*²) in the position
         # update — and the particle that is supposed to BE the fluid element streamed slower than
@@ -1102,7 +1177,7 @@ function kernel_set_to_fluid_velocity_cpu!(
         # the fluid's 0.5000, a −7.10 % deficit (CPU and GPU agreed to six digits), with
         # ⟨p_z*²⟩ = 0.596 GeV² surviving to the end of the run. The fluid is longitudinally
         # comoving in Milne by construction, so the glued state is p_z* = 0 exactly.
-        # The old gate could not see it: `test_momentum_dims3.jl` "(R)" uses a ZERO-flow box, where
+        # The old gate could not see it: `test_momentum_dims3.jl` "(R)" uses a zero-flow box, where
         # the deficit vanishes identically. Now gated at v = 0.5 in `test_limits_and_contracts.jl` L1.
         for d in 3:size(momenta, 1)
             momenta[d, i] = 0.0
@@ -1110,7 +1185,7 @@ function kernel_set_to_fluid_velocity_cpu!(
 
         # --- Interpolate fluid velocity from (r, τ) field ---
         τ_now = step * Δt + t0
-        # 2-D background: imprint the flow VECTOR, not a magnitude along r-hat
+        # 2-D background: imprint the flow vector, not a magnitude along r-hat
         local v::Float64, dirx::Float64, diry::Float64
         if VxField !== nothing
             vx = interpolate_3d_cpu(xgrid, ygrid, tgrid, VxField, positions[1, i],
@@ -1150,7 +1225,7 @@ function kernel_set_to_fluid_velocity_cpu!(
 
         else
             # =====================================
-            # 🟢 Cartesian mode (2D, rotation invariant)
+            # Cartesian mode (2D, rotation invariant)
             # =====================================
             # Set momentum along local radial direction
             momenta[1, i] = m * γ * v * dirx

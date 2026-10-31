@@ -86,11 +86,11 @@ const DST     = 0.11634
         ST = LangevInMedium.SimulateCPU._snapshot_times
         # divisible: the historical range, bit for bit
         @test ST(0.0, 8.0, 2e-3, 4000, 250, 16) === range(0.0, 8.0, length = 17)
-        # not divisible: 5295 steps, save every 662 ⇒ 7 saves at k·1.324, NOT k·10.59/7
+        # not divisible: 5295 steps, save every 662 ⇒ 7 saves at k·1.324, not k·10.59/7
         tp = @test_logs (:warn, r"does not divide") ST(0.0, 10.59, 2e-3, 5295, 662, 7)
         @test length(tp) == 8 && isapprox(step(tp), 662 * 2e-3; rtol = 1e-12) && tp[1] == 0.0
-        # 🔴 REGRESSION GUARD, 2026-09-15. The warning carried `maxlog = 1`, which is keyed by
-        # source location — so in a CAMPAIGN only the FIRST affected run announced that it had
+        # Regression guard, 2026-09-15. The warning carried `maxlog = 1`, which is keyed by
+        # source location — so in a campaign only the first affected run announced that it had
         # dropped history and every later one lost it in silence. Measured then: five consecutive
         # calls each returned history only to 0.9 fm of a requested 1.4 fm, and four said nothing.
         # Every affected call must warn, so drive it five times and count five warnings.
@@ -115,7 +115,7 @@ const DST     = 0.11634
     end
 
     @testset "tau_drag is the DRAG, tau_n_main3 is the CURRENT time (ratio = K₃/K₂)" begin
-        # 🔴 REGRESSION GUARD for the 2026-08-02 bug. `build_tau_n_spline` fed tau_n_main3 in as
+        # Regression guard for the 2026-08-02 bug. `build_tau_n_spline` fed tau_n_main3 in as
         # 1/η_D, so the realised D_s was K₃/K₂ (1.26-1.74×) larger than the DsT label. Nothing in
         # this suite tested the drag, which is why it survived. These are the missing assertions.
         for T in (0.156, 0.20, 0.30, 0.40), dst in (0.116, 0.371)
@@ -124,7 +124,7 @@ const DST     = 0.11634
             τn = tau_n_main3(T, M_CHARM, dst)
             # the drag IS the Einstein relation, nothing else
             @test isapprox(τd, M_CHARM * dst / T^2 / fmGeV; rtol = 1e-12)
-            # a medium built from this drag realises the D_sT it is LABELLED with
+            # a medium built from this drag realises the D_sT it is labelled with
             @test isapprox((T / (M_CHARM * (1/τd))) * T * fmGeV, dst; rtol = 1e-12)
             # the current time is the derived consequence, larger by exactly K₃/K₂
             @test isapprox(τn / τd, Kx(3, z) / Kx(2, z); rtol = 1e-12)
@@ -191,7 +191,7 @@ end
     @test all(sqrt.(sum(abs2, pos[1]; dims = 1)) .<= rg[end] + 1e-12)
 end
 
-# Each suite below is evaluated in its OWN module. They are standalone scripts as well as members
+# Each suite below is evaluated in its own module. They are standalone scripts as well as members
 # of this suite, so several of them define top-level constants with the same names (`M`, `NP`, the
 # background grids) and different values; sharing `Main` would be an "invalid redefinition of
 # constant" error the moment two of them met. `Base.include(m, path)` keeps them apart and needs no
@@ -206,10 +206,10 @@ end
 # Every function the older suites never touched: the interpolant, the spline evaluator, both boost
 # kernels, the two Jüttner samplers, the FONLL sampler's fidelity, LV_TAUN_SCALE, the box path.
 run_suite("test_kernel_units.jl")
-# WHEN each kernel reads the background — end-of-step for the lookups, start-of-step for the
+# When each kernel reads the background — end-of-step for the lookups, start-of-step for the
 # Bjorken redshift. Two conventions on purpose; pinned so the mixture stays deliberate.
 run_suite("test_time_convention.jl")
-# The LIMITS (D_sT → 0, glued to the flow) and the INPUT CONTRACT (a table that ends before
+# The limits (D_sT → 0, glued to the flow) and the input contract (a table that ends before
 # final_time, a non-uniform density grid, m ≤ 0). Six blocks are @test_broken: defects measured
 # 2026-09-02 and deliberately left in place, so applying a fix turns the gate red on purpose.
 run_suite("test_limits_and_contracts.jl")
@@ -240,7 +240,7 @@ else
     # 2026-09-24 (IDEAS I-64). CPU always; the GPU halves skip themselves without CUDA.
     run_suite("test_flow_direction2d.jl")
     # ── CPU ↔ GPU, deterministically ────────────────────────────────────────────────
-    # The ONLY exact comparison of the two backends: same inputs, same injected noise, per particle,
+    # The only exact comparison of the two backends: same inputs, same injected noise, per particle,
     # at 1e-12 or tighter. Everything else in the tree compares ensemble moments at 3 %, which is a
     # far weaker instrument than the 0.2.0 bug history warrants. Skips itself without CUDA.
     run_suite("test_kernel_parity.jl")
@@ -253,4 +253,9 @@ else
     # GPU under CUDA.seed!); the adaptive grid lands on every snapshot and respects its tolerance; a
     # coarse tolerance shows its bias. 2026-10-12. The GPU half skips itself without CUDA.
     run_suite("test_adaptive_dt.jl")
+    # ── κ_L(p, T) ≠ κ_T(p, T) (kappa_law) ───────────────────────────────────────────────────────────
+    # Jüttner stationary under non-constant and anisotropic laws (and not with the naive drift), a
+    # constant law ≡ the shipped kernel per particle, measured D_s = the label under :green_kubo,
+    # refusals, CPU ≡ GPU kernel. 2026-10-24, ≈ 2 min. The GPU half skips itself without CUDA.
+    run_suite("test_kappa_law.jl")
 end

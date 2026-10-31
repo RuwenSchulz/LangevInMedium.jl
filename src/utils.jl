@@ -11,10 +11,10 @@ export append_thermal_pz, append_comoving_pz, append_pz, sample_pz_conditional_j
 """
     _cumtrapz(y, x) -> Vector{Float64}
 
-Cumulative trapezoid of `y` over the ACTUAL nodes `x`: `out[1] = 0`, `out[k] = ∫_{x₁}^{x_k} y dx`.
+Cumulative trapezoid of `y` over the actual nodes `x`: `out[1] = 0`, `out[k] = ∫_{x₁}^{x_k} y dx`.
 
-🔴 FIXED 2026-09-02 — this replaces `cumsum(y) * mean(diff(x))` throughout the FONLL sampler.
-That form is a right-Riemann sum with ONE constant spacing, which is two separate errors: it is
+Fixed 2026-09-02 — this replaces `cumsum(y) * mean(diff(x))` throughout the FONLL sampler.
+That form is a right-Riemann sum with one constant spacing, which is two separate errors: it is
 only first order even on a uniform grid, and on a non-uniform grid it is simply the wrong
 quadrature, so refinement cannot fix it. Measured against the exact ⟨p⟩ of `P(p) ∝ p·f(p)` with a
 FONLL-like `(1+(p/2.1)²)^(−3.1)` (`test_limits_and_contracts.jl` L6):
@@ -26,7 +26,7 @@ FONLL-like `(1+(p/2.1)²)^(−3.1)` (`test_limits_and_contracts.jl` L6):
 | uniform, np = 1200 | −0.29 % | −0.03 % |
 | log-spaced, 300 | **−44.6 %** | −0.01 % |
 
-⚠ THIS MOVES EVERY FONLL INITIAL CONDITION IN THE TREE by ≈ 1 % in ⟨p_T⟩ (the production grid is
+This moves every FONLL initial condition in the tree by ≈ 1 % in ⟨p_T⟩ (the production grid is
 np = 300, pmax = 10). It is a bias on the IC, so it partly cancels in a ratio that carries the same
 IC top and bottom. Six of the ten `regression_corpus.jl` hashes were regenerated for it.
 """
@@ -56,7 +56,7 @@ end
 Normalise a cumulative array into a strictly increasing CDF on [0, 1] (or return `nothing` if the
 distribution is empty).
 
-⚠ The nudge that breaks ties must be scaled to the VALUE, not absolute. This used to read
+The nudge that breaks ties must be scaled to the value, not absolute. This used to read
 `max(c[k], c[k-1] + eps(Float64))`, and `eps(Float64)` is an absolute 2.2e-16: for any cumulative
 above ≈10³ the sum is not representable as a distinct float, `max` returns `c[k-1]`, and the
 result is flat exactly where the guard was supposed to bite. Measured 2026-09-15 on a FONLL-shaped
@@ -110,7 +110,7 @@ function sample_particles_from_FONLL(r_grid, p_grid, f_HQ_init_FONLL, N_samples:
         end
     end
 
-    # 🔴 2026-09-02: every quadrature below is a TRAPEZOID ON THE ACTUAL NODES (`_cumtrapz` /
+    # 2026-09-02: every quadrature below is a trapezoid on the actual nodes (`_cumtrapz` /
     # `_trapz_weights`). It used to be `cumsum(·) * mean(diff(grid))`, a right-Riemann sum on an
     # assumed-uniform grid — first order where the grid IS uniform and simply wrong where it is not.
     # See the `_cumtrapz` docstring for the measured table.
@@ -266,14 +266,14 @@ function sample_initial_particles_at_origin_no_position!(initial_condition,
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# THREE MOMENTUM COMPONENTS ON A TWO-DIMENSIONAL TRANSVERSE PLANE  (2026-08-21)
+# three momentum components on a two-dimensional transverse plane  (2026-08-21)
 #
-# WHY. The engine's `dimensions` couples the spatial and the momentum dimensionality, so every
-# midrapidity run (positions in the transverse plane) evolved a TWO-component momentum. Drag and
+# Why. The engine's `dimensions` couples the spatial and the momentum dimensionality, so every
+# midrapidity run (positions in the transverse plane) evolved a two-component momentum. Drag and
 # noise are isotropic, so the equilibrium such a run relaxes to is the 2-D Jüttner on the measure
 # p dp dφ — a different kinetic theory from the 3-D one in which the hydrodynamic coefficients
 # (τ_n = D_s z K₃/K₂, κ) are matched. The drag η_D = T/(M D_s) is dimension-independent and was
-# always right; the DERIVED current-relaxation rate is λ₁ η_D with
+# always right; the derived current-relaxation rate is λ₁ η_D with
 #     λ₁ = ⟨(M/E) p²⟩/⟨p²⟩  =  K₂/K₃        in 3-D (exact identity)
 #                            ≠  K₂/K₃        in 2-D (5–12 % larger over z = 3.5–10),
 # so a 2-D ensemble compared against a 3-D τ_n carried a convention offset of that size
@@ -281,7 +281,7 @@ end
 # a third momentum component lives on every particle, invariant under the transverse flow boost,
 # entering E* (drag, streaming, Cooper–Frye) and the isotropic kicks. Positions stay 2-D.
 #
-# INITIAL p_z. Given a sampled transverse momentum p_T, the thermal conditional at the local
+# Initial p_z. Given a sampled transverse momentum p_T, the thermal conditional at the local
 # temperature is  f(p_z | p_T) ∝ exp(−√(m_T² + p_z²)/T),  m_T = √(m² + p_T²)  — exact for a
 # Jüttner initial state, and the natural completion of a FONLL/boosted transverse IC (midrapidity).
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -327,13 +327,13 @@ end
 
 Return a (3, N) copy of the (2, N) transverse `momenta` with a third row p_z drawn from the
 thermal conditional at the particle's local temperature `T_of_r(r)`, r = |x_⊥|. The input
-momenta must be LOCAL-REST-FRAME momenta (this is called before the initial lab boost).
+momenta must be local-rest-frame momenta (this is called before the initial lab boost).
 `antithetic = true` mirrors p_z across the (2i−1, 2i) pairs the samplers build, keeping the
 pairs exact reflections in all three components.
 """
 function append_thermal_pz(momenta::AbstractMatrix, positions::AbstractMatrix, m::Real, T_of_r;
                            antithetic::Bool = false, rng::AbstractRNG = Random.default_rng(),
-                           # On a 2-D background the local temperature is NOT a function of the
+                           # On a 2-D background the local temperature is not a function of the
                            # radius, so `T_of_r` cannot express it. Supplying `T_of_xy(x, y)`
                            # overrides it; absent, the radial path is bit-identical.
                            T_of_xy = nothing)
@@ -361,7 +361,7 @@ end
 """
     append_comoving_pz(momenta) -> momenta3
 
-Return a (3, N) copy of the (2, N) transverse `momenta` with a third row of EXACT ZEROS.
+Return a (3, N) copy of the (2, N) transverse `momenta` with a third row of exact zeros.
 
 This is not "neglecting p_z": it is the production kinematics. A quark created in the hard
 scattering at t = z = 0 and free-streaming to the hydro start time arrives at
@@ -371,7 +371,7 @@ scattering at t = z = 0 and free-streaming to the hydro start time arrives at
 so its rapidity relative to the fluid at its own position, y − η_s, is exactly zero, and
 p_z* = m_T sinh(y − η_s) = 0. Two consequences worth knowing:
 
-  * it is independent of τ₀ — a free-streaming quark is comoving at EVERY time, not just at τ₀,
+  * it is independent of τ₀ — a free-streaming quark is comoving at every time, not just at τ₀,
     because the Bjorken field v = z/t and a free worldline z = v t are the same relation;
   * the whole production rapidity spectrum then lives in η_s, not in p_z*. dN/dy is recovered as
     ρ(η_s) ⊛ P(K) with the kernel from `track_eta_s` — see `kernel_accumulate_eta_s_cpu!`.
@@ -391,8 +391,8 @@ end
 
 The p_z completion, selected by `mode`:
 
-  `:thermal`  — the thermal conditional at the local T(r, τ₀) (`append_thermal_pz`). The SHIPPED
-                DEFAULT, and what every product generated before 2026-09-01 carries.
+  `:thermal`  — the thermal conditional at the local T(r, τ₀) (`append_thermal_pz`). The shipped
+                default, and what every product generated before 2026-09-01 carries.
   `:comoving` — p_z* = 0 (`append_comoving_pz`), the free-streaming initial condition.
 
 Measured cost of switching (2026-09-01, LP1 `pbpb_const_fonll` config, real Pb+Pb background):

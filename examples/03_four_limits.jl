@@ -1,19 +1,19 @@
 #!/usr/bin/env julia
 # ==============================================================================================
-# 03 — THE COLLISION SETTINGS, SIDE BY SIDE ON ONE BACKGROUND
+# 03 — the collision settings, side by side on one background
 #
 # The engine can be asked for five qualitatively different things. Run them together and the
 # distinctions stop being abstract:
 #
 #   :langevin, D_sT > 0     the physics — drag + noise, relaxing towards the boosted Jüttner
 #   :rta,      D_sT > 0     BGK: the same τ_n, a different collision operator
-#   D_sT = 0                the COMOVING limit — every quark handed p = m·γ(r)·v(r) EXACTLY, with
+#   D_sT = 0                the comoving limit — every quark handed p = m·γ(r)·v(r) exactly, with
 #                           no thermal spread at all. A cold, perfect blast wave.
-#   D_sT → 0⁺               THERMAL comoving — drag and noise stay in Einstein balance all the way
+#   D_sT → 0⁺               thermal comoving — drag and noise stay in Einstein balance all the way
 #                           down, so the width is the full Jüttner one. 23 % above the line above.
-#   :none                   FREE STREAMING — no drag, no noise, momenta exactly constant.
+#   :none                   free streaming — no drag, no noise, momenta exactly constant.
 #
-# ⚠ THE THREE WEAK-COUPLING SETTINGS ARE THREE DIFFERENT LIMITS. `D_sT = 0` is not free streaming
+# The three weak-coupling settings are three different limits. `D_sT = 0` is not free streaming
 # and it is not `D_sT → 0⁺` either: the order in which the noise is switched off decides which one
 # you get, and the gap is 23 % in ⟨p_x⟩ on the flow plateau below. Ask for free streaming by name,
 # with `collision_mode = :none`. `m ≤ 0` and `D_sT < 0` are refused since 0.2.3.
@@ -43,9 +43,9 @@ run(; kw...) = (Random.seed!(3); simulate_ensemble_bulk(CPUBackend(), rg, pg, de
     x_init = x0, p_init = p0, N_particles = N, Δt = 1e-3, initial_time = τ0, final_time = τf,
     save_interval = (τf - τ0) / 20, m = M, dimensions = 2, Tfo = 0.0, kw...))
 
-# ⚠ "D_sT → 0⁺" is taken at 10⁻³, not 10⁻⁹, and the reason is worth knowing. τ_drag = m·D_sT/T²,
+# "D_sT → 0⁺" is taken at 10⁻³, not 10⁻⁹, and the reason is worth knowing. τ_drag = m·D_sT/T²,
 # so at 10⁻⁹ the attenuation exponent η_eff·Δt is ≈ 10⁴: the exact-OU step then has a = e^{−η_effΔt}
-# numerically 0 and degenerates into a Gaussian REDRAW with variance T·E* at the PREVIOUS step's
+# numerically 0 and degenerates into a Gaussian redraw with variance T·E* at the previous step's
 # energy. That fixed point is close to the Jüttner but is not it (≈ 2 % in ⟨E*⟩ here), so the closed
 # form below would miss for a reason that has nothing to do with the limit being taken. At 10⁻³ the
 # drag time is 3·10⁻³ fm, η_eff·Δt ≈ 0.3 with Δt = 10⁻³, and the step is resolved.
@@ -62,7 +62,7 @@ cases = [
 p_comov = M * γ * V                                    # cold comoving: p = m·γ·v exactly
 p_free  = γ * (1.0 + V * sqrt(1 + M^2))                # the t0 lab boost, never touched again
 Ttot = 0.30
-# ⚠ d = 2: these runs carry TWO momentum rows (the default when `momentum_dimensions` is not
+# d = 2: these runs carry two momentum rows (the default when `momentum_dimensions` is not
 # given), so the equilibrium they relax to is the 2-D Jüttner and ⟨E*⟩ must be its mean energy.
 # Using the 3-D value here would over-predict by 13 % — the same 2-D/3-D convention offset that
 # `momentum_dimensions = 3` exists to remove (see example 01).
@@ -88,22 +88,22 @@ end
 
 println("""
 read the table:
-  · comoving sits exactly on m·γ·v with sd(p_x) = 0 — a COLD blast wave, no thermal width;
-  · D_sT → 0⁺ sits on γ·v·⟨E*⟩ instead — the number printed above the table — and HAS the thermal
+  · comoving sits exactly on m·γ·v with sd(p_x) = 0 — a cold blast wave, no thermal width;
+  · D_sT → 0⁺ sits on γ·v·⟨E*⟩ instead — the number printed above the table — and has the thermal
     width. Same "limit",
     different answer, because the width does not vanish as the drag time does;
-  · free streaming keeps the boosted initial momentum forever and moves FASTER than the fluid;
+  · free streaming keeps the boosted initial momentum forever and moves faster than the fluid;
   · Langevin and RTA both relax towards the boosted Jüttner and differ only in how — same τ_n,
     different collision operator, which is the comparison the papers are about.
 
 why two of the five are still a δ function at final time, and always will be:
-  comoving and free streaming carry NO collision term, so there is no mechanism in either that can
+  comoving and free streaming carry no collision term, so there is no mechanism in either that can
   broaden a momentum — sd(p_x) = 0.00000 exactly, against 0.92–0.95 for the three that thermalise.
-  The initial condition here IS a δ (every particle at r = 8 fm with p_x = 1 GeV, all on the
+  The initial condition here is a δ (every particle at r = 8 fm with p_x = 1 GeV, all on the
   v = 0.5 plateau), so :none simply keeps it for ever and DsT = 0 re-imposes m·γ(r)v(r) every step.
-  Running longer changes nothing. Equilibration is what the OTHER three have — which is why the
-  right-hand panel plots only those three: they are the ones that HAVE a final distribution, and
-  that all three land on ONE Jüttner from this IC is the point of it. The two fixed cases are in
+  Running longer changes nothing. Equilibration is what the other three have — which is why the
+  right-hand panel plots only those three: they are the ones that have a final distribution, and
+  that all three land on one Jüttner from this IC is the point of it. The two fixed cases are in
   the left panel, as the flat lines they are, and their exact values are in the table above.""")
 
 if plots_on()
@@ -115,10 +115,10 @@ if plots_on()
     end
     hline!(pa, [p_comov]; ls = :dash, c = :gray, label = "m·γ·v")
     hline!(pa, [p_free];  ls = :dot,  c = :gray, label = "boosted IC")
-    # ⚠ ONLY THE THREE CASES THAT HAVE A COLLISION TERM ARE PLOTTED HERE. `DsT = 0` and `:none`
-    # carry none, so nothing in either can ever broaden a momentum: sd(p_x) = 0.00000 EXACTLY at
+    # Only the three CASES that have a collision term are plotted here. `DsT = 0` and `:none`
+    # carry none, so nothing in either can ever broaden a momentum: sd(p_x) = 0.00000 exactly at
     # final time, against 0.92–0.95 for the three below. The IC is a δ (every particle at r = 8 fm
-    # with p_x = 1 GeV, all on the v = 0.5 plateau) and those two still ARE that δ — `:none` keeps
+    # with p_x = 1 GeV, all on the v = 0.5 plateau) and those two still are that δ — `:none` keeps
     # the boosted initial momentum for ever, `DsT = 0` re-imposes p = m·γ(r)v(r) every step. They
     # are not distributions and never become any, so they have no place in a panel of final
     # distributions; drawing them here only invited the reading that they had failed to

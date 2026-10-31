@@ -63,6 +63,7 @@ function Simulate.simulate_ensemble_bulk(
     dt_min::Float64 = 1e-5,
     dt_max::Float64 = 0.1,
     time_grid::Union{Nothing, AbstractVector} = nothing,
+    kappa_law = nothing,
 )
     (collision_mode == :langevin || collision_mode == :rta || collision_mode == :none) ||
         error("simulate_ensemble_bulk(::GPUBackend): collision_mode=$(collision_mode) is not supported on GPU (only :langevin, :rta and :none).")
@@ -103,5 +104,6 @@ function Simulate.simulate_ensemble_bulk(
         dt_min = dt_min,
         dt_max = dt_max,
         time_grid = time_grid,
+        kappa_law = kappa_law,
     )
 end

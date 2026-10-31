@@ -1,15 +1,15 @@
 #=
    test_proper_time_kicks.jl — the "boost case" gate for the proper-time kick fix (2026-08-25).
 
-   A uniformly flowing medium in equilibrium must carry ZERO Landau diffusion current for any
+   A uniformly flowing medium in equilibrium must carry zero Landau diffusion current for any
    LRF-isotropic f.  The undilated lab-Δt kick violates this: its stationary state is
    f_J/(γ(1+v v_r)), measured 2026-08-04 as ν^r/n = −0.071 at u^r = 0.5, T = 300 MeV, charm
    (AttractorMomentum FIGURE_REGISTRY "boost case"; quadrature −0.075).  With
    `proper_time_kicks = true` the same configuration must give ν^r/n ≈ 0.
 
-   Gates:  P1  flag OFF reproduces the recorded artifact (−0.075 ± 20%)
+   Gates:  P1  flag off reproduces the recorded artifact (−0.075 ± 20%)
            P2  flag ON kills it (|ν^r/n| < 0.012)
-           P3  the LRF momentum variance is T to 3% in BOTH modes (the fix must not touch widths)
+           P3  the LRF momentum variance is T to 3% in both modes (the fix must not touch widths)
 
    Run: julia --project=Julia Julia/LangevInMedium.jl/test/test_proper_time_kicks.jl
 =#

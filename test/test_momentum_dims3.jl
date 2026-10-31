@@ -1,12 +1,12 @@
 # ==============================================================================================
-# test_momentum_dims3.jl — a 2-D transverse plane carrying THREE momentum components.
+# test_momentum_dims3.jl — a 2-D transverse plane carrying three momentum components.
 #
-# WHAT IS AT STAKE. The hydrodynamic side matches τ_n = D_s z K₃/K₂ in the 3-D Jüttner measure;
+# What is at stake. The hydrodynamic side matches τ_n = D_s z K₃/K₂ in the 3-D Jüttner measure;
 # an engine evolving two momentum components relaxes to the 2-D Jüttner, whose first-moment
 # relaxation rate λ₁ η_D differs from K₂/K₃ η_D by 5–12 % over z = 3.5–10. `momentum_dimensions = 3`
-# is supposed to remove that offset. These gates establish, with the SHIPPED kernels:
+# is supposed to remove that offset. These gates establish, with the shipped kernels:
 #
-#   (Q) the identity λ₁(3D) ≡ ⟨(M/E)p²⟩/⟨p²⟩ = K₂/K₃ by quadrature, and that λ₁(2D) is NOT it;
+#   (Q) the identity λ₁(3D) ≡ ⟨(M/E)p²⟩/⟨p²⟩ = K₂/K₃ by quadrature, and that λ₁(2D) is not it;
 #   (S) the initial p_z draw is the exact thermal conditional (isotropy against a 3-D Jüttner);
 #   (E) the 3-D run equilibrates to the 3-D Jüttner (⟨p²⟩ and the ensemble λ₁ = K₂/K₃), while the
 #       2-D run — same engine, same drag — gives λ₁(2D): the offset is the dimension, nothing else;
@@ -105,7 +105,7 @@ const DS_FM = (DST_ / T_) * HBARC             # D_s = D_sT/T [GeV⁻¹] → fm (
             @test isapprox(mean(s .^ 2), num / den; rtol = 0.02)
             @test abs(mean(s)) < 4 * std(s) / sqrt(length(s))
         end
-        # joint: transverse rows of a 3-D Jüttner + the conditional p_z must be ISOTROPIC
+        # joint: transverse rows of a 3-D Jüttner + the conditional p_z must be isotropic
         P3 = juttner_sample(rng, M_, T_, 3, 200_000)
         x  = zeros(2, size(P3, 2))                     # positions only feed T_of_r (uniform here)
         P  = U.append_thermal_pz(P3[1:2, :], x, M_, r -> T_; rng = rng)
@@ -145,7 +145,7 @@ const DS_FM = (DST_ / T_) * HBARC             # D_s = D_sT/T [GeV⁻¹] → fm (
     @testset "(D) ℓ=1 decay of a boosted Jüttner: rate = λ₁ η_D, 3-D vs 2-D" begin
         # exact boosted Jüttner: sample in the rest frame, Lorentz-boost every particle by v along x.
         # f(p) is a scalar and the particles are the same set, so this IS f = exp(−u·p/T).
-        # v small: the reference λ₁ is LINEAR response (δf ∝ p_x f_eq); v=0.15 already shifts the
+        # v small: the reference λ₁ is linear response (δf ∝ p_x f_eq); v=0.15 already shifts the
         # ensemble ratio by 1.5 % through the O(v²) shape, so the gate works at v=0.05.
         v = 0.05; γ = 1 / sqrt(1 - v^2); N_D = 400_000
         rates = Dict{Int,Float64}(); refs = Dict{Int,Float64}()
@@ -171,10 +171,10 @@ const DS_FM = (DST_ / T_) * HBARC             # D_s = D_sT/T [GeV⁻¹] → fm (
     end
 
     @testset "(R) Bjorken redshift telescopes exactly under free streaming" begin
-        # ⚠ MIGRATED 2026-09-02 (LangevInMedium 0.2.3), and the migration is the point of the fix.
+        # Migrated 2026-09-02 (LangevInMedium 0.2.3), and the migration is the point of the fix.
         # This block used `momentum_langevin = false` to freeze the transverse rows so that p_z
-        # evolved ONLY by the redshift. That worked by accident: the glue kernel wrote rows 1–2 and
-        # left row 3 alone — which was the DEFECT (a particle glued to a MOVING fluid kept a p_z*
+        # evolved only by the redshift. That worked by accident: the glue kernel wrote rows 1–2 and
+        # left row 3 alone — which was the defect (a particle glued to a moving fluid kept a p_z*
         # it should not have, and streamed −7.10 % too slow; this box has zero flow, so the gate
         # could not see it). The glue kernel now zeroes every row beyond the spatial ones, so
         # `momentum_langevin = false` correctly sets p_z* = 0 and can no longer be used this way.

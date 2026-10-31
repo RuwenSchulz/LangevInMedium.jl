@@ -26,7 +26,7 @@ function box_fields(T; t0 = 0.0, tf = 1.0, rmax = 400.0)
 end
 
 """
-One run through the PUBLIC entry point on a prescribed (T, v) background with injected particles.
+One run through the public entry point on a prescribed (T, v) background with injected particles.
 Returns (times, momenta_snapshots, position_snapshots). Always seeded.
 """
 function run_fields(backend, xg, tg, Tf, Vf; M, DsT, N, dt, tfinal, save, x0, p0, t0 = first(tg),

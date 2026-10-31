@@ -3,10 +3,10 @@
 # bench_throughput.jl — where the wall clock goes.
 #
 # Particle-steps per second for the CPU and GPU paths over the production kwarg axes, plus the
-# three HOST-side phases that the campaign notes blame for most of a batch (the FONLL rejection
+# three host-side phases that the campaign notes blame for most of a batch (the FONLL rejection
 # sampler, the per-step Gaussian draw, the snapshot save). No BenchmarkTools: min of 3 `@elapsed`
 # after one warm-up. Writes a markdown table to bench/results/throughput_<date>.md.
-# The CPU/GPU model is recorded (it is what the numbers mean); the machine NAME is not.
+# The CPU/GPU model is recorded (it is what the numbers mean); the machine name is not.
 #
 #   julia --project=Julia Julia/LangevInMedium.jl/bench/bench_throughput.jl           (LIM_NOGPU=1 to skip the GPU)
 #   LIM_BENCH_QUICK=1 ...                                                               (N ≤ 1e5 only)

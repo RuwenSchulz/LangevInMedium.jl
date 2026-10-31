@@ -2,7 +2,7 @@
 # example_common.jl — shared background builders for the examples. `include`d by each of them.
 #
 # Nothing here is part of the package: it is the boilerplate a driver would otherwise carry, kept
-# in one place so the examples themselves are only about the ENGINE. Two backgrounds:
+# in one place so the examples themselves are only about the engine. Two backgrounds:
 #
 #   uniform_bath(T)     a box at fixed T with no flow — the setting every closed form lives in
 #   bjorken_fireball()  a cooling, radially expanding fireball with a freeze-out floor — the shape
@@ -27,17 +27,17 @@ end
 
 A Bjorken-like cooling fireball: `T(r, τ) = max(T_floor, T0·(τ0/τ)^{1/3}·exp(−r²/2σ²))` with a radial
 flow that saturates, `v(r, τ) = vmax·tanh(r/σ)·min(1, τ/τ_rise)`. Not a hydro solution — it is the
-right SHAPE (ideal Bjorken cooling, a Gaussian transverse profile, flow building up over ≈ 2 fm)
+right shape (ideal Bjorken cooling, a Gaussian transverse profile, flow building up over ≈ 2 fm)
 for an example that must run in seconds. Swap in a real `T`/`v` table and nothing else changes.
 
-⚠ `T_floor` is the temperature the table falls to OUTSIDE the fireball, and it must sit strictly
-BELOW the freeze-out temperature a driver is going to look for. Flooring at `Tfo` itself puts the
+`T_floor` is the temperature the table falls to outside the fireball, and it must sit strictly
+below the freeze-out temperature a driver is going to look for. Flooring at `Tfo` itself puts the
 entire outside region exactly ON the freeze-out isotherm, so `T <= Tfo` is true everywhere there
 and every quark produced outside the hot core "freezes out" at τ₀ — which is arguably right, but it
 also makes a `<` test and a `<=` test disagree, and it made two of these examples report ⟨τ_fo⟩ of
 2.5 fm and 8.2 fm for the same physics. Keep the floor cold.
 
-`rmax` is deliberately well past the fireball: the engine CLAMPS the background at the table edge,
+`rmax` is deliberately well past the fireball: the engine clamps the background at the table edge,
 so a particle that leaves the table keeps being dragged at the rim `T` and `v` forever. It warns
 when that happens (0.2.3) — if you see that warning, widen `rmax` rather than ignoring it.
 """
@@ -55,7 +55,7 @@ end
 
 A separable initial phase-space density `f[p_index, r_index]` of the shape the engine's sampler
 expects: a steeply falling charm `p_T` spectrum `(1 + (p/p_ref)²)^{−n}` times a Gaussian transverse
-profile. **Use a UNIFORM p grid** — the sampler integrates on the nodes you hand it (trapezoid
+profile. **Use a uniform p grid** — the sampler integrates on the nodes you hand it (trapezoid
 since 0.2.3), and a uniform grid is what every driver in the tree builds.
 """
 function fonll_density(r_grid, p_grid; σ = 3.0, n = 3.1, p_ref = 2.1)
